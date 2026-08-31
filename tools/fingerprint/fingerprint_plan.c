@@ -2,12 +2,8 @@
 
 #include <stdint.h>
 
-/*
- * 当前计划由通用身份/CiA 402 对象和已知设备的 PDO 映射对象组成。读不到的可选对象会在
- * 指纹中保留 ok=false，而不会被伪造为默认值。0x1600/0x1A00 仍是当前型号耦合；在第二种
- * PDO 布局接入前，必须改为“通用必读项 + 按设备配置扩展”或按分配对象动态发现。
- */
-static const emaster_sdo_request_t requests[] = {
+/* 这些对象是 CiA 402/CoE 通用诊断事实，与具体 PDO 索引无关。 */
+static const emaster_sdo_request_t common_requests[] = {
     {UINT16_C(0x1008), UINT8_C(0x00), "device_name", EMASTER_SDO_STRING},
     {UINT16_C(0x1009), UINT8_C(0x00), "hardware_version", EMASTER_SDO_STRING},
     {UINT16_C(0x100A), UINT8_C(0x00), "software_version", EMASTER_SDO_STRING},
@@ -22,20 +18,6 @@ static const emaster_sdo_request_t requests[] = {
     {UINT16_C(0x1C13), UINT8_C(0x00), "tx_pdo_assignment_count", EMASTER_SDO_U8},
     {UINT16_C(0x1C13), UINT8_C(0x01), "tx_pdo_assignment_1", EMASTER_SDO_U16},
     {UINT16_C(0x1C13), UINT8_C(0x02), "tx_pdo_assignment_2", EMASTER_SDO_U16},
-    {UINT16_C(0x1600), UINT8_C(0x00), "rx_pdo_1600_mapping_count", EMASTER_SDO_U8},
-    {UINT16_C(0x1600), UINT8_C(0x01), "rx_pdo_1600_mapping_1", EMASTER_SDO_U32},
-    {UINT16_C(0x1600), UINT8_C(0x02), "rx_pdo_1600_mapping_2", EMASTER_SDO_U32},
-    {UINT16_C(0x1600), UINT8_C(0x03), "rx_pdo_1600_mapping_3", EMASTER_SDO_U32},
-    {UINT16_C(0x1600), UINT8_C(0x04), "rx_pdo_1600_mapping_4", EMASTER_SDO_U32},
-    {UINT16_C(0x1600), UINT8_C(0x05), "rx_pdo_1600_mapping_5", EMASTER_SDO_U32},
-    {UINT16_C(0x1600), UINT8_C(0x06), "rx_pdo_1600_mapping_6", EMASTER_SDO_U32},
-    {UINT16_C(0x1A00), UINT8_C(0x00), "tx_pdo_1a00_mapping_count", EMASTER_SDO_U8},
-    {UINT16_C(0x1A00), UINT8_C(0x01), "tx_pdo_1a00_mapping_1", EMASTER_SDO_U32},
-    {UINT16_C(0x1A00), UINT8_C(0x02), "tx_pdo_1a00_mapping_2", EMASTER_SDO_U32},
-    {UINT16_C(0x1A00), UINT8_C(0x03), "tx_pdo_1a00_mapping_3", EMASTER_SDO_U32},
-    {UINT16_C(0x1A00), UINT8_C(0x04), "tx_pdo_1a00_mapping_4", EMASTER_SDO_U32},
-    {UINT16_C(0x1A00), UINT8_C(0x05), "tx_pdo_1a00_mapping_5", EMASTER_SDO_U32},
-    {UINT16_C(0x1A00), UINT8_C(0x06), "tx_pdo_1a00_mapping_6", EMASTER_SDO_U32},
     {UINT16_C(0x1C32), UINT8_C(0x01), "sm2_sync_type", EMASTER_SDO_U16},
     {UINT16_C(0x1C32), UINT8_C(0x02), "sm2_cycle_time_ns", EMASTER_SDO_U32},
     {UINT16_C(0x1C32), UINT8_C(0x04), "sm2_supported_sync_types", EMASTER_SDO_U16},
@@ -68,11 +50,88 @@ static const emaster_sdo_request_t requests[] = {
     {UINT16_C(0x6502), UINT8_C(0x00), "supported_drive_modes", EMASTER_SDO_U32},
 };
 
-const emaster_sdo_request_t *emaster_fingerprint_sdo_plan(size_t *request_count)
+static bool append_request(emaster_sdo_request_t *requests, size_t capacity, size_t *count,
+                           emaster_sdo_request_t request)
 {
-    if (request_count != NULL)
+    size_t index;
+
+    for (index = 0U; index < *count; ++index)
     {
-        *request_count = sizeof(requests) / sizeof(requests[0]);
+        if (requests[index].index == request.index &&
+            requests[index].subindex == request.subindex)
+        {
+            return true;
+        }
     }
-    return requests;
+    if (*count >= capacity)
+    {
+        return false;
+    }
+    requests[*count] = request;
+    ++*count;
+    return true;
+}
+
+bool emaster_fingerprint_sdo_plan(emaster_sdo_request_t *requests, size_t capacity,
+                                  size_t *request_count)
+{
+    size_t count = 0U;
+    size_t request_index;
+    size_t profile_index;
+
+    if (requests == NULL || request_count == NULL || capacity == 0U)
+    {
+        return false;
+    }
+    for (request_index = 0U;
+         request_index < sizeof(common_requests) / sizeof(common_requests[0]); ++request_index)
+    {
+        if (!append_request(requests, capacity, &count, common_requests[request_index]))
+        {
+            return false;
+        }
+    }
+    for (profile_index = 0U; profile_index < emaster_slave_profile_count(); ++profile_index)
+    {
+        const emaster_slave_profile_t *profile = emaster_slave_profile_at(profile_index);
+        if (profile == NULL)
+        {
+            return false;
+        }
+
+        const emaster_pdo_entry_t *entries[2] = {profile->rx_pdo_entries, profile->tx_pdo_entries};
+        const size_t entry_counts[2] = {profile->rx_pdo_entry_count, profile->tx_pdo_entry_count};
+        const uint16_t pdo_indices[2] = {profile->rx_pdo_index, profile->tx_pdo_index};
+        const char *count_names[2] = {"rx_pdo_mapping_count", "tx_pdo_mapping_count"};
+        size_t direction;
+
+        for (direction = 0U; direction < 2U; ++direction)
+        {
+            emaster_sdo_request_t count_request = {
+                .index = pdo_indices[direction],
+                .subindex = UINT8_C(0),
+                .name = count_names[direction],
+                .type = EMASTER_SDO_U8,
+            };
+            if (!append_request(requests, capacity, &count, count_request))
+            {
+                return false;
+            }
+            for (request_index = 0U; request_index < entry_counts[direction]; ++request_index)
+            {
+                emaster_sdo_request_t entry_request = {
+                    .index = pdo_indices[direction],
+                    .subindex = entries[direction][request_index].subindex,
+                    .name = entries[direction][request_index].name,
+                    .type = EMASTER_SDO_U32,
+                };
+                if (!append_request(requests, capacity, &count, entry_request))
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    *request_count = count;
+    return true;
 }

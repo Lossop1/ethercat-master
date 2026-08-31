@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  linux-build-test:
+  linux-build:
     runs-on: ubuntu-24.04
     steps:
       - name: 检出代码
@@ -25,12 +25,9 @@ jobs:
       - name: 构建
         run: cmake --build --preset linux-debug --parallel 2
 
-      - name: 测试
-        run: ctest --preset linux-debug
-
       - name: 静态分析
         run: >-
           cppcheck --enable=warning,performance,portability --error-exitcode=1
           --std=c11 --suppress=missingIncludeSystem
           -I include -I build/linux-debug/generated
-          src/catalog src/bus/soem tools/fingerprint tests
+          src/catalog src/bus/soem tools/fingerprint

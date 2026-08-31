@@ -54,12 +54,28 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
         "tx_index": parse_u32(tx["index"], "tx.index"),
         "rx_bytes": int(rx["bytes"]),
         "tx_bytes": int(tx["bytes"]),
+        "rx_entries": [
+            {
+                "index": parse_u32(entry["index"], "rx.entries.index"),
+                "subindex": int(entry["subindex"]),
+                "name": c_string(str(entry["name"])),
+            }
+            for entry in rx["entries"]
+        ],
+        "tx_entries": [
+            {
+                "index": parse_u32(entry["index"], "tx.entries.index"),
+                "subindex": int(entry["subindex"]),
+                "name": c_string(str(entry["name"])),
+            }
+            for entry in tx["entries"]
+        ],
         "encoder_counts": int(conversion["encoder_counts_per_motor_revolution_default"]),
         "requires_dc": "true" if protocol["requires_distributed_clocks"] else "false",
     }
 
 
-def profile_initializer(values: dict[str, object]) -> str:
+def profile_initializer(values: dict[str, object], ordinal: int) -> str:
     """把一个设备配置渲染为只读 C 结构初始化器。"""
     return f"""    {{
         .profile_id = {values['profile_id']},
@@ -73,6 +89,10 @@ def profile_initializer(values: dict[str, object]) -> str:
         .tx_pdo_index = UINT16_C(0x{values['tx_index']:04X}),
         .rx_pdo_bytes = UINT16_C({values['rx_bytes']}),
         .tx_pdo_bytes = UINT16_C({values['tx_bytes']}),
+        .rx_pdo_entries = profile_{ordinal}_rx_entries,
+        .rx_pdo_entry_count = sizeof(profile_{ordinal}_rx_entries) / sizeof(profile_{ordinal}_rx_entries[0]),
+        .tx_pdo_entries = profile_{ordinal}_tx_entries,
+        .tx_pdo_entry_count = sizeof(profile_{ordinal}_tx_entries) / sizeof(profile_{ordinal}_tx_entries[0]),
         .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
         .requires_distributed_clocks = {values['requires_dc']},
     }}"""
@@ -88,11 +108,28 @@ def generate(documents: list[dict[str, Any]]) -> str:
     if len(profile_ids) != len(set(profile_ids)):
         raise ValueError("设备配置的 profile_id 必须唯一")
 
-    initializers = ",\n".join(profile_initializer(profile_values(item)) for item in ordered)
+    values = [profile_values(item) for item in ordered]
+    entry_arrays = []
+    for ordinal, item in enumerate(values):
+        for direction in ("rx", "tx"):
+            entries = item[f"{direction}_entries"]
+            rendered = ",\n".join(
+                f'    {{UINT16_C(0x{entry["index"]:04X}), UINT8_C({entry["subindex"]}), {entry["name"]}}}'
+                for entry in entries
+            )
+            entry_arrays.append(
+                f"static const emaster_pdo_entry_t profile_{ordinal}_{direction}_entries[] = {{\n"
+                f"{rendered}\n}};"
+            )
+    initializers = ",\n".join(
+        profile_initializer(item, ordinal) for ordinal, item in enumerate(values)
+    )
     return f"""/* 由 tools/generate_slave_catalog.py 生成，禁止手工修改。 */
 #include "emaster/catalog/slave_profile.h"
 
 #include <stddef.h>
+
+{"\n\n".join(entry_arrays)}
 
 static const emaster_slave_profile_t profiles[] = {{
 {initializers},

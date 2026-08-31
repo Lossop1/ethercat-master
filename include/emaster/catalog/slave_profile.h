@@ -8,6 +8,13 @@
 
 typedef struct
 {
+    uint16_t index;
+    uint8_t subindex;
+    const char *name;
+} emaster_pdo_entry_t;
+
+typedef struct
+{
     /* profile_id 是配置间引用使用的稳定键；model 仅用于显示和证据核对。 */
     const char *profile_id;
     const char *model;
@@ -18,6 +25,10 @@ typedef struct
     uint16_t tx_pdo_index;
     uint16_t rx_pdo_bytes;
     uint16_t tx_pdo_bytes;
+    const emaster_pdo_entry_t *rx_pdo_entries;
+    size_t rx_pdo_entry_count;
+    const emaster_pdo_entry_t *tx_pdo_entries;
+    size_t tx_pdo_entry_count;
     /* 默认换算值来自设备资料，不能替代每台物理从站的指纹事实。 */
     uint32_t encoder_counts_per_motor_revolution_default;
     bool requires_distributed_clocks;

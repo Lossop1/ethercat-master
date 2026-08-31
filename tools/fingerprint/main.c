@@ -131,7 +131,7 @@ int main(int argc, char **argv)
 {
     const char *interface_name = NULL;
     const char *output_path = NULL;
-    const emaster_sdo_request_t *requests;
+    emaster_sdo_request_t requests[EMASTER_PREOP_MAX_SDO_REQUESTS];
     emaster_preop_report_t report = {0};
     emaster_preop_probe_status_t status;
     size_t request_count;
@@ -184,7 +184,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    requests = emaster_fingerprint_sdo_plan(&request_count);
+    if (!emaster_fingerprint_sdo_plan(requests, sizeof(requests) / sizeof(requests[0]),
+                                      &request_count))
+    {
+        fprintf(stderr, "无法根据设备目录生成 SDO 读取计划。\n");
+        return 1;
+    }
     utc_timestamp(timestamp, sizeof(timestamp));
     status = emaster_soem_preop_probe(interface_name, requests, request_count, &report);
     if ((status == EMASTER_PREOP_PROBE_OK ||

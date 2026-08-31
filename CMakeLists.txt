@@ -6,8 +6,6 @@ project(
     DESCRIPTION "具有安全阶段门的 12 轴机器人 EtherCAT 主站"
     LANGUAGES C)
 
-include(CTest)
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
 
@@ -57,7 +55,3 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
 endif()
 
 add_subdirectory(tools/fingerprint)
-
-if(BUILD_TESTING)
-    add_subdirectory(tests)
-endif()

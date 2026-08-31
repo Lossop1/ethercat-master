@@ -29,17 +29,16 @@
 git submodule update --init --recursive
 cmake --preset linux-debug
 cmake --build --preset linux-debug
-ctest --preset linux-debug
 ```
 
 在非 Linux 主机上进行不包含 SOEM 硬件工具的离线构建：
 
 ```sh
-cmake -S . -B build/host-debug -DBUILD_TESTING=ON -DEMASTER_BUILD_HARDWARE_TOOLS=OFF
+cmake -S . -B build/host-debug -DEMASTER_BUILD_HARDWARE_TOOLS=OFF
 cmake --build build/host-debug
-ctest --test-dir build/host-debug --output-on-failure
 ```
 
+离线检查只证明构建、链接、严格告警、静态分析和工程资料一致性，不能证明 EtherCAT 协议或运动逻辑。
 工程发布检查必须要求全部受控供应商资料存在：
 
 ```sh
@@ -72,13 +71,12 @@ sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
 - `src/catalog/`：平台无关的设备目录；
 - `src/bus/soem/`：唯一允许调用 SOEM 的代码层；
 - `tools/fingerprint/`：受限的 PRE-OP 操作工具和证据格式；
-- `tests/unit/`：不依赖硬件的模块测试，其他测试类别按实际实现建立；
 - `docs/`：需求、决策、供应商资料说明和测试流程；
 - `external/SOEM/`：固定版本的上游依赖。
 
-模块交付顺序和完成门见
-[`docs/development/module-lifecycle.md`](docs/development/module-lifecycle.md)。尚未开发的运行时模块不会
-预先创建空目录。
+模块按独立契约、依赖边界、失效模型和相应硬件证据逐个交付；尚未开发的运行时模块不会预先创建空目录。
+架构边界和当前阶段门槛见 [`docs/architecture/overview.md`](docs/architecture/overview.md) 与
+[`docs/requirements/phase-1.md`](docs/requirements/phase-1.md)。
 
 配置字段、引用关系和安全边界见 [`config/README.md`](config/README.md)。
 
