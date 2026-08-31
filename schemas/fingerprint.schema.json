@@ -9,6 +9,8 @@
     "tool",
     "captured_at_utc",
     "interface",
+    "deployment_id",
+    "topology_id",
     "slave_count",
     "slaves",
     "behavior"
@@ -27,6 +29,8 @@
     },
     "captured_at_utc": {"type": "string"},
     "interface": {"type": "string", "minLength": 1},
+    "deployment_id": {"type": "string", "minLength": 1},
+    "topology_id": {"type": "string", "minLength": 1},
     "slave_count": {"type": "integer", "minimum": 1, "maximum": 200},
     "slaves": {
       "type": "array",

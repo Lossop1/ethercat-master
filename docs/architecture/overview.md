@@ -35,6 +35,7 @@
 | CMake target | 职责 | 依赖 | 禁止行为 |
 |---|---|---|---|
 | `emaster_catalog` | 强类型设备身份和已选 PDO 元数据 | 公共类型、生成目录 | 操作系统、网络、SOEM、运行时修改 |
+| `emaster_config` | 只读拓扑和部署配置目录 | 公共类型、生成目录 | 文件 I/O、操作系统、网络、SOEM、运行时修改 |
 | `emaster_soem_adapter` | 网卡枚举和受限 PRE-OP/SII/SDO 采集 | SOEM | JSON、文件、PDO 映射、DC、SAFE-OP/OP、SDO 写入 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 上述三个 target | 控制或运动行为 |
@@ -50,6 +51,7 @@ config/topologies/         任意规模的逻辑从站序列
 config/deployments/        主机、专用网口与所选拓扑
 include/emaster/           强类型跨模块契约，不含 SOEM 类型
 src/catalog/               设备目录实现
+src/config/                拓扑和部署配置生成目标
 src/bus/soem/              唯一 SOEM 集成边界
 tools/fingerprint/         受限 PRE-OP 操作工具和记录格式
 ```
@@ -70,6 +72,9 @@ tools/fingerprint/         受限 PRE-OP 操作工具和记录格式
 `config/` 中的 JSON 是工程输入。构建生成的 C 数据在运行时不可变。设备、拓扑和部署分别描述
 型号事实、逻辑关系和物理环境，详细字段契约见 `config/README.md`。通用机制扫描配置集合，禁止
 硬编码设备文件名、产品轴数、当前台架数量、主机名或网卡名。
+
+运行时只能选择由部署配置生成的稳定 ID；代码不接受临时网卡、拓扑或周期参数覆盖。参数未写入
+配置前不存在可用默认值，新增工程参数必须先由项目负责人确认其单位、范围、来源和适用阶段。
 
 最终产品的 12 轴拓扑与当前单从站台架都是配置实例。轴数要求可以存在于产品验收测试中，但不
 能进入设备目录、总线适配器、指纹格式或通用拓扑校验器。`enp49s0` 只属于 Orange Pi 部署实例。

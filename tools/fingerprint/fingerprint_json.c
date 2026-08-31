@@ -17,13 +17,25 @@ static bool sdo_type_is_valid(emaster_sdo_value_type_t type)
     return type >= EMASTER_SDO_U8 && type <= EMASTER_SDO_STRING;
 }
 
-static bool report_is_valid(const emaster_preop_report_t *report)
+static bool identity_matches_expected_profile(const emaster_slave_identity_t *identity,
+                                              const emaster_topology_config_t *topology,
+                                              size_t slave_index);
+
+static bool report_is_valid(const emaster_preop_report_t *report,
+                            const emaster_deployment_config_t *deployment)
 {
     size_t slave_index;
 
-    if (report == NULL || report->slave_count == 0U ||
+    if (report == NULL || deployment == NULL || deployment->deployment_id == NULL ||
+        deployment->topology == NULL || deployment->topology->topology_id == NULL ||
+        deployment->ethercat_interface == NULL || deployment->deployment_id[0] == '\0' ||
+        deployment->topology->topology_id[0] == '\0' || deployment->ethercat_interface[0] == '\0' ||
+        (deployment->topology->slave_count > 0U && deployment->topology->slaves == NULL) ||
+        report->slave_count == 0U ||
         report->slave_count > EMASTER_PREOP_MAX_SLAVES || report->slaves == NULL ||
-        !fixed_string_is_valid(report->interface_name, sizeof(report->interface_name)))
+        report->slave_count != deployment->topology->slave_count ||
+        !fixed_string_is_valid(report->interface_name, sizeof(report->interface_name)) ||
+        strcmp(report->interface_name, deployment->ethercat_interface) != 0)
     {
         return false;
     }
@@ -32,9 +44,14 @@ static bool report_is_valid(const emaster_preop_report_t *report)
     for (slave_index = 0U; slave_index < report->slave_count; ++slave_index)
     {
         const emaster_preop_slave_t *slave = &report->slaves[slave_index];
+        const emaster_topology_slave_config_t *expected =
+            &deployment->topology->slaves[slave_index];
         size_t read_index;
 
         if (slave->position != slave_index + 1U ||
+            slave->position != expected->position ||
+            !identity_matches_expected_profile(&slave->identity, deployment->topology,
+                                               slave_index) ||
             !fixed_string_is_valid(slave->name, sizeof(slave->name)) ||
             slave->sdo_read_count > EMASTER_PREOP_MAX_SDO_REQUESTS ||
             (slave->sdo_read_count > 0U && slave->sdo_reads == NULL))
@@ -120,19 +137,18 @@ static const char *sdo_type_name(emaster_sdo_value_type_t type)
     return "unknown";
 }
 
-static bool identity_is_in_catalog(const emaster_slave_identity_t *identity)
+static bool identity_matches_expected_profile(const emaster_slave_identity_t *identity,
+                                              const emaster_topology_config_t *topology,
+                                              size_t slave_index)
 {
-    size_t profile_index;
+    const emaster_slave_profile_t *profile;
 
-    for (profile_index = 0U; profile_index < emaster_slave_profile_count(); ++profile_index)
+    if (topology == NULL || slave_index >= topology->slave_count)
     {
-        const emaster_slave_profile_t *profile = emaster_slave_profile_at(profile_index);
-        if (emaster_slave_identity_matches(profile, identity))
-        {
-            return true;
-        }
+        return false;
     }
-    return false;
+    profile = emaster_slave_profile_by_id(topology->slaves[slave_index].profile_id);
+    return emaster_slave_identity_matches(profile, identity);
 }
 
 bool emaster_fingerprint_has_sdo_evidence(const emaster_preop_report_t *report)
@@ -206,12 +222,13 @@ static void write_sdo_read(FILE *output, const emaster_sdo_read_t *read)
 }
 
 int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *report,
+                                   const emaster_deployment_config_t *deployment,
                                    const char *captured_at_utc)
 {
     size_t slave_index;
 
     if (output == NULL || captured_at_utc == NULL || captured_at_utc[0] == '\0' ||
-        !report_is_valid(report))
+        !report_is_valid(report, deployment))
     {
         return 1;
     }
@@ -226,6 +243,10 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
     json_string(output, captured_at_utc);
     fputs(",\n  \"interface\": ", output);
     json_string(output, report->interface_name);
+    fputs(",\n  \"deployment_id\": ", output);
+    json_string(output, deployment->deployment_id);
+    fputs(",\n  \"topology_id\": ", output);
+    json_string(output, deployment->topology->topology_id);
     fprintf(output, ",\n  \"slave_count\": %u,\n  \"slaves\": [\n",
             (unsigned int)report->slave_count);
 
@@ -248,7 +269,10 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
                 (unsigned int)slave->identity.product_code,
                 (unsigned int)slave->identity.revision, (unsigned int)slave->state,
                 slave->has_dc ? "true" : "false", slave->has_coe ? "true" : "false",
-                identity_is_in_catalog(&slave->identity) ? "true" : "false");
+                identity_matches_expected_profile(&slave->identity, deployment->topology,
+                                                  slave_index)
+                    ? "true"
+                    : "false");
 
         for (read_index = 0U; read_index < slave->sdo_read_count; ++read_index)
         {

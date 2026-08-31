@@ -29,8 +29,18 @@ if(NOT EMASTER_DEVICE_CONFIG_FILES)
     message(FATAL_ERROR "config/devices 中至少需要一个设备配置")
 endif()
 
+# 拓扑和部署也是生成目录的输入集合。这里只发现文件，不在 CMake 中解释具体拓扑、网卡或数量。
+file(GLOB EMASTER_TOPOLOGY_CONFIG_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/topologies/*.json")
+file(GLOB EMASTER_DEPLOYMENT_CONFIG_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/deployments/*.json")
+if(NOT EMASTER_TOPOLOGY_CONFIG_FILES OR NOT EMASTER_DEPLOYMENT_CONFIG_FILES)
+    message(FATAL_ERROR "config/topologies 和 config/deployments 中都至少需要一个配置")
+endif()
+
 set(EMASTER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(EMASTER_GENERATED_CATALOG "${EMASTER_GENERATED_DIR}/slave_catalog.c")
+set(EMASTER_GENERATED_CONFIG "${EMASTER_GENERATED_DIR}/runtime_config.c")
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/include/emaster/version.h.in"
@@ -38,6 +48,7 @@ configure_file(
     @ONLY)
 
 add_subdirectory(src/catalog)
+add_subdirectory(src/config)
 
 if(EMASTER_BUILD_HARDWARE_TOOLS)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

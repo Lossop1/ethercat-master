@@ -12,6 +12,7 @@
 
 - 固定到 v2.0.0 的 SOEM 子模块；
 - 由 JSON 生成、并与供应商 ESI 校验的强类型设备目录；
+- 由拓扑和部署配置生成的只读运行时目录；
 - 作为产品目标的暂定 12 位置拓扑和作为当前台架事实的单从站拓扑；
 - 相互分离的设备、拓扑和部署配置及其离线校验；
 - Linux 专用的 PRE-OP 指纹工具，只执行 SDO 读取；
@@ -52,14 +53,15 @@ PRE-OP。工具要求操作者明确确认；它不会映射 PDO、配置分布�
 SDO，并会在退出前尝试恢复 INIT。
 
 ```sh
-sudo build/linux-debug/tools/fingerprint/emaster-fingerprint --list-interfaces
+build/linux-debug/tools/fingerprint/emaster-fingerprint --list-deployments
 sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
-  --interface <专用网卡> \
+  --deployment <部署 ID> \
   --output fingerprint.json \
   --acknowledge-preop
 ```
 
-禁止在管理、激光雷达或生产网络接口上运行此工具。运行前必须遵守
+部署配置决定主机、专用 EtherCAT 网卡和预期拓扑；禁止绕过部署配置直接指定网卡。禁止在管理、
+激光雷达或生产网络接口上运行此工具。运行前必须遵守
 [硬件指纹流程](docs/testing/hardware-fingerprint.md)。
 
 ## 仓库结构
@@ -69,6 +71,7 @@ sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
 - `config/deployments/`：主机、专用 EtherCAT 网口和所选拓扑；
 - `include/emaster/`：强类型模块契约，禁止出现 SOEM 类型；
 - `src/catalog/`：平台无关的设备目录；
+- `src/config/`：拓扑和部署配置生成目标；
 - `src/bus/soem/`：唯一允许调用 SOEM 的代码层；
 - `tools/fingerprint/`：受限的 PRE-OP 操作工具和证据格式；
 - `docs/`：需求、决策、供应商资料说明和测试流程；
