@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1",
+  "model": "ISVD90RC-300B-100-70",
+  "identity": {
+    "vendor_name": "CyberBeast",
+    "vendor_id": "0x000C0B00",
+    "product_code": "0x00080117",
+    "revision": "0x00000001"
+  },
+  "protocol": {
+    "profile": "CiA 402",
+    "mailbox": "CoE",
+    "ethernet": "100BASE-TX",
+    "requires_distributed_clocks": true,
+    "supported_modes": {
+      "csp": 8,
+      "csv": 9,
+      "cst": 10
+    }
+  },
+  "selected_pdo_set": "dynamic_csp_csv_cst",
+  "pdo_sets": [
+    {
+      "id": "dynamic_csp_csv_cst",
+      "module_ident": "0x00119800",
+      "rx": {
+        "index": "0x1600",
+        "bytes": 14,
+        "entries": [
+          {"index": "0x6040", "subindex": 0, "bits": 16, "name": "control_word"},
+          {"index": "0x607A", "subindex": 0, "bits": 32, "name": "target_position"},
+          {"index": "0x60FF", "subindex": 0, "bits": 32, "name": "target_velocity"},
+          {"index": "0x6071", "subindex": 0, "bits": 16, "name": "target_torque"},
+          {"index": "0x6060", "subindex": 0, "bits": 8, "name": "mode_of_operation"},
+          {"index": "0x0000", "subindex": 0, "bits": 8, "name": "padding"}
+        ]
+      },
+      "tx": {
+        "index": "0x1A00",
+        "bytes": 14,
+        "entries": [
+          {"index": "0x6041", "subindex": 0, "bits": 16, "name": "status_word"},
+          {"index": "0x6064", "subindex": 0, "bits": 32, "name": "actual_position"},
+          {"index": "0x606C", "subindex": 0, "bits": 32, "name": "actual_velocity"},
+          {"index": "0x6077", "subindex": 0, "bits": 16, "name": "actual_torque"},
+          {"index": "0x6061", "subindex": 0, "bits": 8, "name": "mode_display"},
+          {"index": "0x0000", "subindex": 0, "bits": 8, "name": "padding"}
+        ]
+      }
+    }
+  ],
+  "conversion": {
+    "coordinate_frame": "motor_rotor",
+    "encoder_resolution_object": "0x608F:01",
+    "encoder_counts_per_motor_revolution_default": 16384,
+    "rated_torque_object": "0x6076:00",
+    "gear_ratio_object": "0x6091",
+    "must_read_from_each_physical_slave": true
+  },
+  "dc": {
+    "sync0_required": true,
+    "proposed_cycle_ns": 1000000,
+    "proposed_sync0_shift_ns": 250000,
+    "sm2_sync_type": "0x0002",
+    "sm3_sync_type": null,
+    "sm3_sync_type_status": "unresolved: project sources disagree between 0x0002 and 0x0022"
+  },
+  "source": {
+    "esi": "docs/lz-joint/ECAT_CIA402.xml",
+    "esi_sha256": "2ec971368723aaf18867c9644767d2b233ef0ed5ca2f2ec37e452e72b1a3e9f0"
+  }
+}

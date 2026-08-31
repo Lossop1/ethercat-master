@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "topology_id": "robot-12-axis-provisional",
+  "status": "provisional",
+  "network": {
+    "interface": null,
+    "interface_requirement": "dedicated EtherCAT NIC",
+    "cycle_ns": 1000000,
+    "sync0_shift_ns": 250000
+  },
+  "safety": {
+    "hardware_enable_allowed": false,
+    "maximum_state_phase_1": "PRE-OP"
+  },
+  "slaves": [
+    {"position": 1, "axis_id": "axis_01", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 2, "axis_id": "axis_02", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 3, "axis_id": "axis_03", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 4, "axis_id": "axis_04", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 5, "axis_id": "axis_05", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 6, "axis_id": "axis_06", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 7, "axis_id": "axis_07", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 8, "axis_id": "axis_08", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 9, "axis_id": "axis_09", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 10, "axis_id": "axis_10", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 11, "axis_id": "axis_11", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
+    {"position": 12, "axis_id": "axis_12", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"}
+  ]
+}

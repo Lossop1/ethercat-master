@@ -1,0 +1,15 @@
+/.codegraph/
+/.idea/
+/.vscode/
+/build/
+/out/
+/.cache/
+__pycache__/
+*.py[cod]
+compile_commands.json
+
+# Retained only as a local legacy archive. The build uses external/SOEM.
+/SOEM-master.zip
+
+# Vendor originals are local controlled inputs with no redistribution grant on record.
+/docs/lz-joint/

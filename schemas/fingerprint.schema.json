@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Lossop1/ethercat-master/schemas/fingerprint.schema.json",
+  "title": "EtherCAT physical network fingerprint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "captured_at_utc",
+    "interface",
+    "slave_count",
+    "slaves",
+    "behavior"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "soem_revision"],
+      "properties": {
+        "name": {"const": "emaster-fingerprint"},
+        "version": {"type": "string", "minLength": 1},
+        "soem_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "captured_at_utc": {"type": "string"},
+    "interface": {"type": "string", "minLength": 1},
+    "slave_count": {"type": "integer", "minimum": 1, "maximum": 200},
+    "slaves": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/slave"}
+    },
+    "behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pdo_mapping_performed",
+        "dc_configuration_performed",
+        "highest_requested_state",
+        "restore_init_succeeded"
+      ],
+      "properties": {
+        "pdo_mapping_performed": {"const": false},
+        "dc_configuration_performed": {"const": false},
+        "highest_requested_state": {"const": "PRE-OP"},
+        "restore_init_succeeded": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "uint32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "sdo_read": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "subindex", "name", "type", "ok"],
+      "properties": {
+        "index": {"type": "string", "pattern": "^0x[0-9A-F]{4}$"},
+        "subindex": {"type": "integer", "minimum": 0, "maximum": 255},
+        "name": {"type": "string", "minLength": 1},
+        "type": {"enum": ["u8", "i8", "u16", "u32", "string"]},
+        "ok": {"type": "boolean"},
+        "value": {"type": ["integer", "string"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"ok": {"const": true}}},
+          "then": {"required": ["value"]}
+        },
+        {
+          "if": {"properties": {"ok": {"const": false}}},
+          "then": {"not": {"required": ["value"]}}
+        }
+      ]
+    },
+    "slave": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "name",
+        "sii_identity",
+        "state",
+        "has_dc",
+        "has_coe",
+        "target_profile_match",
+        "sdo_reads"
+      ],
+      "properties": {
+        "position": {"type": "integer", "minimum": 1, "maximum": 200},
+        "name": {"type": "string"},
+        "sii_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["vendor_id", "product_code", "revision"],
+          "properties": {
+            "vendor_id": {"$ref": "#/$defs/uint32"},
+            "product_code": {"$ref": "#/$defs/uint32"},
+            "revision": {"$ref": "#/$defs/uint32"}
+          }
+        },
+        "state": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "has_dc": {"type": "boolean"},
+        "has_coe": {"type": "boolean"},
+        "target_profile_match": {"type": "boolean"},
+        "sdo_reads": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/sdo_read"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.docx binary
+*.pdf binary
+*.png binary
+*.zip binary
+
+# Vendor inputs are immutable evidence; do not normalize their bytes.
+/docs/lz-joint/ECAT_CIA402.xml binary
