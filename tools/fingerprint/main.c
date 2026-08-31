@@ -55,6 +55,10 @@ static const char *probe_error(emaster_preop_probe_status_t status)
             return "没有发现 EtherCAT 从站";
         case EMASTER_PREOP_PROBE_TOO_MANY_SLAVES:
             return "发现的 EtherCAT 从站数量超过指纹格式上限";
+        case EMASTER_PREOP_PROBE_PREOP_NOT_REACHED:
+            return "一个或多个从站未确认进入 PRE-OP";
+        case EMASTER_PREOP_PROBE_SDO_READ_FAILED:
+            return "一个或多个 CoE 从站的 SDO 读取全部失败";
         case EMASTER_PREOP_PROBE_OUT_OF_MEMORY:
             return "无法为指纹报告分配内存";
         case EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED:
@@ -133,6 +137,7 @@ int main(int argc, char **argv)
     size_t request_count;
     char timestamp[32];
     int acknowledge_preop = 0;
+    int report_is_usable;
     int index;
     int output_result;
 
@@ -182,8 +187,16 @@ int main(int argc, char **argv)
     requests = emaster_fingerprint_sdo_plan(&request_count);
     utc_timestamp(timestamp, sizeof(timestamp));
     status = emaster_soem_preop_probe(interface_name, requests, request_count, &report);
-    if (status != EMASTER_PREOP_PROBE_OK &&
-        status != EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED)
+    if ((status == EMASTER_PREOP_PROBE_OK ||
+         status == EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED) &&
+        !emaster_fingerprint_has_sdo_evidence(&report))
+    {
+        status = EMASTER_PREOP_PROBE_SDO_READ_FAILED;
+    }
+    report_is_usable = status == EMASTER_PREOP_PROBE_OK ||
+                       status == EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED ||
+                       status == EMASTER_PREOP_PROBE_SDO_READ_FAILED;
+    if (!report_is_usable)
     {
         fprintf(stderr, "%s，接口：%s。\n", probe_error(status), interface_name);
         if (report.slave_count > 0U && !report.restore_init_succeeded)
@@ -206,10 +219,20 @@ int main(int argc, char **argv)
 
     output_result = publish_report(output_path, &report, timestamp);
     emaster_preop_report_destroy(&report);
+    if (output_result != 0)
+    {
+        return output_result;
+    }
     if (status == EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED)
     {
         fprintf(stderr, "警告：%s。\n", probe_error(status));
         return 2;
     }
-    return output_result;
+    if (status == EMASTER_PREOP_PROBE_SDO_READ_FAILED)
+    {
+        fprintf(stderr, "错误：%s。已保存诊断报告，但该报告不能作为通过证据。\n",
+                probe_error(status));
+        return 1;
+    }
+    return 0;
 }

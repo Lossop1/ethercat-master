@@ -95,5 +95,20 @@ int main(void)
     }
     slave.position = UINT16_C(1);
 
+    if (!emaster_fingerprint_has_sdo_evidence(&report))
+    {
+        fprintf(stderr, "证据校验器拒绝了包含成功 SDO 读取的报告\n");
+        return 1;
+    }
+    reads[0].ok = false;
+    reads[1].ok = false;
+    if (emaster_fingerprint_has_sdo_evidence(&report))
+    {
+        fprintf(stderr, "证据校验器接受了 SDO 全部失败的报告\n");
+        return 1;
+    }
+    reads[0].ok = true;
+    reads[1].ok = true;
+
     return emaster_fingerprint_write_json(stdout, &report, "2026-08-31T00:00:00Z");
 }

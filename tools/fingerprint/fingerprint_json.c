@@ -135,6 +135,40 @@ static bool identity_is_in_catalog(const emaster_slave_identity_t *identity)
     return false;
 }
 
+bool emaster_fingerprint_has_sdo_evidence(const emaster_preop_report_t *report)
+{
+    size_t slave_index;
+
+    if (report == NULL || report->slave_count == 0U || report->slaves == NULL)
+    {
+        return false;
+    }
+    for (slave_index = 0U; slave_index < report->slave_count; ++slave_index)
+    {
+        const emaster_preop_slave_t *slave = &report->slaves[slave_index];
+        size_t read_index;
+        bool found = false;
+
+        if (!slave->has_coe)
+        {
+            continue;
+        }
+        for (read_index = 0U; read_index < slave->sdo_read_count; ++read_index)
+        {
+            if (slave->sdo_reads != NULL && slave->sdo_reads[read_index].ok)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void write_sdo_read(FILE *output, const emaster_sdo_read_t *read)
 {
     fprintf(output, "{\"index\":\"0x%04X\",\"subindex\":%u,\"name\":", read->index,

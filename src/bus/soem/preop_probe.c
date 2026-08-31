@@ -137,6 +137,20 @@ static bool capture_slave(ecx_contextt *context, uint16_t position,
     return true;
 }
 
+static bool slave_has_successful_sdo_read(const emaster_preop_slave_t *slave)
+{
+    size_t read_index;
+
+    for (read_index = 0U; read_index < slave->sdo_read_count; ++read_index)
+    {
+        if (slave->sdo_reads[read_index].ok)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 emaster_preop_probe_status_t
 emaster_soem_visit_interfaces(emaster_interface_visitor_t visitor, void *user_data)
 {
@@ -230,6 +244,21 @@ emaster_soem_preop_probe(const char *interface_name, const emaster_sdo_request_t
         return init_restored ? EMASTER_PREOP_PROBE_NO_SLAVES
                              : EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED;
     }
+    /*
+     * ecx_config_init() 只发出 INIT -> PRE-OP 请求，不保证转换已在返回前完成。邮箱访问前
+     * 必须显式等待并确认全体从站到达 PRE-OP，否则快速设备可能偶然成功、慢设备则全部
+     * SDO 超时，形成不可复现的竞态。
+     */
+    if (ecx_statecheck(&context, 0U, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 4) !=
+        EC_STATE_PRE_OP)
+    {
+        bool init_restored;
+        ecx_readstate(&context);
+        init_restored = restore_init(&context);
+        ecx_close(&context);
+        return init_restored ? EMASTER_PREOP_PROBE_PREOP_NOT_REACHED
+                             : EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED;
+    }
     ecx_readstate(&context);
 
     if (slave_count > (int)EMASTER_PREOP_MAX_SLAVES)
@@ -255,6 +284,12 @@ emaster_soem_preop_probe(const char *interface_name, const emaster_sdo_request_t
             {
                 status = EMASTER_PREOP_PROBE_OUT_OF_MEMORY;
                 break;
+            }
+            if (report->slaves[position - 1].has_coe &&
+                !slave_has_successful_sdo_read(&report->slaves[position - 1]))
+            {
+                /* 部分可选对象失败可以保留；全部失败说明邮箱读取基线无效。 */
+                status = EMASTER_PREOP_PROBE_SDO_READ_FAILED;
             }
         }
     }
