@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "deployment_id": "orangepi-current-bench",
+  "hostname": "orangepi",
+  "topology_id": "bench-current-single-slave",
+  "ethercat_interface": "enp49s0",
+  "management_interface": "enp97s0"
+}

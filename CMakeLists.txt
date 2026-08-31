@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(
     emaster
     VERSION 0.1.0
-    DESCRIPTION "Safety-gated EtherCAT master for a 12-axis robot"
+    DESCRIPTION "具有安全阶段门的 12 轴机器人 EtherCAT 主站"
     LANGUAGES C)
 
 include(CTest)
@@ -20,62 +20,43 @@ else()
 endif()
 
 option(EMASTER_BUILD_HARDWARE_TOOLS
-       "Build Linux/SOEM diagnostic tools that can access an EtherCAT network"
+       "构建可访问 EtherCAT 网络的 Linux/SOEM 诊断工具"
        ${_emaster_hardware_default})
 
-set(EMASTER_CATALOG_FILE
-    "${CMAKE_CURRENT_SOURCE_DIR}/config/slaves/cyberbeast_isvd90rc_300b_100_70.json")
+# 设备配置是可扩展的输入集合。CONFIGURE_DEPENDS 使新增或删除型号后 CMake 自动重新配置，
+# 避免在构建脚本中维护单个设备文件名。
+file(GLOB EMASTER_DEVICE_CONFIG_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/devices/*.json")
+if(NOT EMASTER_DEVICE_CONFIG_FILES)
+    message(FATAL_ERROR "config/devices 中至少需要一个设备配置")
+endif()
+
 set(EMASTER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(EMASTER_GENERATED_CATALOG "${EMASTER_GENERATED_DIR}/slave_catalog.c")
-
-add_custom_command(
-    OUTPUT "${EMASTER_GENERATED_CATALOG}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}"
-    COMMAND
-        "${Python3_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_slave_catalog.py"
-        --input "${EMASTER_CATALOG_FILE}"
-        --output "${EMASTER_GENERATED_CATALOG}"
-    DEPENDS
-        "${EMASTER_CATALOG_FILE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_slave_catalog.py"
-    COMMENT "Generating the compiled slave catalog"
-    VERBATIM)
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/include/emaster/version.h.in"
     "${EMASTER_GENERATED_DIR}/emaster/version.h"
     @ONLY)
 
-add_library(emaster_core STATIC
-    src/core/slave_profile.c
-    "${EMASTER_GENERATED_CATALOG}")
-add_library(emaster::core ALIAS emaster_core)
-
-target_compile_features(emaster_core PUBLIC c_std_11)
-target_include_directories(
-    emaster_core
-    PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-        "$<BUILD_INTERFACE:${EMASTER_GENERATED_DIR}>"
-        "$<INSTALL_INTERFACE:include>")
-emaster_enable_strict_warnings(emaster_core)
+add_subdirectory(src/catalog)
 
 if(EMASTER_BUILD_HARDWARE_TOOLS)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        message(FATAL_ERROR "Hardware diagnostic tools are supported only on Linux")
+        message(FATAL_ERROR "硬件诊断工具仅支持 Linux")
     endif()
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/SOEM/CMakeLists.txt")
         message(FATAL_ERROR
-            "SOEM submodule is missing. Run: git submodule update --init --recursive")
+            "缺少 SOEM 子模块，请运行：git submodule update --init --recursive")
     endif()
 
-    set(SOEM_BUILD_SAMPLES OFF CACHE BOOL "Do not build upstream SOEM samples" FORCE)
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build SOEM as a static library" FORCE)
+    set(SOEM_BUILD_SAMPLES OFF CACHE BOOL "不构建上游 SOEM 示例" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "将 SOEM 构建为静态库" FORCE)
     add_subdirectory(external/SOEM EXCLUDE_FROM_ALL)
-    add_subdirectory(src/soem)
-    add_subdirectory(apps/fingerprint)
+    add_subdirectory(src/bus/soem)
 endif()
+
+add_subdirectory(tools/fingerprint)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

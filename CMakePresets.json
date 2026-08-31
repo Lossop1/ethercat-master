@@ -8,7 +8,7 @@
   "configurePresets": [
     {
       "name": "linux-debug",
-      "displayName": "Linux Debug",
+      "displayName": "Linux 调试构建",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/linux-debug",
       "cacheVariables": {
@@ -20,7 +20,7 @@
     },
     {
       "name": "linux-release",
-      "displayName": "Linux Release",
+      "displayName": "Linux 发布构建",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/linux-release",
       "cacheVariables": {

@@ -1,4 +1,4 @@
-#include "emaster/slave_profile.h"
+#include "emaster/catalog/slave_profile.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -10,7 +10,7 @@ static int failures = 0;
     {                                                                                           \
         if (!(expression))                                                                      \
         {                                                                                       \
-            fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #expression);   \
+            fprintf(stderr, "检查失败：%s:%d: %s\n", __FILE__, __LINE__, #expression);        \
             ++failures;                                                                         \
         }                                                                                       \
     } while (0)
@@ -19,8 +19,10 @@ static void test_generated_profile(void)
 {
     const emaster_slave_profile_t *profile =
         emaster_slave_profile_by_id("cyberbeast.isvd90rc-300b-100-70.rev1");
+    const size_t profile_count = emaster_slave_profile_count();
 
-    CHECK(emaster_slave_profile_count() == 1U);
+    /* 测试当前已知型号存在，但不把目录总数固定为当前设备数量。 */
+    CHECK(profile_count > 0U);
     CHECK(profile != NULL);
     if (profile == NULL)
     {
@@ -36,6 +38,9 @@ static void test_generated_profile(void)
     CHECK(profile->rx_pdo_bytes == UINT16_C(14));
     CHECK(profile->tx_pdo_bytes == UINT16_C(14));
     CHECK(profile->requires_distributed_clocks);
+    CHECK(emaster_slave_profile_at(profile_count) == NULL);
+    CHECK(emaster_slave_profile_by_id("unknown.profile") == NULL);
+    CHECK(emaster_slave_profile_by_id(NULL) == NULL);
 }
 
 static void test_identity_matching(void)
@@ -62,7 +67,7 @@ int main(void)
 
     if (failures != 0)
     {
-        fprintf(stderr, "%d test assertion(s) failed\n", failures);
+        fprintf(stderr, "%d 个测试断言失败\n", failures);
         return 1;
     }
     return 0;

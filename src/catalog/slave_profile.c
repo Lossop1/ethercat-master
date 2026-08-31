@@ -1,4 +1,4 @@
-#include "emaster/slave_profile.h"
+#include "emaster/catalog/slave_profile.h"
 
 #include <string.h>
 

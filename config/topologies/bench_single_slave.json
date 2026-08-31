@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "topology_id": "bench-current-single-slave",
+  "status": "observed",
+  "slaves": [
+    {
+      "position": 1,
+      "axis_id": "bench_axis_01",
+      "joint_assignment": null,
+      "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"
+    }
+  ]
+}

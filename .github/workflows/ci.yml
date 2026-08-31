@@ -11,26 +11,26 @@ jobs:
   linux-build-test:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install analysis tools
+      - name: 安装分析工具
         run: sudo apt-get update && sudo apt-get install -y cppcheck ninja-build
 
-      - name: Configure
+      - name: 配置
         run: cmake --preset linux-debug
 
-      - name: Build
+      - name: 构建
         run: cmake --build --preset linux-debug --parallel 2
 
-      - name: Test
+      - name: 测试
         run: ctest --preset linux-debug
 
-      - name: Static analysis
+      - name: 静态分析
         run: >-
           cppcheck --enable=warning,performance,portability --error-exitcode=1
           --std=c11 --suppress=missingIncludeSystem
           -I include -I build/linux-debug/generated
-          src/core src/soem apps/fingerprint tests
+          src/catalog src/bus/soem tools/fingerprint tests

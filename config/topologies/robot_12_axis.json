@@ -2,16 +2,6 @@
   "schema_version": 1,
   "topology_id": "robot-12-axis-provisional",
   "status": "provisional",
-  "network": {
-    "interface": null,
-    "interface_requirement": "dedicated EtherCAT NIC",
-    "cycle_ns": 1000000,
-    "sync0_shift_ns": 250000
-  },
-  "safety": {
-    "hardware_enable_allowed": false,
-    "maximum_state_phase_1": "PRE-OP"
-  },
   "slaves": [
     {"position": 1, "axis_id": "axis_01", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},
     {"position": 2, "axis_id": "axis_02", "joint_assignment": null, "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"},

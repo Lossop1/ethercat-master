@@ -8,8 +8,8 @@ __pycache__/
 *.py[cod]
 compile_commands.json
 
-# Retained only as a local legacy archive. The build uses external/SOEM.
+# 仅作为本地旧项目归档保留，构建只使用 external/SOEM。
 /SOEM-master.zip
 
-# Vendor originals are local controlled inputs with no redistribution grant on record.
+# 供应商原始资料属于本地受控输入，当前没有再分发授权记录。
 /docs/lz-joint/

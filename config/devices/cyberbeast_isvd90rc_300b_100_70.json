@@ -64,7 +64,7 @@
     "proposed_sync0_shift_ns": 250000,
     "sm2_sync_type": "0x0002",
     "sm3_sync_type": null,
-    "sm3_sync_type_status": "unresolved: project sources disagree between 0x0002 and 0x0022"
+    "sm3_sync_type_status": "未解决：项目资料对 0x0002 和 0x0022 存在分歧"
   },
   "source": {
     "esi": "docs/lz-joint/ECAT_CIA402.xml",
