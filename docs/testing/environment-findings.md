@@ -20,3 +20,13 @@
 
 内核、实时调度权限和时钟问题仍是阻断项。本次只修改了 `enp49s0` 的网络归属及其直接冲突
 服务，没有修改内核、调度器、主机时钟或管理接口 `enp97s0`。
+
+## 2026-08-31 远程复核阻断
+
+- 从开发主机到 `192.168.124.92` 的 ICMP 往返小于 1 ms，TCP/22 可以完成握手；
+- OpenSSH 和 Paramiko 均在认证前失败，远端未发送 SSH 协议标识并主动关闭连接；OpenSSH
+  报告 `kex_exchange_identification: Connection closed by remote host`；
+- 因无法建立经过认证的管理会话，本轮没有执行任何板端命令，也没有修改主机时间、NTP、网口、
+  服务或 EtherCAT 状态；
+- 恢复本机控制台或可靠 SSH 后，应先检查 `sshd` 日志和连接限制，再通过管理口启用 NTP，保存
+  `timedatectl` 同步证据，最后重新执行构建、静态分析和受限 PRE-OP 检查。
