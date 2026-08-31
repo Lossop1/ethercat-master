@@ -1,32 +1,29 @@
-# EtherCAT Master
+# EtherCAT 主站
 
-This repository is a clean-room engineering baseline for a 12-axis robot EtherCAT master.
-It uses SOEM as the EtherCAT protocol implementation and keeps device knowledge, real-time
-execution, CiA 402 control, safety policy, and application APIs in separate modules.
+本仓库是面向 12 轴机器人的 EtherCAT 主站全新工程基线。项目使用 SOEM 作为 EtherCAT
+协议实现，并将设备知识、实时执行、CiA 402 控制、安全策略和应用接口划分为独立模块。
 
-## Current status
+## 当前状态
 
-Phase 1 is in progress. Hardware enable and motion are not implemented. The provisional topology
-caps all diagnostic activity at PRE-OP and sets `hardware_enable_allowed` to `false`.
+第一阶段正在进行。项目尚未实现驱动器使能和运动控制。PRE-OP 上限由受限指纹工具的代码能力
+保证，不能通过普通配置提高。
 
-The repository currently provides:
+仓库当前提供：
 
-- a pinned SOEM v2.0.0 submodule;
-- a generated, typed slave catalog checked against the vendor ESI;
-- a provisional 12-position topology;
-- offline catalog, ESI, topology, and vendor-artifact validation;
-- a Linux-only PRE-OP fingerprint tool that performs SDO reads only;
-- the first architecture, safety, timing, and acceptance contracts.
+- 固定到 v2.0.0 的 SOEM 子模块；
+- 由 JSON 生成、并与供应商 ESI 校验的强类型设备目录；
+- 作为产品目标的暂定 12 位置拓扑和作为当前台架事实的单从站拓扑；
+- 相互分离的设备、拓扑和部署配置及其离线校验；
+- Linux 专用的 PRE-OP 指纹工具，只执行 SDO 读取；
+- 首版架构、安全、实时指标和验收约束。
 
-Vendor originals under `docs/lz-joint/` are intentionally not distributed in this public
-repository. Their expected paths and SHA-256 values are recorded in `docs/vendor/SHA256SUMS`.
-When the local artifacts are installed, project validation checks their bytes and the catalog
-against the ESI. A clean public checkout validates metadata only and reports that the controlled
-inputs are absent.
+供应商原始资料位于本地 `docs/lz-joint/`，由于尚无再分发授权，不提交到公开仓库。
+预期路径和 SHA-256 记录在 `docs/vendor/SHA256SUMS`。安装本地受控资料后，项目校验会检查
+文件内容及设备目录与 ESI 的一致性。公开仓库的干净检出只校验元数据，并报告受控资料缺失。
 
-## Build
+## 构建
 
-Linux is the target platform:
+目标平台为 Linux：
 
 ```sh
 git submodule update --init --recursive
@@ -35,7 +32,7 @@ cmake --build --preset linux-debug
 ctest --preset linux-debug
 ```
 
-For an offline host build without SOEM hardware tools:
+在非 Linux 主机上进行不包含 SOEM 硬件工具的离线构建：
 
 ```sh
 cmake -S . -B build/host-debug -DBUILD_TESTING=ON -DEMASTER_BUILD_HARDWARE_TOOLS=OFF
@@ -43,43 +40,49 @@ cmake --build build/host-debug
 ctest --test-dir build/host-debug --output-on-failure
 ```
 
-Require all controlled vendor inputs during an engineering release check:
+工程发布检查必须要求全部受控供应商资料存在：
 
 ```sh
 python3 tools/validate_project.py --root . --require-vendor-artifacts
 ```
 
-## Hardware fingerprint
+## 硬件指纹
 
-`emaster-fingerprint` is intentionally not a passive network observer. EtherCAT discovery sends
-frames and `ecx_config_init()` requests PRE-OP. The tool requires an explicit acknowledgement,
-does not map PDOs, configure distributed clocks, request SAFE-OP/OP, or write SDOs, and attempts
-to restore INIT before exit.
+`emaster-fingerprint` 不是被动网络监听器。EtherCAT 发现会发送帧，`ecx_config_init()` 会请求
+PRE-OP。工具要求操作者明确确认；它不会映射 PDO、配置分布式时钟、请求 SAFE-OP/OP 或写入
+SDO，并会在退出前尝试恢复 INIT。
 
 ```sh
-sudo build/linux-debug/apps/fingerprint/emaster-fingerprint --list-interfaces
-sudo build/linux-debug/apps/fingerprint/emaster-fingerprint \
-  --interface <dedicated-interface> \
+sudo build/linux-debug/tools/fingerprint/emaster-fingerprint --list-interfaces
+sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
+  --interface <专用网卡> \
   --output fingerprint.json \
   --acknowledge-preop
 ```
 
-Do not run the probe on a management, lidar, or production network interface. Follow
-[the fingerprint procedure](docs/testing/hardware-fingerprint.md) before using it.
+禁止在管理、激光雷达或生产网络接口上运行此工具。运行前必须遵守
+[硬件指纹流程](docs/testing/hardware-fingerprint.md)。
 
-## Repository layout
+## 仓库结构
 
-- `config/`: source-of-truth slave profiles and topology.
-- `include/emaster/`: stable project interfaces; no SOEM types are allowed here.
-- `src/core/`: platform-independent domain logic.
-- `src/soem/`: the only layer allowed to call SOEM.
-- `apps/`: bounded operator and diagnostic tools.
-- `tests/`: offline tests.
-- `docs/`: requirements, decisions, vendor sources, and test procedures.
-- `external/SOEM/`: pinned upstream dependency.
+- `config/devices/`：设备型号和经过审查的设备事实；
+- `config/topologies/`：任意规模的逻辑从站序列；
+- `config/deployments/`：主机、专用 EtherCAT 网口和所选拓扑；
+- `include/emaster/`：强类型模块契约，禁止出现 SOEM 类型；
+- `src/catalog/`：平台无关的设备目录；
+- `src/bus/soem/`：唯一允许调用 SOEM 的代码层；
+- `tools/fingerprint/`：受限的 PRE-OP 操作工具和证据格式；
+- `tests/unit/`：不依赖硬件的模块测试，其他测试类别按实际实现建立；
+- `docs/`：需求、决策、供应商资料说明和测试流程；
+- `external/SOEM/`：固定版本的上游依赖。
 
-## Licensing
+模块交付顺序和完成门见
+[`docs/development/module-lifecycle.md`](docs/development/module-lifecycle.md)。尚未开发的运行时模块不会
+预先创建空目录。
 
-SOEM 2.0.0 is dual-licensed under GPLv3 or a commercial license. The licensing model for this
-project has not been selected. Production or closed-source distribution is blocked until that
-decision is recorded.
+配置字段、引用关系和安全边界见 [`config/README.md`](config/README.md)。
+
+## 许可证
+
+SOEM 2.0.0 采用 GPLv3 或商业许可证双重授权。本项目尚未确定最终许可证。在项目负责人选择
+并记录兼容的授权方式之前，禁止闭源或商业化发布。

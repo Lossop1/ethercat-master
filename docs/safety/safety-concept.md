@@ -1,31 +1,28 @@
-# Phase 1 Safety Concept
+# 第一阶段安全概念
 
-This software is not a certified functional-safety system. Electrical STO, emergency stop,
-mechanical restraint, power isolation, and safe test-area controls remain external requirements.
+本软件不是经过认证的功能安全系统。电气 STO、急停、机械约束、断电措施和安全测试区域仍是
+外部强制要求。
 
-## Software safety boundary
+## 软件安全边界
 
-Phase 1 has no drive-enable feature. Its highest permitted AL state is PRE-OP. The fingerprint
-tool reads SII and CoE data, then attempts to restore INIT. It does not map PDOs or issue SDO
-writes.
+第一阶段没有驱动器使能功能，允许的最高 AL 状态为 PRE-OP。指纹工具读取 SII 和 CoE 数据，
+随后尝试恢复 INIT；它不映射 PDO，也不执行 SDO 写入。
 
-The following invariants apply to all future phases:
+以下不变量适用于所有后续阶段：
 
-- startup output is fully initialized before any process-data exchange;
-- hardware enable is a lifecycle state, not a compile-time switch;
-- topology and identity must match before a network may progress;
-- command frames carry sequence and expiry information;
-- communication loss, expired commands, invalid feedback, and process exit have defined stop
-  reactions;
-- recovery is bounded, recorded, and cannot silently reset a drive fault;
-- one-axis and whole-robot stop policies are explicit and testable;
-- logging and diagnostics never execute in the real-time path.
+- 任何过程数据交换开始前，启动输出必须完全初始化；
+- 硬件使能是生命周期状态，不能是编译开关；
+- 网络进入更高状态前，拓扑和身份必须匹配；
+- 命令帧必须携带序号和失效时间；
+- 通信丢失、命令过期、反馈无效和进程退出都必须有明确停机反应；
+- 恢复过程必须有界、可记录，且不能静默复位驱动器故障；
+- 单轴和整机停机策略必须明确且可测试；
+- 日志和诊断禁止在实时路径中执行。
 
-## Test authorization
+## 测试授权
 
-Each hardware test record must identify the operator, observer, physical setup, power limits,
-mechanical restraint, STO/E-stop verification, network interface, software revision, configuration
-hash, ESI hash, and all slave serial numbers.
+每份硬件测试记录必须说明操作者、观察者、物理装置、功率限制、机械约束、STO/急停验证、
+网络接口、软件版本、配置哈希、ESI 哈希和全部从站序列号。
 
-Permission to run a PRE-OP fingerprint does not authorize SAFE-OP, OP, CiA 402 enable, or motion.
-Each later boundary requires a separate procedure and approval.
+获得 PRE-OP 指纹运行许可，不代表获得 SAFE-OP、OP、CiA 402 使能或运动授权。每个更高边界
+都需要独立流程和批准。

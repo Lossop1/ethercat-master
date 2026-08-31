@@ -1,20 +1,19 @@
-# ADR 0002: Pin SOEM and Block Production License Assumptions
+# ADR 0002：固定 SOEM 依赖并阻断未经确认的许可证假设
 
-Status: Partially accepted; product license unresolved
+状态：部分接受，产品许可证尚未解决
 
-Date: 2026-08-31
+日期：2026-08-31
 
-## Decision
+## 决策
 
-Use upstream SOEM `v2.0.0` at commit `304d1c05eab77dc0d426f1a5cf09c8cc7dc03713` as a Git
-submodule. Only the SOEM adapter layer may include its headers or call its API.
+使用上游 SOEM `v2.0.0`，固定到提交
+`304d1c05eab77dc0d426f1a5cf09c8cc7dc03713`，并以 Git 子模块管理。只有 SOEM 适配层可以
+包含其头文件或调用其 API。
 
-The repository does not yet choose a license for the new master. SOEM 2.0.0 is offered under GPLv3
-or a commercial license. Closed-source or commercial distribution is blocked until project owners
-choose a compatible licensing path and record it here.
+仓库尚未选择新主站的许可证。SOEM 2.0.0 提供 GPLv3 或商业许可证。在项目负责人选择并记录
+兼容的授权方式之前，禁止闭源或商业化发布。
 
-## Consequences
+## 影响
 
-Builds are tied to a reviewable upstream revision. Updating SOEM requires an explicit dependency
-change, build/test evidence, and an impact review of the adapter. The legacy `SOEM-master.zip` is
-not a build input and is ignored locally.
+构建绑定到可审查的上游版本。更新 SOEM 必须显式修改依赖，提供构建/测试证据，并评审适配层
+影响。旧的 `SOEM-master.zip` 不是构建输入，只作为本地归档忽略。

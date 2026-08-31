@@ -1,27 +1,23 @@
-# ADR 0001: Greenfield Master Architecture
+# ADR 0001：全新主站架构
 
-Status: Accepted
+状态：已接受
 
-Date: 2026-08-31
+日期：2026-08-31
 
-## Decision
+## 决策
 
-Develop the production master as a new layered project. The previous `/home/orangepi/ethercat/E_master`
-programs are experimental evidence only and are not a source-code base for the new runtime.
+生产主站采用新的分层工程重新开发。旧项目 `/home/orangepi/ethercat/E_master` 中的程序仅作为
+实验性证据，不作为新运行时的源码基础。
 
-SOEM, vendor ESI/manuals, verified identities, PDO layouts, and recorded hardware observations may
-be reused. A fact enters the new runtime only through the reviewed catalog, configuration, or test
-evidence.
+SOEM、供应商 ESI/手册、已验证身份、PDO 布局和记录的硬件观察可以继续使用。任何事实只有
+经过审查并进入设备目录、配置或测试证据后，才能进入新运行时。
 
-## Rationale
+## 理由
 
-The previous project combines device configuration, PDO access, lifecycle, diagnostics, timing,
-CiA 402 control, and test behavior in large single-file programs. Its new and legacy entry points
-also disagree on synchronization configuration. Incremental refactoring would preserve ambiguous
-behavior and make safety claims difficult to establish.
+旧项目把设备配置、PDO 访问、生命周期、诊断、时序、CiA 402 控制和测试行为放在大型单文件
+程序中，新旧入口对同步配置也存在分歧。增量重构会保留含糊行为，使安全结论难以建立。
 
-## Consequences
+## 影响
 
-Initial progress is intentionally slower than copying the existing program. In return, dependencies
-are directional, hardware behavior is gated, device assumptions are traceable, and most logic can
-be tested without physical EtherCAT hardware.
+初期进度会比复制旧程序慢。相应地，依赖保持单向，硬件行为受到阶段门控制，设备假设可追溯，
+大部分逻辑可以在无物理 EtherCAT 硬件的环境中测试。

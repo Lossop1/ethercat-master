@@ -1,50 +1,47 @@
-# Hardware Fingerprint Procedure
+# 硬件指纹流程
 
-## Purpose
+## 目的
 
-Capture reproducible identity and configuration facts from each physical slave without PDO
-mapping, DC configuration, SAFE-OP, OP, CiA 402 enable, or motion commands.
+在不映射 PDO、不配置 DC、不进入 SAFE-OP/OP、不使能 CiA 402 且不发送运动命令的前提下，
+采集每个物理从站可复现的身份和配置事实。
 
-## Preconditions
+## 前置条件
 
-1. Motor power and mechanics are controlled under the approved bench procedure.
-2. STO/E-stop behavior is verified independently of this software.
-3. The selected interface is a dedicated EtherCAT port with no management, lidar, PTP, or IP role.
-4. The operator has recorded cable order and physical joint labels.
-5. The exact Git revision and clean/dirty status are recorded.
-6. The host UTC clock is synchronized and its time source is recorded.
+1. 电机电源和机械装置处于已批准的台架流程控制之下；
+2. STO/急停行为已经独立验证；
+3. 所选接口是专用 EtherCAT 网口，不承担管理、激光雷达、PTP 或 IP 业务；
+4. 操作者已经记录线缆顺序和物理关节标签；
+5. 已记录准确的 Git 版本和工作区是否干净；
+6. 主机 UTC 时钟已经同步，并记录时间源。
 
-## Capture
+## 采集
 
-Build the Debug preset, list interfaces, and verify the intended interface by MAC address and
-physical link. Then run:
+构建 Debug 预设，列出网络接口，并通过 MAC 地址和物理链路确认目标接口，然后运行：
 
 ```sh
-sudo build/linux-debug/apps/fingerprint/emaster-fingerprint \
-  --interface <dedicated-interface> \
-  --output records/fingerprints/<date>-<setup>.json \
+sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
+  --interface <专用网卡> \
+  --output records/fingerprints/<日期>-<测试装置>.json \
   --acknowledge-preop
 ```
 
-The acknowledgement means the operator understands that discovery sends EtherCAT frames and
-requests PRE-OP. It does not authorize any higher state.
+确认参数表示操作者理解发现过程会发送 EtherCAT 帧并请求 PRE-OP，不授权任何更高状态。
 
-## Review
+## 评审
 
-The resulting JSON must be valid and `restore_init_succeeded` must be `true`. Review every slave's:
+输出 JSON 必须有效，且 `restore_init_succeeded` 必须为 `true`。逐个从站检查：
 
-- cable position and SII/CoE identity;
-- model, hardware version, software version, and serial number;
-- active `1C12/1C13` PDO assignments;
-- `1C32/1C33` synchronization types and counters;
-- encoder resolution, gear ratio, rated current, and rated torque;
-- supported CiA 402 modes;
-- target-profile match.
+- 线缆位置和 SII/CoE 身份；
+- 型号、硬件版本、软件版本和序列号；
+- 生效的 `1C12/1C13` PDO 分配；
+- `1C32/1C33` 同步类型和计数器；
+- 编码器分辨率、减速比、额定电流和额定转矩；
+- 支持的 CiA 402 模式；
+- 是否匹配目标设备目录。
 
-Unexpected or unreadable values are blockers. Do not "fix" a drive by writing a value during the
-capture session.
+任何异常或无法读取的值都是阻断项。采集会话中禁止通过写值“修复”驱动器。
 
-## Record protection
+## 记录保护
 
-Fingerprint records are test evidence. Do not edit them. Store the original file, its SHA-256,
-the test record, software revision, and configuration hashes together.
+指纹记录属于测试证据，禁止编辑。原始文件、SHA-256、测试记录、软件版本和配置哈希必须一并
+保存。

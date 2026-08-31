@@ -1,62 +1,88 @@
-# Architecture Baseline
+# 架构基线
 
-## Dependency direction
+## 设计原则
+
+目录表达代码所有权，CMake target 和依赖方向负责强制约束。只有当需求、接口、错误模型和测试
+都明确后，才能引入模块。规划中的模块不能用空目录或占位接口表示。
+
+## 目标依赖方向
 
 ```text
-application / robot controller
-             |
-        command API
-             |
- multi-axis coordination and safety
-             |
-      CiA 402 axis model
-             |
-       cyclic engine
-             |
-       SOEM adapter
-             |
- dedicated NIC and EtherCAT slaves
+设备目录、逻辑拓扑与物理部署
+          |
+          v
+总线发现 -> 拓扑 -> PDO 编解码 -> DC -> 周期引擎
+                                      |
+                                      v
+                               CiA 402 单轴模型
+                                      |
+                                      v
+                                  安全监督器
+                                      |
+                                      v
+                                  多轴协调器
+                                      |
+                                      v
+                                   外部 API
 ```
 
-Dependencies point downward only. Application and axis code must not include SOEM headers, use
-SOEM types, access PDO byte offsets, or issue mailbox requests.
+依赖从策略层指向机制层。上层禁止包含 SOEM 头文件、访问 `ec_slave[]`、解释 PDO 字节偏移或
+直接发起邮箱请求。SOEM 头文件和函数调用只允许出现在 `src/bus/soem/`。
 
-## Module responsibilities
+## 第一阶段已实现模块
 
-- **Core model**: typed identities, profiles, commands, feedback, and state; no OS or SOEM calls.
-- **Slave catalog**: validated device identity, PDO sets, capabilities, and conversion sources.
-- **SOEM adapter**: raw socket ownership, discovery, AL transitions, mailbox access, and SOEM error
-  translation.
-- **Cyclic engine**: the sole owner of cyclic PDO exchange and DC timing.
-- **Axis model**: one independent CiA 402 state machine per physical axis.
-- **Safety coordinator**: whole-robot interlocks, command validity, limits, and stop policy.
-- **Supervisor**: non-real-time lifecycle, diagnostics, controlled recovery, and records.
-- **API adapter**: transport-specific integration without changing internal command semantics.
+| CMake target | 职责 | 依赖 | 禁止行为 |
+|---|---|---|---|
+| `emaster_catalog` | 强类型设备身份和已选 PDO 元数据 | 公共类型、生成目录 | 操作系统、网络、SOEM、运行时修改 |
+| `emaster_soem_adapter` | 网卡枚举和受限 PRE-OP/SII/SDO 采集 | SOEM | JSON、文件、PDO 映射、DC、SAFE-OP/OP、SDO 写入 |
+| `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
+| `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 上述三个 target | 控制或运动行为 |
 
-## Concurrency contract
+可执行程序负责操作者交互，格式库负责证据表示，总线适配层返回结构化数据且不知道输出文件。
+项目不设置名为 `core` 的 target，避免不相关逻辑在泛化模块中持续堆积。
 
-The future cyclic thread is the only thread allowed to exchange PDOs. It must not allocate memory,
-perform file/console I/O, issue SDO requests, scan state, sleep on an unbounded primitive, or call
-an API with an undocumented worst-case duration.
+## 源码所有权
 
-Mailbox and lifecycle operations run outside the cyclic loop. SOEM access must be serialized by
-the adapter; a supervisor may not call SOEM concurrently with the cyclic engine. Commands and
-feedback cross thread boundaries as complete, sequence-numbered snapshots. Partial per-axis
-updates are forbidden.
+```text
+config/devices/            经审查的设备型号事实
+config/topologies/         任意规模的逻辑从站序列
+config/deployments/        主机、专用网口与所选拓扑
+include/emaster/           强类型跨模块契约，不含 SOEM 类型
+src/catalog/               设备目录实现
+src/bus/soem/              唯一 SOEM 集成边界
+tools/fingerprint/         受限 PRE-OP 操作工具和记录格式
+tests/unit/                不依赖硬件的模块测试
+tests/integration/         跨资料、跨模块测试，实际引入时创建
+tests/replay/              存在回放后端后创建的报文测试
+tests/hardware/            获得授权后创建的硬件测试
+tests/realtime/            存在周期引擎后创建的实时门槛测试
+```
 
-## Configuration contract
+只创建有实际功能支撑的目录。例如，在对应模块需求批准之前，`src/pdo/`、`src/dc/` 和
+`src/cyclic/` 保持不存在。
 
-JSON files in `config/` are engineering inputs. Build-generated C data is immutable at runtime.
-No safety-relevant identity, PDO length, unit conversion, or limit may be introduced as an
-unreviewed literal in application code.
+## 并发契约
 
-The external control interface uses SI units and explicit coordinate frames. Raw counts are
-confined to the device/PDO boundary. Transport selection (for example shared memory or ROS 2) is
-open, but it must preserve atomic 12-axis frames, monotonic sequence numbers, command deadlines,
-mode, validity, and per-axis status.
+未来的周期线程是唯一允许交换 PDO 的线程。该线程禁止动态分配内存、执行文件或控制台 I/O、
+发起 SDO 请求、扫描状态、在无上限的原语上休眠，或调用最坏执行时间不明确的 API。
 
-## Planned source ownership
+邮箱和生命周期操作必须在周期循环之外运行。适配层必须串行化 SOEM 访问；监督器不能与周期
+引擎并发调用 SOEM。命令和反馈以完整、带序号的快照跨越线程边界，禁止部分更新单轴数据。
 
-Later phases may add `cyclic`, `cia402`, `safety`, `supervisor`, and `api` modules. They are not
-stubbed in Phase 1 because interfaces will be introduced only with executable requirements and
-tests. This prevents placeholder abstractions from becoming accidental architecture.
+## 配置契约
+
+`config/` 中的 JSON 是工程输入。构建生成的 C 数据在运行时不可变。设备、拓扑和部署分别描述
+型号事实、逻辑关系和物理环境，详细字段契约见 `config/README.md`。通用机制扫描配置集合，禁止
+硬编码设备文件名、产品轴数、当前台架数量、主机名或网卡名。
+
+最终产品的 12 轴拓扑与当前单从站台架都是配置实例。轴数要求可以存在于产品验收测试中，但不
+能进入设备目录、总线适配器、指纹格式或通用拓扑校验器。`enp49s0` 只属于 Orange Pi 部署实例。
+
+第一阶段安全上限由指纹工具自身的能力边界保证，不由普通 JSON 授权。任何安全相关身份、PDO
+长度、单位换算或限制都不得以未经审查的字面量进入应用代码。
+
+未来外部控制接口统一使用 SI 单位和明确的坐标系。原始计数值仅存在于设备/PDO 边界。传输
+方式尚未确定，但必须对配置选择的完整轴集合保持帧原子性、单调递增序号、命令截止时间、模式、
+有效性和每轴状态。产品验收实例会进一步验证 12 轴完整帧。
+
+模块交付顺序和门槛见 `docs/development/module-lifecycle.md`。

@@ -1,42 +1,40 @@
-# Real-Time Baseline and Provisional Acceptance Metrics
+# 实时基线和临时验收指标
 
-These metrics define the engineering target for the 1 ms, 12-axis master. They must be confirmed
-against robot-control requirements before Phase 2 approval and measured on the final hardware.
+以下指标定义 1 ms、12 轴主站的工程目标。进入第二阶段前，必须结合机器人控制需求确认；最终
+硬件上必须实测。
 
-## Host baseline
+## 主机基线
 
-- PREEMPT_RT kernel with documented kernel and configuration hashes.
-- `SCHED_FIFO` permission for the service account and locked process memory.
-- Dedicated CPU for the cyclic thread and intentional IRQ affinity for the EtherCAT NIC.
-- A dedicated EtherCAT NIC with no IP address, route, PTP, lidar, or NetworkManager service.
-- NIC interrupt moderation and offload settings recorded and intentionally configured.
-- CPU frequency policy, thermal limits, and background service load recorded.
+- 使用 PREEMPT_RT 内核，并记录内核与配置哈希；
+- 服务账号具备 `SCHED_FIFO` 权限，进程内存锁定；
+- 周期线程使用专用 CPU，EtherCAT 网卡 IRQ 亲和性经过明确配置；
+- EtherCAT 使用专用网卡，网卡无 IP、路由、PTP、激光雷达或 NetworkManager 业务；
+- 网卡中断合并和卸载参数已记录并经过有意配置；
+- CPU 频率策略、温度限制和后台服务负载已记录。
 
-## Provisional 1 ms criteria
+## 临时 1 ms 指标
 
-| Metric | Gate |
+| 指标 | 门槛 |
 |---|---:|
-| Nominal period | 1,000,000 ns |
-| Wake-up lateness, p99.9 | <= 20 us |
-| Wake-up lateness, p99.999 | <= 50 us |
-| Worst observed wake-up lateness | <= 100 us |
-| Cyclic execution time, p99.999 | <= 250 us |
-| Worst observed cyclic execution time | <= 400 us |
-| Missed 1 ms deadlines | 0 during an 8-hour gate run |
-| Valid process-data WKC | Exact expected value on every steady-state cycle |
-| Lost/late frame policy | Fault on first invalid cycle; no silent continuation |
+| 标称周期 | 1,000,000 ns |
+| 唤醒延迟 p99.9 | <= 20 us |
+| 唤醒延迟 p99.999 | <= 50 us |
+| 实测最大唤醒延迟 | <= 100 us |
+| 周期执行时间 p99.999 | <= 250 us |
+| 实测最大周期执行时间 | <= 400 us |
+| 1 ms 截止时间错失 | 8 小时门槛测试中为 0 |
+| 有效过程数据 WKC | 每个稳态周期都精确等于预期值 |
+| 丢帧/迟帧策略 | 首个无效周期即进入故障，禁止静默继续 |
 
-The supplier requires the SM2 process-data event to precede Sync0 and recommends a Sync0 shift of
-one quarter cycle. The current proposal sends near +50 us and places Sync0 near +250 us. Phase 2
-must measure the actual frame-arrival margin and retain at least 100 us of worst-case guard time.
+供应商要求 SM2 过程数据事件先于 Sync0，并建议 Sync0 偏移为周期的四分之一。当前方案计划在
+约 +50 us 发送，Sync0 位于约 +250 us。第二阶段必须测量实际帧到达裕量，并保持至少 100 us
+的最坏情况保护时间。
 
-The vendor's quoted minimum cycles (`41.1 us` for one slave through `46.5 us` for five slaves) are
-laboratory device capabilities, not proof that the Orange Pi host or a 12-axis network meets these
-criteria.
+供应商给出的最小周期（单从站 `41.1 us`，五从站 `46.5 us`）只是实验室设备能力，不能证明
+Orange Pi 主机或 12 轴网络满足上述指标。
 
-## Required evidence
+## 必须保存的证据
 
-Record raw histograms and extrema, not only averages. A timing report must bind results to the
-kernel, CPU/IRQ affinity, NIC driver/firmware, offload settings, topology, slave firmware, build
-revision, compiler flags, duration, and background load. Clock source and measurement method must
-be stated.
+必须记录原始直方图和极值，不能只记录平均值。实时报告必须绑定内核、CPU/IRQ 亲和性、网卡
+驱动/固件、卸载设置、拓扑、从站固件、构建版本、编译参数、测试时长和后台负载，并说明时钟源
+与测量方法。

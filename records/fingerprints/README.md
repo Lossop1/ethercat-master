@@ -1,8 +1,6 @@
-# Physical Fingerprint Records
+# 物理从站指纹记录
 
-Place approved, unmodified output from `emaster-fingerprint` in this directory together with its
-test record and SHA-256. Filenames must identify the date and physical setup without relying on
-the EtherCAT cable position as the only device identity.
+将 `emaster-fingerprint` 生成且经过批准、未经修改的输出放在此目录，并同时保存测试记录和
+SHA-256。文件名必须标识日期和物理测试装置，不能只用 EtherCAT 线缆位置作为设备身份。
 
-No physical fingerprint has been captured for the new project yet. Do not create a synthetic
-record to satisfy the Phase 1 completion gate.
+新项目尚未采集任何物理指纹。禁止创建合成记录来满足第一阶段完成门。

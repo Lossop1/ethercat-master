@@ -1,76 +1,84 @@
-# Phase 1 Requirements: Trusted Non-Motion Baseline
+# 第一阶段需求：可信的无运动基线
 
-Status: In progress
+状态：进行中
 
-Owner: Project engineering
+负责人：项目工程组
 
-Target completion gate: approval for Phase 2 zero-output OP testing
+完成后的下一门槛：批准进入第二阶段零输出 OP 测试
 
-## Objective
+## 目标
 
-Create a reproducible, traceable, and fail-closed EtherCAT master foundation. Phase 1 must produce
-reliable facts about every physical slave and freeze the architecture, safety boundary, timing
-metrics, and upper-layer semantics. It must not enable a drive or command motion.
+建立可复现、可追溯、失效关闭的 EtherCAT 主站基础。第一阶段必须取得每个物理从站的可靠
+事实，并冻结架构、安全边界、实时指标和上层语义。此阶段禁止使能驱动器或下发运动命令。
 
-## Required deliverables
+## 必须交付
 
-1. A Git repository with reproducible CMake builds and pinned dependencies.
-2. A machine-readable slave catalog validated against a checksum-pinned ESI.
-3. A 12-position topology with explicit physical axis assignment and serial numbers.
-4. One fingerprint per physical slave, captured from the intended EtherCAT network.
-5. Resolution of the SM3 synchronization-type conflict (`0x0002` versus `0x0022`).
-6. A dedicated EtherCAT NIC decision and documented host/network baseline.
-7. Frozen module boundaries and thread ownership rules.
-8. Frozen safety states and failure reactions through PRE-OP.
-9. Frozen command/feedback semantics independent of transport technology.
-10. Offline tests, static analysis, and a controlled hardware-test record.
+1. 可复现 CMake 构建且依赖版本固定的 Git 仓库；
+2. 与固定校验和 ESI 一致的机器可读设备目录；
+3. 分离设备、逻辑拓扑和物理部署，并提供产品 12 位置目标拓扑与当前台架事实拓扑；
+4. 最终具有明确物理关节分配和序列号的 12 位置产品拓扑；
+5. 从预定 EtherCAT 网络采集的每个物理从站指纹；
+6. 解决 SM3 同步类型 `0x0002` 与 `0x0022` 的冲突；
+7. 确定专用 EtherCAT 网卡，并记录主机和网络基线；
+8. 冻结模块边界和线程所有权规则；
+9. 冻结 PRE-OP 以内的安全状态和故障反应；
+10. 冻结独立于传输技术的命令与反馈语义；
+11. 完成离线测试、静态分析和受控硬件测试记录。
 
-## Functional scope
+## 功能范围
 
-Phase 1 software may:
+第一阶段软件可以：
 
-- enumerate local network interfaces;
-- discover EtherCAT slaves with an explicit operator acknowledgement;
-- request at most PRE-OP;
-- read SII identity and selected CoE objects;
-- compare fingerprints with the catalog and topology;
-- restore INIT after a diagnostic session;
-- validate artifacts without hardware.
+- 枚举本机网络接口；
+- 经操作者明确确认后发现 EtherCAT 从站；
+- 最高请求 PRE-OP；
+- 读取 SII 身份和选定的 CoE 对象；
+- 将指纹与设备目录和拓扑比较；
+- 在诊断会话结束后恢复 INIT；
+- 在无硬件环境中校验工程资料。
 
-Phase 1 software must not:
+通用发现、目录生成和拓扑校验必须处理配置给出的任意非空从站集合。产品 12 轴数量、当前台架
+数量和部署网卡名只能出现在对应配置实例或验收证据中。
 
-- map or exchange process data in the fingerprint workflow;
-- configure distributed clocks on hardware;
-- request SAFE-OP or OP;
-- write an SDO;
-- execute a CiA 402 transition or set modes `8`, `9`, or `10`;
-- send a non-zero position, velocity, torque, or control word;
-- persist a drive parameter;
-- contain a compile-time or command-line bypass for hardware enable.
+第一阶段软件禁止：
 
-## Fail-closed rules
+- 在指纹流程中映射或交换过程数据；
+- 在硬件上配置分布式时钟；
+- 请求 SAFE-OP 或 OP；
+- 写入任何 SDO；
+- 执行 CiA 402 状态转换或设置模式 `8`、`9`、`10`；
+- 发送非零位置、速度、转矩或控制字；
+- 持久化驱动器参数；
+- 提供任何绕过硬件使能限制的编译开关或命令行参数。
 
-- Unknown topology, identity, revision, PDO mapping, unit conversion, or synchronization behavior
-  is a blocking error, not a warning.
-- A missing or stale command must never reuse an unbounded previous command.
-- Vendor defaults are evidence, not physical-device truth. Safety-relevant conversion and limits
-  must come from a captured fingerprint or an approved per-axis configuration.
-- Any tool that can emit EtherCAT frames must state its maximum requested AL state and require an
-  explicit interface selection.
+## 失效关闭规则
 
-## Completion criteria
+- 未知的拓扑、身份、修订版、PDO 映射、单位换算或同步行为必须作为阻断错误，不能降级为告警；
+- 命令缺失或过期时，禁止无限期沿用上一次命令；
+- 供应商默认值只是证据，不代表物理设备事实。安全相关换算和限制必须来自实际指纹或经批准的
+  每位置配置；
+- 任何可能发送 EtherCAT 帧的工具都必须说明最高请求的 AL 状态，并要求明确选择网络接口。
 
-Phase 1 is complete only when all of the following are true:
+## 完成条件
 
-- clean Debug and RelWithDebInfo builds pass on the Orange Pi;
-- all offline tests and static analysis pass;
-- all 12 physical slots have approved joint assignments and unique captured identities;
-- the intended EtherCAT NIC is dedicated and has no conflicting service or IP role;
-- the `1C32/1C33` values are confirmed on the physical firmware and approved;
-- encoder resolution, gear ratio, rated torque/current, firmware, PDO assignment, and supported
-  modes are captured for every axis;
-- preliminary timing tests demonstrate that the host can meet the metrics in
-  `docs/realtime/baseline.md`;
-- safety and test owners approve entry to Phase 2.
+只有同时满足以下条件，第一阶段才算完成：
 
-Until then, Phase 2 and all drive-enable work remain blocked.
+- Orange Pi 上的干净 Debug 和 RelWithDebInfo 构建通过；
+- 所有离线测试和静态分析通过；
+- 12 个物理位置都有已批准的关节分配和唯一身份记录；
+- 预定 EtherCAT 网卡已经专用化，不承担 IP、路由或其他服务；
+- 已在实际固件上确认并批准 `1C32/1C33` 值；
+- 已采集每轴编码器分辨率、减速比、额定转矩/电流、固件、PDO 分配和支持模式；
+- 初步实时测试证明主机可以满足 `docs/realtime/baseline.md` 的指标；
+- 安全负责人和测试负责人批准进入第二阶段。
+
+在此之前，第二阶段和所有驱动器使能工作均保持阻断。
+
+## 当前未完成项
+
+- 当前只取得一台物理从站的台架指纹，不能替代 12 个产品位置的逐台证据；
+- 指纹 SDO 计划中的 `0x1600/0x1A00` 来自当前设备 PDO 布局。接入第二种布局前，必须拆成通用
+  必读项与设备扩展，或根据 `1C12/1C13` 动态发现映射；
+- 当前拓扑校验属于工程配置集成测试，尚未形成运行时拓扑模块及每位置身份/序列号比对；
+- `1C32/1C33`、主机实时性、12 轴物理分配和安全/测试批准仍未完成；
+- Orange Pi 时钟修正必须在管理网络恢复可靠 SSH 后完成并留下 NTP 同步证据。
