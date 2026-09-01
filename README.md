@@ -17,6 +17,7 @@
 - 作为产品目标的暂定 12 位置拓扑和作为当前台架事实的单从站拓扑；
 - 相互分离的设备、拓扑、运行方案和部署配置及其离线校验；
 - Linux 专用的 PRE-OP 指纹工具，只执行 SDO 读取；
+- Linux 专用的 PRE-OP DC 准备工具，只使用已批准运行方案写入并读回同步对象和操作模式，随后关闭 Sync0 并恢复 INIT；
 - Linux 专用的 PRE-OP 指纹工具按从站返回值只读发现完整 PDO 分配和映射；
 - 独立于 SOEM 的原始 PDO 位域编解码库，供后续过程数据会话复用；
 - 首版架构、安全、实时指标和验收约束。
@@ -65,6 +66,17 @@ sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
 网卡、拓扑、状态上限或协议参数。`capture` 会要求操作者在交互终端输入 `PRE-OP`。禁止在管理、
 激光雷达或生产网络接口上运行此工具。运行前必须遵守
 [硬件指纹流程](docs/testing/hardware-fingerprint.md)。
+
+按批准方案执行一次 PRE-OP DC 准备（不会使能电机或进入 SAFE-OP/OP）：
+
+```sh
+sudo build/linux-debug/tools/dc_prepare/emaster-dc-prepare prepare-dc
+```
+
+命令按当前主机唯一部署读取网卡、拓扑和运行参数，要求交互确认令牌；它会通过 SOEM SDO API 写入并读回
+`1C32:01`、`1C33:01`、`6060:00`、`6061:00`，调用 SOEM DC/Sync0 接口并校验寄存器，退出前关闭 Sync0、恢复 INIT。
+任何身份、PDO、SDO 或 DC 校验失败都会停止后续轴并执行同样的回退流程。运行前必须确认电机处于可安全测试状态，
+并遵守项目负责人批准的运行方案。
 
 ## 仓库结构
 

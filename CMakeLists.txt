@@ -79,6 +79,7 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "将 SOEM 构建为静态库" FORCE)
     add_subdirectory(external/SOEM EXCLUDE_FROM_ALL)
     add_subdirectory(src/bus/soem)
+    add_subdirectory(tools/dc_prepare)
 endif()
 
 add_subdirectory(tools/fingerprint)

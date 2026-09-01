@@ -13,6 +13,7 @@ MESSAGE_KEYS = [
     "command_interfaces",
     "command_deployments",
     "command_capture",
+    "command_prepare_dc",
     "usage",
     "interface_line",
     "preop_confirmation_token",
@@ -51,11 +52,27 @@ MESSAGE_KEYS = [
     "probe_status_interface_error",
     "probe_status_interface_warning",
     "pdo_failure",
+    "dc_prepare_confirmation_token",
+    "dc_prepare_usage",
+    "dc_prepare_confirm_required",
+    "dc_prepare_confirm_prompt",
+    "dc_prepare_plan_failed",
+    "dc_prepare_success",
+    "dc_prepare_failed",
+    "dc_prepare_axis_line",
+    "dc_prepare_match",
+    "dc_prepare_mismatch",
+    "dc_prepare_dc_unavailable",
+    "dc_prepare_sdo_write_failed",
+    "dc_prepare_sdo_readback_failed",
+    "dc_prepare_dc_config_failed",
+    "dc_prepare_sync0_readback_failed",
 ]
 
 # 每条格式消息允许的 printf 转换说明符。资源文本可修改，参数契约不可漂移。
 MESSAGE_FORMATS = {
     "usage": ("s", "s", "s", "s", "s", "s"),
+    "dc_prepare_usage": ("s", "s"),
     "interface_line": ("s", "s"),
     "preop_confirm_prompt": ("s", "s", "s", "s"),
     "deployment_line": ("s", "s", "s", "s"),
@@ -69,6 +86,9 @@ MESSAGE_FORMATS = {
     "probe_status_interface_error": ("s", "s"),
     "probe_status_interface_warning": ("s", "s"),
     "pdo_failure": ("u", "u", "X", "X"),
+    "dc_prepare_confirm_prompt": ("s", "s", "s", "u", "s"),
+    "dc_prepare_failed": ("s",),
+    "dc_prepare_axis_line": ("u", "s", "s", "s", "s", "s", "s"),
 }
 
 PRINTF_CONVERSION = re.compile(
@@ -112,7 +132,7 @@ def generate(document: dict[str, object]) -> str:
     extra = sorted(set(messages) - set(MESSAGE_KEYS))
     if extra:
         raise ValueError(f"消息资源包含未知键：{', '.join(extra)}")
-    for key in ("command_interfaces", "command_deployments", "command_capture"):
+    for key in ("command_interfaces", "command_deployments", "command_capture", "command_prepare_dc"):
         if re.fullmatch(r"[a-z][a-z0-9-]*", messages[key]) is None:
             raise ValueError(f"消息 {key} 必须是单个小写命令词")
     if not messages["preop_confirmation_token"]:

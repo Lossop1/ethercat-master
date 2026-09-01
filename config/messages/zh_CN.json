@@ -5,6 +5,7 @@
     "command_interfaces": "interfaces",
     "command_deployments": "deployments",
     "command_capture": "capture",
+    "command_prepare_dc": "prepare-dc",
     "usage": "用法：\n  %s %s\n  %s %s\n  sudo %s %s OUTPUT_FILE\n\n探测会发送 EtherCAT 发现报文并请求 PRE-OP。它只读取 SDO，不映射 PDO、不配置 DC，也不请求 SAFE-OP 或 OP；关闭前会尝试恢复 INIT。\n",
     "interface_line": "%s\t%s\n",
     "preop_confirmation_token": "PRE-OP",
@@ -42,6 +43,21 @@
     "probe_status_warning": "警告：%s。\n",
     "probe_status_interface_error": "错误：%s，接口：%s。\n",
     "probe_status_interface_warning": "警告：%s，接口：%s。\n",
-    "pdo_failure": "从站位置 %u 的 PDO 发现失败，状态=%u，最后访问对象=0x%04X:%02X。\n"
+    "pdo_failure": "从站位置 %u 的 PDO 发现失败，状态=%u，最后访问对象=0x%04X:%02X。\n",
+    "dc_prepare_confirmation_token": "PRE-OP-DC",
+    "dc_prepare_usage": "用法：\n  %s %s\n\n命令按当前主机部署读取已批准运行方案，在 PRE-OP 写入并读回 DC/CSP 参数；完成后关闭 Sync0 并恢复 INIT。\n",
+    "dc_prepare_confirm_required": "DC 准备必须在交互终端中确认。\n",
+    "dc_prepare_confirm_prompt": "将在主机 %s 的接口 %s 上为拓扑 %s 的 %u 个从站执行 PRE-OP DC 参数准备。\n不会使能电机或发送运动目标；完成后关闭 Sync0 并恢复 INIT。\n输入 %s 继续：",
+    "dc_prepare_plan_failed": "已批准运行方案不完整或未启用，拒绝执行 DC 准备。\n",
+    "dc_prepare_success": "PRE-OP DC 参数写入、读回和 Sync0 寄存器校验成功；已关闭 Sync0 并恢复 INIT。\n",
+    "dc_prepare_failed": "PRE-OP DC 准备失败：%s。已尝试关闭 Sync0 并恢复 INIT。\n",
+    "dc_prepare_axis_line": "从站位置 %u：身份=%s，PDO=%s，SM2=%s，SM3=%s，模式显示=%s，Sync0=%s\n",
+    "dc_prepare_match": "通过",
+    "dc_prepare_mismatch": "失败",
+    "dc_prepare_dc_unavailable": "从站未声明分布式时钟能力",
+    "dc_prepare_sdo_write_failed": "SDO 写入失败",
+    "dc_prepare_sdo_readback_failed": "SDO 读回校验失败",
+    "dc_prepare_dc_config_failed": "SOEM DC 拓扑配置失败",
+    "dc_prepare_sync0_readback_failed": "Sync0 寄存器读回校验失败"
   }
 }

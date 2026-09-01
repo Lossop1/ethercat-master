@@ -41,8 +41,10 @@
 | `emaster_pdo_codec` | 根据已确认布局进行原始整数位域编解码 | 公共类型 | SOEM、文件、单位换算、控制字语义、状态提升 |
 | `emaster_session` | 组合部署、设备、运行方案和实际 PDO 的失效关闭会话门 | 配置、设备目录、PDO 布局 | SOEM、状态切换、SDO、动态分配、参数默认值 |
 | `emaster_soem_adapter` | 网卡枚举、受限 PRE-OP/SII/SDO 采集和只读 PDO 发现 | SOEM、`emaster_protocol` | JSON、文件、PDO 写入/配置、DC、SAFE-OP/OP、SDO 写入 |
+| `emaster_soem_dc_prepare` | 按已批准会话计划在 PRE-OP 写入并读回同步对象、配置 DC/Sync0 并执行回退 | SOEM、`emaster_session`、`emaster_protocol`、`emaster_catalog` | JSON、文件、SAFE-OP/OP、控制字、过程数据交换、动态默认参数 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 总线适配、配置、目录、格式和消息 target | 控制或运动行为 |
+| `emaster-dc-prepare` | 操作者确认、会话计划构建和一次性 PRE-OP DC 准备结果展示 | DC 准备、会话、配置、消息 | SAFE-OP/OP、控制字、运动、参数命令行覆盖 |
 
 可执行程序负责操作者交互，格式库负责证据表示，总线适配层返回结构化数据且不知道输出文件。
 项目不设置名为 `core` 的 target，避免不相关逻辑在泛化模块中持续堆积。
@@ -110,5 +112,5 @@ PDO 数量、索引或条目数量。
 ## 模块交付原则
 
 模块只有在具备独立契约、单向依赖、明确的错误模型和对应风险证据时才建立。当前阶段按设备
-目录、PRE-OP 发现与指纹、拓扑验证的顺序推进；后续 PDO、DC、周期、CiA 402、安全和 API 模块
-必须在前置边界冻结并取得真机授权后逐个引入。删除低价值的离线测试代码不等于降低硬件验收要求。
+目录、PRE-OP 发现与指纹、拓扑验证、批准方案和 PRE-OP DC 准备的顺序推进；后续周期、CiA 402、
+安全和 API 模块必须在前置边界冻结并取得真机授权后逐个引入。删除低价值的离线测试代码不等于降低硬件验收要求。
