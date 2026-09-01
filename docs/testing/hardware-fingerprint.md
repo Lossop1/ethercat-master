@@ -20,14 +20,12 @@
 
 ```sh
 sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
-  --deployment orangepi-current-bench \
-  --output records/fingerprints/<日期>-<测试装置>.json \
-  --acknowledge-preop
+  capture records/fingerprints/<日期>-<测试装置>.json
 ```
 
-部署 ID、目标主机、专用网卡和拓扑均来自 `config/` 中的配置。工具会先核对当前主机和拓扑
-资格，再发送报文。确认参数表示操作者理解发现过程会发送 EtherCAT 帧并请求 PRE-OP，不授权
-任何更高状态。
+目标主机、专用网卡和拓扑均来自 `config/` 中的配置，工具按当前主机名选择唯一部署，不接受
+命令行覆盖。工具会在发送报文前要求操作者输入 `PRE-OP`；该确认只授权本次发现过程请求
+PRE-OP，不授权任何更高状态。
 
 ## 评审
 

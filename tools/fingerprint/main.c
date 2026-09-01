@@ -18,9 +18,9 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "用法：\n"
-            "  %s --list-interfaces\n"
-            "  %s --list-deployments\n"
-            "  %s --deployment DEPLOYMENT_ID --output FILE --acknowledge-preop\n\n"
+            "  %s interfaces\n"
+            "  %s deployments\n"
+            "  sudo %s capture OUTPUT_FILE\n\n"
             "探测会发送 EtherCAT 发现报文并请求 PRE-OP。它只读取 SDO，不映射 PDO、不配置 "
             "DC，也不请求 SAFE-OP 或 OP；关闭前会尝试恢复 INIT。\n",
             program, program, program);
@@ -53,17 +53,61 @@ static bool deployment_is_eligible(const emaster_deployment_config_t *deployment
  * 部署配置还声明目标主机。启动时做精确比较，防止把某台主机的网卡参数误用于另一台主机；
  * 获取不到主机名或配置过长都按失败处理，不使用猜测值。
  */
-static bool host_matches_deployment(const emaster_deployment_config_t *deployment)
+static const emaster_deployment_config_t *deployment_for_current_host(void)
 {
     char hostname[256];
+    const emaster_deployment_config_t *match = NULL;
+    size_t index;
 
-    if (deployment == NULL || deployment->hostname == NULL || deployment->hostname[0] == '\0' ||
-        gethostname(hostname, sizeof(hostname) - 1U) != 0)
+    if (gethostname(hostname, sizeof(hostname) - 1U) != 0)
+    {
+        return NULL;
+    }
+    hostname[sizeof(hostname) - 1U] = '\0';
+    for (index = 0U; index < emaster_deployment_config_count(); ++index)
+    {
+        const emaster_deployment_config_t *candidate =
+            emaster_deployment_config_at(index);
+        if (candidate != NULL && candidate->hostname != NULL &&
+            strcmp(hostname, candidate->hostname) == 0)
+        {
+            /* 同一主机存在多个部署时无法无歧义启动，必须先由配置确定唯一部署。 */
+            if (match != NULL)
+            {
+                return NULL;
+            }
+            match = candidate;
+        }
+    }
+    return match;
+}
+
+/*
+ * PRE-OP 是会发送 EtherCAT 报文的操作，必须由当前终端的操作者逐次确认。禁止用普通启动
+ * 参数长期绕过确认，也拒绝管道和后台任务伪造交互输入。
+ */
+static bool acknowledge_preop(const emaster_deployment_config_t *deployment)
+{
+    char input[32];
+    size_t length;
+
+    if (deployment == NULL || !isatty(STDIN_FILENO))
+    {
+        fprintf(stderr, "PRE-OP 采集必须在交互终端中确认。\n");
+        return false;
+    }
+    fprintf(stderr,
+            "即将在主机 %s 的接口 %s 上请求 PRE-OP，预期拓扑为 %s。\n"
+            "输入 PRE-OP 继续：",
+            deployment->hostname, deployment->ethercat_interface,
+            deployment->topology->topology_id);
+    if (fflush(stderr) != 0 || fgets(input, sizeof(input), stdin) == NULL)
     {
         return false;
     }
-    hostname[sizeof(hostname) - 1U] = '\0';
-    return strcmp(hostname, deployment->hostname) == 0;
+    length = strcspn(input, "\r\n");
+    input[length] = '\0';
+    return strcmp(input, "PRE-OP") == 0;
 }
 
 /*
@@ -203,20 +247,17 @@ static int publish_report(const char *output_path, const emaster_preop_report_t 
 
 int main(int argc, char **argv)
 {
-    const char *deployment_id = NULL;
     const emaster_deployment_config_t *deployment;
-    const char *output_path = NULL;
+    const char *output_path;
     emaster_sdo_request_t requests[EMASTER_PREOP_MAX_SDO_REQUESTS];
     emaster_preop_report_t report = {0};
     emaster_preop_probe_status_t status;
     size_t request_count;
     char timestamp[32];
-    int acknowledge_preop = 0;
     int report_is_usable;
-    int index;
     int output_result;
 
-    if (argc == 2 && strcmp(argv[1], "--list-interfaces") == 0)
+    if (argc == 2 && strcmp(argv[1], "interfaces") == 0)
     {
         status = emaster_soem_visit_interfaces(print_interface, stdout);
         if (status != EMASTER_PREOP_PROBE_OK)
@@ -226,7 +267,7 @@ int main(int argc, char **argv)
         }
         return 0;
     }
-    if (argc == 2 && strcmp(argv[1], "--list-deployments") == 0)
+    if (argc == 2 && strcmp(argv[1], "deployments") == 0)
     {
         size_t deployment_index;
         for (deployment_index = 0U;
@@ -237,41 +278,16 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    for (index = 1; index < argc; ++index)
-    {
-        if (strcmp(argv[index], "--deployment") == 0 && index + 1 < argc)
-        {
-            deployment_id = argv[++index];
-        }
-        else if (strcmp(argv[index], "--output") == 0 && index + 1 < argc)
-        {
-            output_path = argv[++index];
-        }
-        else if (strcmp(argv[index], "--acknowledge-preop") == 0)
-        {
-            acknowledge_preop = 1;
-        }
-        else
-        {
-            usage(argv[0]);
-            return 2;
-        }
-    }
-
-    if (deployment_id == NULL || output_path == NULL || !acknowledge_preop)
+    if (argc != 3 || strcmp(argv[1], "capture") != 0)
     {
         usage(argv[0]);
         return 2;
     }
-    deployment = emaster_deployment_config_by_id(deployment_id);
+    output_path = argv[2];
+    deployment = deployment_for_current_host();
     if (!deployment_is_eligible(deployment))
     {
-        fprintf(stderr, "部署不存在或内容不完整：%s\n", deployment_id);
-        return 1;
-    }
-    if (!host_matches_deployment(deployment))
-    {
-        fprintf(stderr, "当前主机与部署配置不一致，拒绝打开 EtherCAT 接口。\n");
+        fprintf(stderr, "当前主机没有唯一且完整的部署配置，拒绝打开 EtherCAT 接口。\n");
         return 1;
     }
     if (access(output_path, F_OK) == 0)
@@ -284,6 +300,11 @@ int main(int argc, char **argv)
                                       &request_count))
     {
         fprintf(stderr, "无法根据设备目录生成 SDO 读取计划。\n");
+        return 1;
+    }
+    if (!acknowledge_preop(deployment))
+    {
+        fprintf(stderr, "未确认 PRE-OP，未发送 EtherCAT 报文。\n");
         return 1;
     }
     utc_timestamp(timestamp, sizeof(timestamp));

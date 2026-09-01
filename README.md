@@ -53,14 +53,13 @@ PRE-OP。工具要求操作者明确确认；它不会映射 PDO、配置分布�
 SDO，并会在退出前尝试恢复 INIT。
 
 ```sh
-build/linux-debug/tools/fingerprint/emaster-fingerprint --list-deployments
+build/linux-debug/tools/fingerprint/emaster-fingerprint deployments
 sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
-  --deployment <部署 ID> \
-  --output fingerprint.json \
-  --acknowledge-preop
+  capture fingerprint.json
 ```
 
-部署配置决定主机、专用 EtherCAT 网卡和预期拓扑；禁止绕过部署配置直接指定网卡。禁止在管理、
+工具按当前主机名唯一选择部署。部署配置决定专用 EtherCAT 网卡和预期拓扑；禁止通过命令行覆盖
+网卡、拓扑、状态上限或协议参数。`capture` 会要求操作者在交互终端输入 `PRE-OP`。禁止在管理、
 激光雷达或生产网络接口上运行此工具。运行前必须遵守
 [硬件指纹流程](docs/testing/hardware-fingerprint.md)。
 
