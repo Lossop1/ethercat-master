@@ -43,6 +43,8 @@
 | `emaster_soem_adapter` | 网卡枚举、受限 PRE-OP/SII/SDO 采集和只读 PDO 发现 | SOEM、`emaster_protocol` | JSON、文件、PDO 写入/配置、DC、SAFE-OP/OP、SDO 写入 |
 | `emaster_soem_dc_prepare` | 按已批准会话计划在 PRE-OP 写入并读回同步对象、配置 DC/Sync0 并执行回退 | SOEM、`emaster_session`、`emaster_protocol`、`emaster_catalog` | JSON、文件、SAFE-OP/OP、控制字、过程数据交换、动态默认参数 |
 | `emaster_soem_cia_preflight` | 按已批准会话计划建立一次 SAFE-OP/OP 首帧安全过程数据会话，使用 PDO 编解码验证 `6061` 并执行回退 | SOEM、`emaster_soem_common`、`emaster_session`、`emaster_protocol`、`emaster_pdo_codec`、`emaster_catalog` | CiA 402 控制字状态转换、电机使能、运动、动态默认参数 |
+| `emaster_cia402` | 独立于总线的 CiA 402 状态字解析、生命周期目标和控制字规划 | 公共类型 | SOEM、PDO 位偏移、时钟、线程、设备参数、自动故障复位 |
+| `emaster_multiaxis` | 按配置轴集合执行完整帧、序号、截止时间和全帧失败门 | `emaster_cia402` | SOEM、PDO 位偏移、单位换算、动态分配、部分帧发布 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 总线适配、配置、目录、格式和消息 target | 控制或运动行为 |
 | `emaster-dc-prepare` | 操作者确认、会话计划构建和一次性 PRE-OP DC 准备结果展示 | DC 准备、会话、配置、消息 | SAFE-OP/OP、控制字、运动、参数命令行覆盖 |
@@ -68,6 +70,8 @@ src/catalog/               设备目录实现
 src/config/                拓扑、运行方案和部署配置生成目标
 src/messages/              消息资源生成目标
 src/protocol/              与总线实现无关的 PDO 发现、布局模型和原始位域编解码
+src/cia402/                与总线无关的 CiA 402 状态语义和控制字规划
+src/multiaxis/              多轴完整帧、序号和截止时间协调
 src/session/               过程数据会话计划、实际布局门和零输出映像准备
 src/bus/soem/              唯一 SOEM 集成边界
 tools/fingerprint/         受限 PRE-OP 操作工具、控制台展示和记录格式
@@ -118,5 +122,6 @@ PDO 数量、索引或条目数量。
 ## 模块交付原则
 
 模块只有在具备独立契约、单向依赖、明确的错误模型和对应风险证据时才建立。当前阶段按设备
-目录、PRE-OP 发现与指纹、拓扑验证、批准方案和 PRE-OP DC 准备的顺序推进；后续周期、CiA 402、
-安全和 API 模块必须在前置边界冻结并取得真机授权后逐个引入。删除低价值的离线测试代码不等于降低硬件验收要求。
+目录、PRE-OP 发现与指纹、拓扑验证、批准方案和过程数据前置会话的顺序推进；后续周期、CiA 402、
+安全和 API 模块可以先按通用契约逐个实现，设备相关行为必须在真机证据门后才允许启用。删除低价值
+的离线测试代码不等于降低硬件验收要求。

@@ -65,6 +65,8 @@ add_subdirectory(src/catalog)
 add_subdirectory(src/config)
 add_subdirectory(src/messages)
 add_subdirectory(src/session)
+add_subdirectory(src/cia402)
+add_subdirectory(src/multiaxis)
 
 if(EMASTER_BUILD_HARDWARE_TOOLS)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
