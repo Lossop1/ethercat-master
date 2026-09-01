@@ -30,3 +30,15 @@
   服务或 EtherCAT 状态；
 - 恢复本机控制台或可靠 SSH 后，应先检查 `sshd` 日志和连接限制，再通过管理口启用 NTP，保存
   `timedatectl` 同步证据，最后重新执行构建、静态分析和受限 PRE-OP 检查。
+
+## 2026-09-01 管理网络与时间恢复
+
+- Windows 通过“以太网 6”向管理口共享网络，Orange Pi 的 `enp97s0` 通过 DHCP 获得
+  `192.168.137.54/24`，默认路由指向 `192.168.137.1`；
+- `enp49s0` 仍由 `ethercat-dedicated` 连接专用于 EtherCAT，无 IP 地址和路由；
+- `ptp4l-enp49s0.service`、`livo-drivers.service`、`robot-ui-preview.service` 均保持停止；
+- chrony 已选择 `time.neu.edu.cn`，`timedatectl` 报告 NTP 已同步，采集时系统时间与 NTP 的
+  偏差约为 `0.07 ms`；
+- Orange Pi 上的 Debug、RelWithDebInfo、资料一致性和 cppcheck 检查均已通过；
+- 受限 PRE-OP 已确认一台从站身份与当前部署拓扑一致并恢复 INIT。首次报告中的
+  `1C12:02`、`1C13:02` 失败来自读取计划无依据地预读第二个分配项，不能作为最终通过证据。
