@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1",
   "model": "ISVD90RC-300B-100-70",
   "identity": {
@@ -12,14 +12,15 @@
     "profile": "CiA 402",
     "mailbox": "CoE",
     "ethernet": "100BASE-TX",
-    "requires_distributed_clocks": true,
+    "supports_pdo_configuration": false,
+    "supports_distributed_clocks": true,
     "supported_modes": {
       "csp": 8,
       "csv": 9,
       "cst": 10
     }
   },
-  "selected_pdo_set": "dynamic_csp_csv_cst",
+  "reference_pdo_set_id": "dynamic_csp_csv_cst",
   "pdo_sets": [
     {
       "id": "dynamic_csp_csv_cst",
@@ -56,6 +57,66 @@
           }
         ]
       }
+    },
+    {
+      "id": "fixed_csp",
+      "module_ident": "0x00219800",
+      "rx": {
+        "bytes": 8,
+        "mappings": [
+          {
+            "index": "0x1601",
+            "entries": [
+              {"index": "0x6040", "subindex": 0, "bits": 16, "data_type": "UINT", "name": "control_word"},
+              {"index": "0x607A", "subindex": 0, "bits": 32, "data_type": "DINT", "name": "target_position"},
+              {"index": "0x0000", "subindex": 0, "bits": 16, "data_type": "PADDING", "name": "padding"}
+            ]
+          }
+        ]
+      },
+      "tx": {
+        "bytes": 8,
+        "mappings": [
+          {
+            "index": "0x1A01",
+            "entries": [
+              {"index": "0x6041", "subindex": 0, "bits": 16, "data_type": "UINT", "name": "status_word"},
+              {"index": "0x6064", "subindex": 0, "bits": 32, "data_type": "DINT", "name": "actual_position"},
+              {"index": "0x0000", "subindex": 0, "bits": 16, "data_type": "PADDING", "name": "padding"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "fixed_csv",
+      "module_ident": "0x00319800",
+      "rx": {
+        "bytes": 8,
+        "mappings": [
+          {
+            "index": "0x1602",
+            "entries": [
+              {"index": "0x6040", "subindex": 0, "bits": 16, "data_type": "UINT", "name": "control_word"},
+              {"index": "0x60FF", "subindex": 0, "bits": 32, "data_type": "DINT", "name": "target_velocity"},
+              {"index": "0x0000", "subindex": 0, "bits": 16, "data_type": "PADDING", "name": "padding"}
+            ]
+          }
+        ]
+      },
+      "tx": {
+        "bytes": 8,
+        "mappings": [
+          {
+            "index": "0x1A02",
+            "entries": [
+              {"index": "0x6041", "subindex": 0, "bits": 16, "data_type": "UINT", "name": "status_word"},
+              {"index": "0x6064", "subindex": 0, "bits": 32, "data_type": "DINT", "name": "actual_position"},
+              {"index": "0x0000", "subindex": 0, "bits": 16, "data_type": "PADDING", "name": "padding"}
+            ]
+          }
+        ]
+      }
     }
   ],
   "conversion": {
@@ -65,14 +126,6 @@
     "rated_torque_object": "0x6076:00",
     "gear_ratio_object": "0x6091",
     "must_read_from_each_physical_slave": true
-  },
-  "dc": {
-    "sync0_required": true,
-    "proposed_cycle_ns": 1000000,
-    "proposed_sync0_shift_ns": 250000,
-    "sm2_sync_type": "0x0002",
-    "sm3_sync_type": null,
-    "sm3_sync_type_status": "未解决：项目资料对 0x0002 和 0x0022 存在分歧"
   },
   "source": {
     "esi": "docs/lz-joint/ECAT_CIA402.xml",

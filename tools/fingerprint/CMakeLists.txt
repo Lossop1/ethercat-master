@@ -16,7 +16,8 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     add_executable(emaster-fingerprint main.c console.c)
     target_link_libraries(
         emaster-fingerprint
-        PRIVATE emaster::soem_adapter emaster::fingerprint_format emaster::config)
+        PRIVATE emaster::soem_adapter emaster::fingerprint_format emaster::config
+                emaster::messages)
     target_compile_features(emaster-fingerprint PRIVATE c_std_11)
     emaster_enable_strict_warnings(emaster-fingerprint)
 endif()

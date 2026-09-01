@@ -58,6 +58,8 @@ static bool report_is_valid(const emaster_preop_report_t *report,
             &deployment->topology->slaves[slave_index];
         const emaster_slave_profile_t *profile =
             expected_profile(deployment->topology, slave_index);
+        const emaster_pdo_set_profile_t *reference_pdo_set =
+            emaster_slave_reference_pdo_set(profile);
         size_t read_index;
 
         if (slave->position != slave_index + 1U ||
@@ -65,6 +67,7 @@ static bool report_is_valid(const emaster_preop_report_t *report,
             !identity_matches_expected_profile(&slave->identity, deployment->topology,
                                                 slave_index) ||
             !emaster_slave_pdo_layout_matches(profile, &slave->pdo_layout) ||
+            reference_pdo_set == NULL ||
             !fixed_string_is_valid(slave->name, sizeof(slave->name)) ||
             slave->sdo_read_count > EMASTER_PREOP_MAX_SDO_REQUESTS ||
             (slave->sdo_read_count > 0U && slave->sdo_reads == NULL))
@@ -326,6 +329,8 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
             &deployment->topology->slaves[slave_index];
         const emaster_slave_profile_t *profile =
             expected_profile(deployment->topology, slave_index);
+        const emaster_pdo_set_profile_t *reference_pdo_set =
+            emaster_slave_reference_pdo_set(profile);
         size_t read_index;
 
         if (slave_index > 0U)
@@ -349,9 +354,9 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
                                                   slave_index) ? "true" : "false",
                 emaster_slave_pdo_layout_matches(profile, &slave->pdo_layout)
                     ? "true" : "false");
-        write_pdo_direction(output, &slave->pdo_layout.rx, profile->rx_pdo_mappings);
+        write_pdo_direction(output, &slave->pdo_layout.rx, reference_pdo_set->rx_mappings);
         fputs(",\"tx\":", output);
-        write_pdo_direction(output, &slave->pdo_layout.tx, profile->tx_pdo_mappings);
+        write_pdo_direction(output, &slave->pdo_layout.tx, reference_pdo_set->tx_mappings);
         fputs("},\"sdo_reads\":[", output);
 
         for (read_index = 0U; read_index < slave->sdo_read_count; ++read_index)

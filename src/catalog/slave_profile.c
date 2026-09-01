@@ -67,15 +67,51 @@ static bool direction_matches(const emaster_pdo_mapping_profile_t *expected_mapp
     return true;
 }
 
+bool emaster_slave_pdo_set_layout_matches(const emaster_pdo_set_profile_t *pdo_set,
+                                          const emaster_pdo_layout_t *actual)
+{
+    return pdo_set != NULL && actual != NULL &&
+           actual->status == EMASTER_PDO_DISCOVERY_COMPLETE &&
+           direction_matches(pdo_set->rx_mappings, pdo_set->rx_mapping_count,
+                             pdo_set->rx_pdo_bytes, &actual->rx) &&
+           direction_matches(pdo_set->tx_mappings, pdo_set->tx_mapping_count,
+                             pdo_set->tx_pdo_bytes, &actual->tx);
+}
+
+const emaster_pdo_set_profile_t *emaster_slave_pdo_set_by_id(
+    const emaster_slave_profile_t *profile, const char *pdo_set_id)
+{
+    size_t index;
+
+    if (profile == NULL || pdo_set_id == NULL || profile->pdo_sets == NULL)
+    {
+        return NULL;
+    }
+
+    for (index = 0U; index < profile->pdo_set_count; ++index)
+    {
+        const emaster_pdo_set_profile_t *pdo_set = &profile->pdo_sets[index];
+        if (pdo_set->pdo_set_id != NULL && strcmp(pdo_set->pdo_set_id, pdo_set_id) == 0)
+        {
+            return pdo_set;
+        }
+    }
+    return NULL;
+}
+
+const emaster_pdo_set_profile_t *emaster_slave_reference_pdo_set(
+    const emaster_slave_profile_t *profile)
+{
+    return profile == NULL
+               ? NULL
+               : emaster_slave_pdo_set_by_id(profile, profile->reference_pdo_set_id);
+}
+
 bool emaster_slave_pdo_layout_matches(const emaster_slave_profile_t *profile,
                                       const emaster_pdo_layout_t *actual)
 {
-    return profile != NULL && actual != NULL &&
-           actual->status == EMASTER_PDO_DISCOVERY_COMPLETE &&
-           direction_matches(profile->rx_pdo_mappings, profile->rx_pdo_mapping_count,
-                             profile->rx_pdo_bytes, &actual->rx) &&
-           direction_matches(profile->tx_pdo_mappings, profile->tx_pdo_mapping_count,
-                             profile->tx_pdo_bytes, &actual->tx);
+    return emaster_slave_pdo_set_layout_matches(emaster_slave_reference_pdo_set(profile),
+                                                actual);
 }
 
 const emaster_slave_profile_t *emaster_slave_profile_by_id(const char *profile_id)

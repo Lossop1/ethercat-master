@@ -11,6 +11,8 @@ include(CompilerWarnings)
 
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 
+set(EMASTER_MESSAGE_LOCALE "zh_CN" CACHE STRING "编译时使用的消息资源语言标识")
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_emaster_hardware_default ON)
 else()
@@ -34,13 +36,24 @@ file(GLOB EMASTER_TOPOLOGY_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/topologies/*.json")
 file(GLOB EMASTER_DEPLOYMENT_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/deployments/*.json")
-if(NOT EMASTER_TOPOLOGY_CONFIG_FILES OR NOT EMASTER_DEPLOYMENT_CONFIG_FILES)
-    message(FATAL_ERROR "config/topologies 和 config/deployments 中都至少需要一个配置")
+file(GLOB EMASTER_OPERATION_PROFILE_CONFIG_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/operation_profiles/*.json")
+if(NOT EMASTER_TOPOLOGY_CONFIG_FILES OR NOT EMASTER_DEPLOYMENT_CONFIG_FILES OR
+   NOT EMASTER_OPERATION_PROFILE_CONFIG_FILES)
+    message(FATAL_ERROR
+        "config/topologies、config/deployments 和 config/operation_profiles 中都至少需要一个配置")
+endif()
+
+set(EMASTER_MESSAGE_CONFIG_FILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/messages/${EMASTER_MESSAGE_LOCALE}.json")
+if(NOT EXISTS "${EMASTER_MESSAGE_CONFIG_FILE}")
+    message(FATAL_ERROR "找不到消息资源：${EMASTER_MESSAGE_CONFIG_FILE}")
 endif()
 
 set(EMASTER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(EMASTER_GENERATED_CATALOG "${EMASTER_GENERATED_DIR}/slave_catalog.c")
 set(EMASTER_GENERATED_CONFIG "${EMASTER_GENERATED_DIR}/runtime_config.c")
+set(EMASTER_GENERATED_MESSAGES "${EMASTER_GENERATED_DIR}/messages.c")
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/include/emaster/version.h.in"
@@ -50,6 +63,7 @@ configure_file(
 add_subdirectory(src/protocol)
 add_subdirectory(src/catalog)
 add_subdirectory(src/config)
+add_subdirectory(src/messages)
 
 if(EMASTER_BUILD_HARDWARE_TOOLS)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

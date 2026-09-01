@@ -34,13 +34,14 @@
 
 | CMake target | 职责 | 依赖 | 禁止行为 |
 |---|---|---|---|
-| `emaster_catalog` | 强类型设备身份和已选 PDO 元数据 | 公共类型、生成目录 | 操作系统、网络、SOEM、运行时修改 |
-| `emaster_config` | 只读拓扑和部署配置目录 | 公共类型、生成目录 | 文件 I/O、操作系统、网络、SOEM、运行时修改 |
+| `emaster_catalog` | 强类型设备身份和全部 ESI PDO 方案 | 公共类型、生成目录 | 操作系统、网络、SOEM、运行时修改 |
+| `emaster_config` | 只读拓扑、运行方案和部署配置目录 | 公共类型、生成目录 | 文件 I/O、操作系统、网络、SOEM、运行时修改 |
+| `emaster_messages` | 从本地化资源生成只读提示文本表 | 公共类型、生成目录 | EtherCAT 行为、配置解释、控制台格式化逻辑 |
 | `emaster_protocol` | 独立于总线库的 PDO 分配/映射只读发现与结构化布局 | 公共类型 | SOEM、文件、控制台、SDO 写入、状态提升 |
 | `emaster_pdo_codec` | 根据已确认布局进行原始整数位域编解码 | 公共类型 | SOEM、文件、单位换算、控制字语义、状态提升 |
 | `emaster_soem_adapter` | 网卡枚举、受限 PRE-OP/SII/SDO 采集和只读 PDO 发现 | SOEM、`emaster_protocol` | JSON、文件、PDO 写入/配置、DC、SAFE-OP/OP、SDO 写入 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
-| `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 上述三个 target | 控制或运动行为 |
+| `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 总线适配、配置、目录、格式和消息 target | 控制或运动行为 |
 
 可执行程序负责操作者交互，格式库负责证据表示，总线适配层返回结构化数据且不知道输出文件。
 项目不设置名为 `core` 的 target，避免不相关逻辑在泛化模块中持续堆积。
@@ -50,10 +51,13 @@
 ```text
 config/devices/            经审查的设备型号事实
 config/topologies/         任意规模的逻辑从站序列
-config/deployments/        主机、专用网口与所选拓扑
+config/operation_profiles/ 设备 PDO 方案上的运行参数候选
+config/deployments/        主机、专用网口、拓扑与已批准方案
+config/messages/            面向操作者的本地化提示正文
 include/emaster/           强类型跨模块契约，不含 SOEM 类型
 src/catalog/               设备目录实现
-src/config/                拓扑和部署配置生成目标
+src/config/                拓扑、运行方案和部署配置生成目标
+src/messages/              消息资源生成目标
 src/protocol/              与总线实现无关的 PDO 发现、布局模型和原始位域编解码
 src/bus/soem/              唯一 SOEM 集成边界
 tools/fingerprint/         受限 PRE-OP 操作工具、控制台展示和记录格式
@@ -83,7 +87,7 @@ tools/fingerprint/         受限 PRE-OP 操作工具、控制台展示和记录
 或存在歧义则拒绝启动。周期、超时、PDO、DC、模式、安全限值和接口名均不得通过命令行临时覆盖。
 诊断证据文件路径可以作为操作输出位置传入，但不能改变总线行为。
 
-提示和命令解析属于 `tools/fingerprint/console.c` 展示层；SOEM 适配层、PDO 协议层和目录校验层只
+提示正文属于 `config/messages/`，消息 ID 和格式化属于 `tools/fingerprint/console.c` 展示层；SOEM 适配层、PDO 协议层和目录校验层只
 返回结构化结果，不直接输出中文。PDO 只读发现位于独立协议模块，按从站分配对象动态展开，不假定
 PDO 数量、索引或条目数量。
 

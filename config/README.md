@@ -11,7 +11,9 @@
 |---|---|---|---|
 | `devices/` | 型号身份、协议能力、PDO、换算默认值、受控资料来源 | ESI 和供应商资料 | 轴号、主机名、网卡名 |
 | `topologies/` | 按总线顺序排列的逻辑从站及其设备配置 | `profile_id` | 主机名、网卡名、阶段安全授权 |
-| `deployments/` | 某台主机使用哪个物理接口运行哪个拓扑 | `topology_id` | 设备协议细节、放宽工具能力的开关 |
+| `operation_profiles/` | 设备 PDO 方案上的同步、周期和模式候选 | `device_profile_id`、`pdo_set_id` | 主机名、网卡名、未批准默认值 |
+| `deployments/` | 某台主机使用哪个物理接口运行哪个拓扑及已批准方案 | `topology_id`、`operation_profile_ids` | 设备协议细节、放宽工具能力的开关 |
+| `messages/` | 面向操作者的本地化提示资源 | 消息 ID | EtherCAT 行为参数 |
 
 JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字段时必须同时更新校验器和本文件。
 
@@ -21,8 +23,10 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 
 - `profile_id`：跨配置引用的稳定且唯一的标识；发布后不得在不迁移引用的情况下修改；
 - `identity`：供应商 ID、产品代码和修订号，必须与受控 ESI 及物理指纹一致；
-- `pdo_sets`：供应商声明的 PDO 方案；每个方向由有序的 `mappings` 数组组成，条目位长总和必须与声明字节数一致；
-- `selected_pdo_set`：当前经审查的默认方案，不代表已经在物理从站上完成映射核验；
+- `pdo_sets`：供应商声明的全部 PDO 方案；每个方向由有序的 `mappings` 数组组成，条目位长总和必须与声明字节数一致；
+- `reference_pdo_set_id`：当前指纹基线使用的静态参照，只用于证据核对，不是运行时选择；
+- `protocol.supports_pdo_configuration`：ESI 的 `CoE/PdoConfig` 能力；为 `false` 时禁止通过 SDO 重映射；
+- `protocol.supports_distributed_clocks`：ESI 声明的能力，不表示所有运行方案都必须启用 DC；
 - `conversion`：设备资料提供的换算来源和默认值，不能替代每台物理从站的采集值；
 - `source`：受控 ESI 的仓库相对路径和 SHA-256。
 
@@ -65,8 +69,22 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 同一主机和 EtherCAT 接口只能由一个仓库部署记录占用。`enp49s0` 只出现在 Orange Pi 部署实例
 和测试证据中，通用代码与拓扑配置均不感知该名称。
 
-构建阶段会把拓扑和部署配置生成只读 C 目录。运行时通过 `deployment_id` 查找部署，接口、主机、
-拓扑和从站顺序均从该目录取得；不提供绕过配置直接指定网卡或拓扑的接口。
+构建阶段会把拓扑、运行方案和部署配置生成只读 C 目录。运行时通过 `deployment_id` 查找部署，接口、
+主机、拓扑和从站顺序均从该目录取得；不提供绕过配置直接指定网卡、拓扑或 EtherCAT 参数的接口。
+
+## 运行方案
+
+`operation_profiles/` 中的每个 JSON 是一个候选方案，必须明确引用设备目录中的 `pdo_set_id`。同步
+策略、AssignActivate、周期、Sync0 偏移及 SM2/SM3 同步类型均可为 `null`，表示尚未由项目负责人
+确认；生成器不会补默认值。方案状态为 `approved` 后，部署才可以引用它，且所有必需同步参数都必须
+存在。模式值必须与设备目录的 ESI 事实一致，模式声明的收发字段必须实际存在于所选 PDO 方案。
+
+当前 Orange Pi 部署只用于 PRE-OP 指纹采集，未激活任何运行方案；仓库中的 SM/DC 文件均为草案。
+
+## 提示资源
+
+`messages/zh_CN.json` 是当前中文提示的唯一正文来源。构建阶段由 `tools/generate_messages.py` 生成
+只读 C 表，并校验每条 `printf` 格式参数；业务代码只引用消息 ID，不得嵌入操作者提示文本。
 
 ## 安全授权
 

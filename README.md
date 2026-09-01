@@ -12,9 +12,10 @@
 
 - 固定到 v2.0.0 的 SOEM 子模块；
 - 由 JSON 生成、并与供应商 ESI 校验的强类型设备目录；
-- 由拓扑和部署配置生成的只读运行时目录；
+- 由拓扑、运行方案和部署配置生成的只读运行时目录；
+- 从中文 JSON 资源生成、带格式参数校验的只读提示文本表；
 - 作为产品目标的暂定 12 位置拓扑和作为当前台架事实的单从站拓扑；
-- 相互分离的设备、拓扑和部署配置及其离线校验；
+- 相互分离的设备、拓扑、运行方案和部署配置及其离线校验；
 - Linux 专用的 PRE-OP 指纹工具，只执行 SDO 读取；
 - Linux 专用的 PRE-OP 指纹工具按从站返回值只读发现完整 PDO 分配和映射；
 - 独立于 SOEM 的原始 PDO 位域编解码库，供后续过程数据会话复用；
@@ -69,10 +70,13 @@ sudo build/linux-debug/tools/fingerprint/emaster-fingerprint \
 
 - `config/devices/`：设备型号和经过审查的设备事实；
 - `config/topologies/`：任意规模的逻辑从站序列；
-- `config/deployments/`：主机、专用 EtherCAT 网口和所选拓扑；
+- `config/deployments/`：主机、专用 EtherCAT 网口、拓扑和已批准运行方案；
+- `config/operation_profiles/`：引用设备 PDO 方案的同步、周期和模式候选；
+- `config/messages/`：面向操作者的中文提示正文，禁止在业务代码中重复嵌入；
 - `include/emaster/`：强类型模块契约，禁止出现 SOEM 类型；
 - `src/catalog/`：平台无关的设备目录；
-- `src/config/`：拓扑和部署配置生成目标；
+- `src/config/`：拓扑、运行方案和部署配置生成目标；
+- `src/messages/`：本地化消息资源生成目标；
 - `src/bus/soem/`：唯一允许调用 SOEM 的代码层；
 - `tools/fingerprint/`：受限的 PRE-OP 操作工具和证据格式；
 - `docs/`：需求、决策、供应商资料说明和测试流程；

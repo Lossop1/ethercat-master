@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""根据设备配置集合生成编译期从站目录。"""
+"""根据设备事实配置生成编译期只读的设备目录。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 
 
 def parse_unsigned(value: object, field: str, maximum: int) -> int:
+    """解析十六进制无符号字段，并在生成前拒绝超范围输入。"""
     if not isinstance(value, str) or not value.startswith("0x"):
         raise ValueError(f"{field} 必须是十六进制字符串")
     number = int(value, 16)
@@ -18,12 +19,21 @@ def parse_unsigned(value: object, field: str, maximum: int) -> int:
     return number
 
 
+def required_string(document: dict[str, Any], field: str, kind: str) -> str:
+    """读取非空字符串；配置错误必须在构建期失败。"""
+    value = document.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{kind}缺少非空字段 {field}")
+    return value
+
+
 def c_string(value: object) -> str:
+    """使用 JSON 转义规则生成 C 字符串字面量。"""
     return json.dumps(str(value), ensure_ascii=True)
 
 
 def direction_values(direction: dict[str, Any], field: str) -> dict[str, object]:
-    """提取一个 PDO 方向中的全部映射表，保留配置声明的顺序。"""
+    """提取一个 PDO 方向中的全部映射表，保留配置声明顺序。"""
     mappings = []
     for mapping_ordinal, mapping in enumerate(direction["mappings"], start=1):
         entries = []
@@ -56,73 +66,68 @@ def direction_values(direction: dict[str, Any], field: str) -> dict[str, object]
     return {"bytes": int(direction["bytes"]), "mappings": mappings}
 
 
+def pdo_set_values(pdo_set: dict[str, Any], profile_id: str) -> dict[str, object]:
+    """生成一个设备 PDO 方案的结构化值，保留所有可选方案。"""
+    pdo_id = required_string(pdo_set, "id", f"设备 {profile_id} 的 PDO 方案")
+    return {
+        "id": pdo_id,
+        "module_ident": parse_unsigned(
+            pdo_set["module_ident"], f"设备 {profile_id} PDO 方案 {pdo_id} 的 module_ident", 0xFFFFFFFF
+        ),
+        "rx": direction_values(pdo_set["rx"], f"设备 {profile_id} PDO 方案 {pdo_id} rx"),
+        "tx": direction_values(pdo_set["tx"], f"设备 {profile_id} PDO 方案 {pdo_id} tx"),
+    }
+
+
 def profile_values(document: dict[str, Any]) -> dict[str, object]:
-    """提取 C 目录所需字段，并在生成前完成类型和范围转换。"""
+    """提取设备事实，并保留全部 PDO 方案供运行方案选择。"""
+    profile_id = required_string(document, "profile_id", "设备配置")
     identity = document["identity"]
     pdo_sets = document["pdo_sets"]
-    selected_id = document["selected_pdo_set"]
-    if not isinstance(identity, dict) or not isinstance(pdo_sets, list):
-        raise ValueError("identity 或 pdo_sets 类型无效")
-
-    selected = next(
-        (item for item in pdo_sets if isinstance(item, dict) and item.get("id") == selected_id),
-        None,
-    )
-    if selected is None:
-        raise ValueError(f"选择的 PDO 集合 {selected_id!r} 不存在")
-
-    conversion = document["conversion"]
     protocol = document["protocol"]
-    if not all(isinstance(item, dict) for item in (conversion, protocol)):
-        raise ValueError("设备配置包含无效对象")
+    conversion = document["conversion"]
+    if not all(isinstance(item, dict) for item in (identity, protocol, conversion)):
+        raise ValueError(f"设备 {profile_id} 的 identity、protocol、pdo_sets 或 conversion 类型无效")
+    if not isinstance(pdo_sets, list) or not pdo_sets:
+        raise ValueError(f"设备 {profile_id} 的 pdo_sets 必须是非空数组")
+
+    reference_id = required_string(document, "reference_pdo_set_id", f"设备 {profile_id}")
+    pdo_values = [pdo_set_values(item, profile_id) for item in pdo_sets]
+    if reference_id not in {item["id"] for item in pdo_values}:
+        raise ValueError(f"设备 {profile_id} 的 reference_pdo_set_id 不存在")
 
     return {
-        "profile_id": c_string(document["profile_id"]),
+        "profile_id": c_string(profile_id),
         "model": c_string(document["model"]),
         "vendor_id": parse_unsigned(identity["vendor_id"], "identity.vendor_id", 0xFFFFFFFF),
         "product_code": parse_unsigned(
             identity["product_code"], "identity.product_code", 0xFFFFFFFF
         ),
         "revision": parse_unsigned(identity["revision"], "identity.revision", 0xFFFFFFFF),
-        "rx": direction_values(selected["rx"], "rx"),
-        "tx": direction_values(selected["tx"], "tx"),
+        "reference_pdo_set_id": c_string(reference_id),
+        "pdo_sets": pdo_values,
         "encoder_counts": int(conversion["encoder_counts_per_motor_revolution_default"]),
-        "requires_dc": "true" if protocol["requires_distributed_clocks"] else "false",
+        "supports_pdo_configuration": "true"
+        if protocol["supports_pdo_configuration"]
+        else "false",
+        "supports_dc": "true"
+        if protocol["supports_distributed_clocks"]
+        else "false",
     }
 
 
-def profile_initializer(values: dict[str, object], ordinal: int) -> str:
-    """把一个设备配置渲染为只读 C 结构初始化器。"""
-    rx = values["rx"]
-    tx = values["tx"]
-    return f"""    {{
-        .profile_id = {values['profile_id']},
-        .model = {values['model']},
-        .identity = {{
-            .vendor_id = UINT32_C(0x{values['vendor_id']:08X}),
-            .product_code = UINT32_C(0x{values['product_code']:08X}),
-            .revision = UINT32_C(0x{values['revision']:08X}),
-        }},
-        .rx_pdo_bytes = UINT16_C({rx['bytes']}),
-        .tx_pdo_bytes = UINT16_C({tx['bytes']}),
-        .rx_pdo_mappings = profile_{ordinal}_rx_mappings,
-        .rx_pdo_mapping_count = sizeof(profile_{ordinal}_rx_mappings) / sizeof(profile_{ordinal}_rx_mappings[0]),
-        .tx_pdo_mappings = profile_{ordinal}_tx_mappings,
-        .tx_pdo_mapping_count = sizeof(profile_{ordinal}_tx_mappings) / sizeof(profile_{ordinal}_tx_mappings[0]),
-        .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
-        .requires_distributed_clocks = {values['requires_dc']},
-    }}"""
-
-
-def mapping_declarations(values: dict[str, object], profile_ordinal: int) -> list[str]:
-    """生成一个设备全部 PDO 条目数组和映射表数组。"""
+def mapping_declarations(
+    pdo_set: dict[str, object], profile_ordinal: int, pdo_set_ordinal: int
+) -> list[str]:
+    """生成一个 PDO 方案的条目数组和映射表数组。"""
     declarations = []
     for direction_name in ("rx", "tx"):
-        direction = values[direction_name]
+        direction = pdo_set[direction_name]
         mapping_initializers = []
         for mapping_ordinal, mapping in enumerate(direction["mappings"]):
             entries_name = (
-                f"profile_{profile_ordinal}_{direction_name}_mapping_{mapping_ordinal}_entries"
+                f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_{direction_name}_mapping_"
+                f"{mapping_ordinal}_entries"
             )
             rendered_entries = ",\n".join(
                 "    {"
@@ -142,31 +147,80 @@ def mapping_declarations(values: dict[str, object], profile_ordinal: int) -> lis
                 f"UINT32_C({mapping['bit_length']})"
                 "}"
             )
+        mappings_name = (
+            f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_{direction_name}_mappings"
+        )
         declarations.append(
-            f"static const emaster_pdo_mapping_profile_t "
-            f"profile_{profile_ordinal}_{direction_name}_mappings[] = {{\n"
+            f"static const emaster_pdo_mapping_profile_t {mappings_name}[] = {{\n"
             + ",\n".join(mapping_initializers)
             + "\n};"
         )
     return declarations
 
 
+def pdo_set_initializer(pdo_set: dict[str, object], profile_ordinal: int, pdo_set_ordinal: int) -> str:
+    """生成一个 PDO 方案结构体初始化器。"""
+    rx = pdo_set["rx"]
+    tx = pdo_set["tx"]
+    return (
+        "    {"
+        f"{c_string(pdo_set['id'])}, UINT32_C(0x{pdo_set['module_ident']:08X}), "
+        f"UINT16_C({rx['bytes']}), UINT16_C({tx['bytes']}), "
+        f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings, "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings) / "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings[0]), "
+        f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings, "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings) / "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings[0])"
+        "}"
+    )
+
+
+def profile_initializer(values: dict[str, object], ordinal: int) -> str:
+    """生成一个设备事实目录结构体初始化器。"""
+    return f"""    {{
+        .profile_id = {values['profile_id']},
+        .model = {values['model']},
+        .identity = {{
+            .vendor_id = UINT32_C(0x{values['vendor_id']:08X}),
+            .product_code = UINT32_C(0x{values['product_code']:08X}),
+            .revision = UINT32_C(0x{values['revision']:08X}),
+        }},
+        .reference_pdo_set_id = {values['reference_pdo_set_id']},
+        .pdo_sets = profile_{ordinal}_pdo_sets,
+        .pdo_set_count = sizeof(profile_{ordinal}_pdo_sets) / sizeof(profile_{ordinal}_pdo_sets[0]),
+        .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
+        .supports_pdo_configuration = {values['supports_pdo_configuration']},
+        .supports_distributed_clocks = {values['supports_dc']},
+    }}"""
+
+
 def generate(documents: list[dict[str, Any]]) -> str:
-    """按稳定 ID 排序生成目录，保证相同输入产生逐字节一致的输出。"""
+    """按稳定设备 ID 生成目录，保证相同输入产生逐字节一致的输出。"""
     if not documents:
         raise ValueError("至少需要一个设备配置")
 
-    ordered = sorted(documents, key=lambda item: str(item["profile_id"]))
-    profile_ids = [str(item["profile_id"]) for item in ordered]
+    ordered = sorted(documents, key=lambda item: str(item.get("profile_id", "")))
+    profile_ids = [str(item.get("profile_id", "")) for item in ordered]
     if len(profile_ids) != len(set(profile_ids)):
         raise ValueError("设备配置的 profile_id 必须唯一")
 
     values = [profile_values(item) for item in ordered]
-    declarations = []
-    for ordinal, item in enumerate(values):
-        declarations.extend(mapping_declarations(item, ordinal))
+    declarations: list[str] = []
+    for profile_ordinal, value in enumerate(values):
+        for pdo_set_ordinal, pdo_set in enumerate(value["pdo_sets"]):
+            declarations.extend(mapping_declarations(pdo_set, profile_ordinal, pdo_set_ordinal))
+        declarations.append(
+            f"static const emaster_pdo_set_profile_t profile_{profile_ordinal}_pdo_sets[] = {{\n"
+            + ",\n".join(
+                pdo_set_initializer(pdo_set, profile_ordinal, pdo_set_ordinal)
+                for pdo_set_ordinal, pdo_set in enumerate(value["pdo_sets"])
+            )
+            + "\n};"
+        )
+
     initializers = ",\n".join(
-        profile_initializer(item, ordinal) for ordinal, item in enumerate(values)
+        profile_initializer(value, ordinal) for ordinal, value in enumerate(values)
     )
     return f"""/* 由 tools/generate_slave_catalog.py 生成，禁止手工修改。 */
 #include "emaster/catalog/slave_profile.h"
@@ -201,7 +255,6 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
-    # CMake 传入完整文件集合，生成器不感知具体型号名或设备数量。
     documents = [json.loads(path.read_text(encoding="utf-8")) for path in args.input]
     output = generate(documents)
     args.output.parent.mkdir(parents=True, exist_ok=True)
