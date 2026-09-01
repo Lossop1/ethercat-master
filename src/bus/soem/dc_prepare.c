@@ -185,8 +185,6 @@ emaster_dc_prepare_status_t emaster_soem_dc_prepare(
         uint16_t sm3_value;
         int8_t mode_value = 0;
         int8_t mode_display = 0;
-        uint32_t dc_cycle;
-        uint8_t dc_activation;
 
         axis_storage[axis_index].position = (uint16_t)(axis_index + 1U);
         axis_storage[axis_index].identity_match =
@@ -283,11 +281,11 @@ emaster_dc_prepare_status_t emaster_soem_dc_prepare(
     for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
     {
         uint16_t slave = (uint16_t)(axis_index + 1U);
+        uint32_t dc_cycle = 0U;
+        uint8_t dc_activation = 0U;
         axis_storage[axis_index].sync0_configured = true;
         ecx_dcsync0(&context, slave, TRUE, plan->cycle_ns,
                     plan->axes[axis_index].operation_profile->sync0_shift_ns);
-        dc_cycle = 0U;
-        dc_activation = 0U;
         axis_storage[axis_index].sync0_readback_match =
             read_dc_register(&context, slave, ECT_REG_DCCYCLE0, &dc_cycle,
                              (uint16_t)sizeof(dc_cycle)) &&
