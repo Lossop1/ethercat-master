@@ -42,9 +42,15 @@
 | `emaster_session` | 组合部署、设备、运行方案和实际 PDO 的失效关闭会话门 | 配置、设备目录、PDO 布局 | SOEM、状态切换、SDO、动态分配、参数默认值 |
 | `emaster_soem_adapter` | 网卡枚举、受限 PRE-OP/SII/SDO 采集和只读 PDO 发现 | SOEM、`emaster_protocol` | JSON、文件、PDO 写入/配置、DC、SAFE-OP/OP、SDO 写入 |
 | `emaster_soem_dc_prepare` | 按已批准会话计划在 PRE-OP 写入并读回同步对象、配置 DC/Sync0 并执行回退 | SOEM、`emaster_session`、`emaster_protocol`、`emaster_catalog` | JSON、文件、SAFE-OP/OP、控制字、过程数据交换、动态默认参数 |
+| `emaster_soem_cia_preflight` | 按已批准会话计划建立一次 SAFE-OP/OP 首帧安全过程数据会话，使用 PDO 编解码验证 `6061` 并执行回退 | SOEM、`emaster_soem_common`、`emaster_session`、`emaster_protocol`、`emaster_pdo_codec`、`emaster_catalog` | CiA 402 控制字状态转换、电机使能、运动、动态默认参数 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 总线适配、配置、目录、格式和消息 target | 控制或运动行为 |
 | `emaster-dc-prepare` | 操作者确认、会话计划构建和一次性 PRE-OP DC 准备结果展示 | DC 准备、会话、配置、消息 | SAFE-OP/OP、控制字、运动、参数命令行覆盖 |
+| `emaster-cia-preflight` | 操作者确认、会话计划构建和一次性 SAFE-OP/OP 首帧过程数据验证 | CiA 402 前置会话、会话、配置、消息 | CiA 402 状态转换、控制字写入、使能、运动、参数命令行覆盖 |
+
+DC 前置流程使用 SOEM 官方 DC 接口配置 Sync0，并从连续的 `DCCUC+DCSYNCACT` 寄存器读回完整
+`assign_activate`；读回值与每个轴的批准运行方案不一致时立即失败，不把 SOEM 的默认激活值当作
+通用配置。需要 Sync1 或其他 DC 激活组合时，必须先增加对应的经批准时序参数和专用适配接口。
 
 可执行程序负责操作者交互，格式库负责证据表示，总线适配层返回结构化数据且不知道输出文件。
 项目不设置名为 `core` 的 target，避免不相关逻辑在泛化模块中持续堆积。

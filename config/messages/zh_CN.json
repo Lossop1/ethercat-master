@@ -58,6 +58,27 @@
     "dc_prepare_sdo_write_failed": "SDO 写入失败",
     "dc_prepare_sdo_readback_failed": "SDO 读回校验失败",
     "dc_prepare_dc_config_failed": "SOEM DC 拓扑配置失败",
-    "dc_prepare_sync0_readback_failed": "Sync0 寄存器读回校验失败"
+    "dc_prepare_sync0_readback_failed": "Sync0 寄存器读回校验失败",
+    "command_cia_preflight": "prepare-cia",
+    "cia_preflight_confirmation_token": "SAFE-OP-CIA",
+    "cia_preflight_usage": "用法：\n  %s %s\n\n命令按当前主机部署建立一次 CiA 402 前置过程数据会话，最高请求 OP；只发送禁止使能、零目标的安全帧，并在完成后关闭 Sync0、恢复 INIT。\n",
+    "cia_preflight_confirm_required": "CiA 402 前置验证必须在交互终端中确认。\n",
+    "cia_preflight_confirm_prompt": "将在主机 %s 的接口 %s 上为拓扑 %s 的 %u 个从站建立 SAFE-OP/OP 前置会话。\n不会写入控制字，不会使能电机，不会发送运动目标；首帧验证后关闭 Sync0 并恢复 INIT。\n输入 %s 继续：",
+    "cia_preflight_plan_failed": "已批准运行方案不完整或未启用，拒绝建立 CiA 402 前置会话。\n",
+    "cia_preflight_success": "SAFE-OP/OP 首帧过程数据、工作计数器和 6061 模式反馈验证成功；已清理同步资源并恢复 INIT。未执行 CiA 402 状态转换。\n",
+    "cia_preflight_failed": "CiA 402 前置过程数据验证失败：%s。已尝试关闭 Sync0 并恢复 INIT。\n",
+    "cia_preflight_axis_line": "从站位置 %u：身份=%s，PDO=%s，映像=%s，安全输出=%s，反馈=%s，6061=%s\n",
+    "cia_preflight_match": "通过",
+    "cia_preflight_mismatch": "失败",
+    "cia_preflight_sdo_write_failed": "CiA 402 前置 SDO 写入失败",
+    "cia_preflight_sdo_readback_failed": "CiA 402 前置 SDO 读回校验失败",
+    "cia_preflight_interface_not_ready": "EtherCAT 网口未检测到物理链路",
+    "cia_preflight_process_map_failed": "过程数据映像配置或安全输出初始化失败",
+    "cia_preflight_safe_op_not_reached": "从站未确认进入 SAFE-OP",
+    "cia_preflight_dc_config_failed": "SOEM DC 配置失败",
+    "cia_preflight_sync0_config_failed": "Sync0 配置或寄存器校验失败",
+    "cia_preflight_initial_wkc_failed": "过程数据首帧工作计数器不符合预期",
+    "cia_preflight_op_not_reached": "从站未确认进入 OP",
+    "cia_preflight_feedback_invalid": "过程数据反馈解码失败或 6061 模式不匹配"
   }
 }

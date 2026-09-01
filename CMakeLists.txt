@@ -80,6 +80,7 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     add_subdirectory(external/SOEM EXCLUDE_FROM_ALL)
     add_subdirectory(src/bus/soem)
     add_subdirectory(tools/dc_prepare)
+    add_subdirectory(tools/cia_preflight)
 endif()
 
 add_subdirectory(tools/fingerprint)

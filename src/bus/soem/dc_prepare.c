@@ -2,64 +2,13 @@
 
 #include "emaster/bus/dc_prepare.h"
 
+#include "soem_common.h"
+
 #include "soem/soem.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
-
-typedef struct
-{
-    ecx_contextt *context;
-    uint16_t slave;
-} soem_sdo_reader_context_t;
-
-static bool restore_init(ecx_contextt *context)
-{
-    context->slavelist[0].state = EC_STATE_INIT;
-    ecx_writestate(context, 0U);
-    return ecx_statecheck(context, 0U, EC_STATE_INIT, EC_TIMEOUTSTATE) == EC_STATE_INIT;
-}
-
-static bool read_integer(soem_sdo_reader_context_t *reader, uint16_t index,
-                         uint8_t subindex, void *value, int size)
-{
-    int actual_size = size;
-    return ecx_SDOread(reader->context, reader->slave, index, subindex, FALSE, &actual_size,
-                       value, EC_TIMEOUTRXM) > 0 && actual_size == size;
-}
-
-static bool read_u8(void *user_data, uint16_t index, uint8_t subindex, uint8_t *value)
-{
-    soem_sdo_reader_context_t *reader = user_data;
-    return reader != NULL && value != NULL &&
-           read_integer(reader, index, subindex, value, (int)sizeof(*value));
-}
-
-static bool read_u16(void *user_data, uint16_t index, uint8_t subindex, uint16_t *value)
-{
-    soem_sdo_reader_context_t *reader = user_data;
-    uint16_t raw;
-    if (reader == NULL || value == NULL ||
-        !read_integer(reader, index, subindex, &raw, (int)sizeof(raw)))
-    {
-        return false;
-    }
-    *value = etohs(raw);
-    return true;
-}
-
-static bool read_u32(void *user_data, uint16_t index, uint8_t subindex, uint32_t *value)
-{
-    soem_sdo_reader_context_t *reader = user_data;
-    uint32_t raw;
-    if (reader == NULL || value == NULL ||
-        !read_integer(reader, index, subindex, &raw, (int)sizeof(raw)))
-    {
-        return false;
-    }
-    *value = etohl(raw);
-    return true;
-}
 
 static bool write_u16(ecx_contextt *context, uint16_t slave, uint16_t index,
                       uint8_t subindex, uint16_t value)
@@ -179,8 +128,6 @@ emaster_dc_prepare_status_t emaster_soem_dc_prepare(
         const emaster_session_axis_plan_t *axis = &plan->axes[axis_index];
         const ec_slavet *slave = &context.slavelist[axis_index + 1U];
         emaster_pdo_layout_t actual_layout;
-        soem_sdo_reader_context_t reader_context;
-        emaster_pdo_sdo_reader_t reader;
         uint16_t sm2_value;
         uint16_t sm3_value;
         int8_t mode_value = 0;
@@ -203,14 +150,8 @@ emaster_dc_prepare_status_t emaster_soem_dc_prepare(
             goto cleanup;
         }
 
-        reader_context.context = &context;
-        reader_context.slave = (uint16_t)(axis_index + 1U);
-        reader.read_u8 = read_u8;
-        reader.read_u16 = read_u16;
-        reader.read_u32 = read_u32;
-        reader.user_data = &reader_context;
-        if (emaster_pdo_layout_discover(&reader, &actual_layout) !=
-            EMASTER_PDO_DISCOVERY_COMPLETE)
+        if (!emaster_soem_discover_pdo_layout(&context, (uint16_t)(axis_index + 1U),
+                                              &actual_layout))
         {
             status = EMASTER_DC_PREPARE_PDO_MISMATCH;
             emaster_pdo_layout_destroy(&actual_layout);
@@ -283,22 +224,27 @@ emaster_dc_prepare_status_t emaster_soem_dc_prepare(
     {
         uint16_t slave = (uint16_t)(axis_index + 1U);
         uint32_t dc_cycle = 0U;
-        uint8_t dc_activation = 0U;
+        uint16_t dc_assign_activate = 0U;
         axis_storage[axis_index].sync0_configured = true;
         ecx_dcsync0(&context, slave, TRUE, plan->cycle_ns,
                     plan->axes[axis_index].operation_profile->sync0_shift_ns);
         axis_storage[axis_index].sync0_readback_match =
             read_dc_register(&context, slave, ECT_REG_DCCYCLE0, &dc_cycle,
                              (uint16_t)sizeof(dc_cycle)) &&
-            read_dc_register(&context, slave, ECT_REG_DCSYNCACT, &dc_activation,
-                             (uint16_t)sizeof(dc_activation));
+            read_dc_register(&context, slave, ECT_REG_DCCUC, &dc_assign_activate,
+                             (uint16_t)sizeof(dc_assign_activate));
         if (axis_storage[axis_index].sync0_readback_match)
         {
             dc_cycle = etohl(dc_cycle);
             axis_storage[axis_index].sync0_cycle_ns = dc_cycle;
-            axis_storage[axis_index].sync0_activation = dc_activation;
+            dc_assign_activate = etohs(dc_assign_activate);
+            axis_storage[axis_index].sync0_activation =
+                (uint8_t)(dc_assign_activate >> CHAR_BIT);
             axis_storage[axis_index].sync0_readback_match =
-                dc_cycle == plan->cycle_ns && (dc_activation & UINT8_C(0x03)) == UINT8_C(0x03);
+                dc_cycle == plan->cycle_ns &&
+                plan->axes[axis_index].operation_profile->assign_activate <= UINT16_MAX &&
+                dc_assign_activate ==
+                    (uint16_t)plan->axes[axis_index].operation_profile->assign_activate;
         }
         if (!axis_storage[axis_index].sync0_readback_match)
         {
@@ -312,7 +258,7 @@ cleanup:
     {
         disable_sync0(&context, plan->axis_count, axis_storage);
         report->sync0_disabled = true;
-        report->restore_init_succeeded = restore_init(&context);
+        report->restore_init_succeeded = emaster_soem_restore_init(&context);
         ecx_close(&context);
     }
     report->status = status == EMASTER_DC_PREPARE_OK && !report->restore_init_succeeded

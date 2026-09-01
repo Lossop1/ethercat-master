@@ -67,6 +67,27 @@ MESSAGE_KEYS = [
     "dc_prepare_sdo_readback_failed",
     "dc_prepare_dc_config_failed",
     "dc_prepare_sync0_readback_failed",
+    "command_cia_preflight",
+    "cia_preflight_confirmation_token",
+    "cia_preflight_usage",
+    "cia_preflight_confirm_required",
+    "cia_preflight_confirm_prompt",
+    "cia_preflight_plan_failed",
+    "cia_preflight_success",
+    "cia_preflight_failed",
+    "cia_preflight_axis_line",
+    "cia_preflight_match",
+    "cia_preflight_mismatch",
+    "cia_preflight_sdo_write_failed",
+    "cia_preflight_sdo_readback_failed",
+    "cia_preflight_interface_not_ready",
+    "cia_preflight_process_map_failed",
+    "cia_preflight_safe_op_not_reached",
+    "cia_preflight_dc_config_failed",
+    "cia_preflight_sync0_config_failed",
+    "cia_preflight_initial_wkc_failed",
+    "cia_preflight_op_not_reached",
+    "cia_preflight_feedback_invalid",
 ]
 
 # 每条格式消息允许的 printf 转换说明符。资源文本可修改，参数契约不可漂移。
@@ -89,6 +110,10 @@ MESSAGE_FORMATS = {
     "dc_prepare_confirm_prompt": ("s", "s", "s", "u", "s"),
     "dc_prepare_failed": ("s",),
     "dc_prepare_axis_line": ("u", "s", "s", "s", "s", "s", "s", "s"),
+    "cia_preflight_usage": ("s", "s"),
+    "cia_preflight_confirm_prompt": ("s", "s", "s", "u", "s"),
+    "cia_preflight_failed": ("s",),
+    "cia_preflight_axis_line": ("u", "s", "s", "s", "s", "s", "s"),
 }
 
 PRINTF_CONVERSION = re.compile(
