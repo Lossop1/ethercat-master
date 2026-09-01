@@ -46,6 +46,7 @@
 | `emaster_cia402` | 独立于总线的 CiA 402 状态字解析、生命周期目标和控制字规划 | 公共类型 | SOEM、PDO 位偏移、时钟、线程、设备参数、自动故障复位 |
 | `emaster_multiaxis` | 按配置轴集合执行完整帧、序号、截止时间和全帧失败门 | `emaster_cia402` | SOEM、PDO 位偏移、单位换算、动态分配、部分帧发布 |
 | `emaster_cyclic` | 通过受控传输回调执行完整原始过程数据交换并核对 WKC、序号和截止时间 | 公共类型 | SDO、状态扫描、动态分配、休眠、日志、PDO 语义 |
+| `emaster_safety` | 汇总拓扑、PDO、通信、命令、反馈和显式授权条件，生成默认拒绝的安全决定 | 公共类型 | SOEM、控制字编码、设备默认值、自动复位、日志和线程同步 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 总线适配、配置、目录、格式和消息 target | 控制或运动行为 |
 | `emaster-dc-prepare` | 操作者确认、会话计划构建和一次性 PRE-OP DC 准备结果展示 | DC 准备、会话、配置、消息 | SAFE-OP/OP、控制字、运动、参数命令行覆盖 |
@@ -74,6 +75,7 @@ src/protocol/              与总线实现无关的 PDO 发现、布局模型和
 src/cia402/                与总线无关的 CiA 402 状态语义和控制字规划
 src/multiaxis/              多轴完整帧、序号和截止时间协调
 src/cyclic/                原始过程数据周期交换契约和 WKC 门
+src/safety/                默认拒绝的安全条件汇总和阻断原因
 src/session/               过程数据会话计划、实际布局门和零输出映像准备
 src/bus/soem/              唯一 SOEM 集成边界
 tools/fingerprint/         受限 PRE-OP 操作工具、控制台展示和记录格式
