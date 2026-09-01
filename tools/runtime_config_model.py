@@ -129,6 +129,10 @@ def operation_values(
             raise ValueError(f"运行方案 ID 重复：{operation_id}")
         seen.add(operation_id)
         status = required_string(document, "status", f"运行方案 {operation_id}")
+        if status not in ("draft", "approved"):
+            raise ValueError(
+                f"运行方案 {operation_id} 的 status 必须是 draft 或 approved"
+            )
         device_profile_id = required_string(
             document, "device_profile_id", f"运行方案 {operation_id}"
         )
@@ -292,6 +296,23 @@ def operation_values(
                 }
             )
 
+        selected_mode_id = document.get("selected_mode_id")
+        if selected_mode_id is not None and (
+            not isinstance(selected_mode_id, str) or not selected_mode_id.strip()
+        ):
+            raise ValueError(
+                f"运行方案 {operation_id} 的 selected_mode_id 必须是非空字符串或 null"
+            )
+        if selected_mode_id is not None and selected_mode_id not in mode_ids:
+            raise ValueError(
+                f"运行方案 {operation_id} 的 selected_mode_id 不在 modes 中："
+                f"{selected_mode_id}"
+            )
+        if status == "approved" and selected_mode_id is None:
+            raise ValueError(
+                f"已批准运行方案 {operation_id} 缺少 selected_mode_id"
+            )
+
         values.append(
             {
                 "id": operation_id,
@@ -309,6 +330,7 @@ def operation_values(
                 "sm2_type": sm2_type,
                 "sm3_present": sm3_present,
                 "sm3_type": sm3_type,
+                "selected_mode_id": selected_mode_id,
                 "modes": mode_values,
             }
         )
@@ -317,12 +339,13 @@ def operation_values(
 
 def deployment_values(
     documents: list[dict[str, Any]],
-    topology_ids: set[str],
+    topologies: list[dict[str, Any]],
     operations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """解析部署绑定，并确保部署只引用已批准的运行方案。"""
     values = []
     seen: set[str] = set()
+    topology_by_id = {topology["id"]: topology for topology in topologies}
     operation_by_id = {operation["id"]: operation for operation in operations}
     operation_ids = set(operation_by_id)
     for document in documents:
@@ -333,7 +356,7 @@ def deployment_values(
         topology_id = required_string(
             document, "topology_id", f"部署 {deployment_id}"
         )
-        if topology_id not in topology_ids:
+        if topology_id not in topology_by_id:
             raise ValueError(f"部署 {deployment_id} 引用了未知拓扑：{topology_id}")
 
         management = document.get("management_interface")
@@ -369,6 +392,32 @@ def deployment_values(
                 f"部署 {deployment_id} 只能引用已批准运行方案："
                 f"{', '.join(unapproved)}"
             )
+
+        if operation_profile_ids:
+            selected_profile_ids = [
+                operation_by_id[operation_id]["device_profile_id"]
+                for operation_id in operation_profile_ids
+            ]
+            if len(selected_profile_ids) != len(set(selected_profile_ids)):
+                raise ValueError(
+                    f"部署 {deployment_id} 对同一设备配置只能启用一个运行方案"
+                )
+            topology_profile_ids = {
+                profile_id
+                for _, _, profile_id in topology_by_id[topology_id]["slaves"]
+            }
+            if set(selected_profile_ids) != topology_profile_ids:
+                raise ValueError(
+                    f"部署 {deployment_id} 的运行方案必须完整覆盖拓扑中的设备配置"
+                )
+            cycle_values = {
+                operation_by_id[operation_id]["cycle_ns"]
+                for operation_id in operation_profile_ids
+            }
+            if len(cycle_values) != 1:
+                raise ValueError(
+                    f"部署 {deployment_id} 启用的运行方案必须使用相同周期"
+                )
 
         values.append(
             {

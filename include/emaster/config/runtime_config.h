@@ -11,6 +11,13 @@ typedef enum
     EMASTER_SYNC_STRATEGY_DC = 1
 } emaster_sync_strategy_t;
 
+/* 审批状态是运行资格，不使用自由文本在业务代码中判断。 */
+typedef enum
+{
+    EMASTER_OPERATION_PROFILE_DRAFT = 0,
+    EMASTER_OPERATION_PROFILE_APPROVED = 1
+} emaster_operation_profile_approval_t;
+
 /* 一个运行方案声明可选的 CiA 402 模式及其需要的收发 PDO 字段。 */
 typedef struct
 {
@@ -26,7 +33,7 @@ typedef struct
 typedef struct
 {
     const char *profile_id;
-    const char *status;
+    emaster_operation_profile_approval_t approval;
     const char *device_profile_id;
     const char *pdo_set_id;
     emaster_sync_strategy_t sync_strategy;
@@ -40,6 +47,8 @@ typedef struct
     uint16_t sm2_sync_type;
     bool has_sm3_sync_type;
     uint16_t sm3_sync_type;
+    /* 草案可以不选择模式；已批准方案必须指向下方 modes 中的一项。 */
+    const char *selected_mode_id;
     const emaster_operation_mode_t *modes;
     size_t mode_count;
 } emaster_operation_profile_t;

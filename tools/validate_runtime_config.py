@@ -51,9 +51,10 @@ def validate_operation_profile(
         non_empty_string(operation_id_value),
         "运行方案配置缺少 operation_profile_id",
     )
+    status = operation.get("status")
     check.require(
-        non_empty_string(operation.get("status")),
-        f"运行方案 {operation_id} 缺少 status",
+        status in ("draft", "approved"),
+        f"运行方案 {operation_id} 的 status 必须是 draft 或 approved",
     )
 
     device_profile_id = operation.get("device_profile_id")
@@ -102,8 +103,29 @@ def validate_operation_profile(
         if non_empty_string(device_profile_id)
         else None
     )
-    validate_sync_config(check, operation_id, operation.get("status"), strategy, sync, constraints)
+    validate_sync_config(check, operation_id, status, strategy, sync, constraints)
     validate_modes(check, operation_id, operation.get("modes"), device, pdo_set)
+    selected_mode_id = operation.get("selected_mode_id")
+    selected_mode_valid = selected_mode_id is None or non_empty_string(selected_mode_id)
+    check.require(
+        selected_mode_valid,
+        f"运行方案 {operation_id} 的 selected_mode_id 必须是非空字符串或 null",
+    )
+    modes = operation.get("modes")
+    mode_ids = {
+        mode.get("id")
+        for mode in modes
+        if isinstance(mode, dict) and non_empty_string(mode.get("id"))
+    } if isinstance(modes, list) else set()
+    check.require(
+        selected_mode_id is None or selected_mode_id in mode_ids,
+        f"运行方案 {operation_id} 的 selected_mode_id 不在 modes 中：{selected_mode_id}",
+    )
+    if status == "approved":
+        check.require(
+            selected_mode_id is not None,
+            f"已批准运行方案 {operation_id} 缺少 selected_mode_id",
+        )
     return len(check.errors) == initial_error_count
 
 
@@ -405,6 +427,39 @@ def validate_deployments(
                         operation.get("status") == "approved",
                         f"部署 {deployment_id} 只能引用已批准运行方案：{operation_id}",
                     )
+
+            # 非空集合表示启用过程数据会话，必须为拓扑中的每种设备恰好选择一个方案。
+            topology = topologies.get(topology_id)
+            topology_profile_ids = {
+                slave.get("profile_id")
+                for slave in topology.get("slaves", [])
+                if isinstance(slave, dict) and non_empty_string(slave.get("profile_id"))
+            } if isinstance(topology, dict) else set()
+            selected_profile_ids = [
+                operations[operation_id].get("device_profile_id")
+                for operation_id in operation_profile_ids
+                if operation_id in operations
+            ]
+            if operation_profile_ids:
+                check.require(
+                    len(selected_profile_ids) == len(operation_profile_ids)
+                    and len(selected_profile_ids) == len(set(selected_profile_ids)),
+                    f"部署 {deployment_id} 对同一设备配置只能启用一个运行方案",
+                )
+                check.require(
+                    set(selected_profile_ids) == topology_profile_ids,
+                    f"部署 {deployment_id} 的运行方案必须完整覆盖拓扑中的设备配置",
+                )
+                cycle_values = {
+                    operations[operation_id].get("sync", {}).get("cycle_ns")
+                    for operation_id in operation_profile_ids
+                    if operation_id in operations
+                    and isinstance(operations[operation_id].get("sync"), dict)
+                }
+                check.require(
+                    len(cycle_values) == 1 and None not in cycle_values,
+                    f"部署 {deployment_id} 启用的运行方案必须使用相同且已确认的周期",
+                )
 
         # 网口名只在部署层有意义；用主机和接口组成物理资源唯一键。
         occupancy = (hostname, interface)

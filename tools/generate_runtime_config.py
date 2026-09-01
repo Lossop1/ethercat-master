@@ -82,10 +82,15 @@ def operation_initializers(operations: list[dict[str, Any]]) -> str:
             if operation["modes"]
             else "0U"
         )
+        selected_mode_id = (
+            c_string(operation["selected_mode_id"])
+            if operation["selected_mode_id"] is not None
+            else "NULL"
+        )
         rendered.append(
             f"""    {{
         .profile_id = {c_string(operation['id'])},
-        .status = {c_string(operation['status'])},
+        .approval = EMASTER_OPERATION_PROFILE_{operation['status'].upper()},
         .device_profile_id = {c_string(operation['device_profile_id'])},
         .pdo_set_id = {c_string(operation['pdo_set_id'])},
         .sync_strategy = EMASTER_SYNC_STRATEGY_{operation['strategy'].upper()},
@@ -99,6 +104,7 @@ def operation_initializers(operations: list[dict[str, Any]]) -> str:
         .sm2_sync_type = UINT16_C(0x{operation['sm2_type']:04X}),
         .has_sm3_sync_type = {'true' if operation['sm3_present'] else 'false'},
         .sm3_sync_type = UINT16_C(0x{operation['sm3_type']:04X}),
+        .selected_mode_id = {selected_mode_id},
         .modes = {f"operation_{ordinal}_modes" if operation['modes'] else 'NULL'},
         .mode_count = {mode_count},
     }}"""
@@ -203,7 +209,7 @@ def generate(
     operations = operation_values(operation_documents, profiles)
     deployments = deployment_values(
         deployment_documents,
-        {item["id"] for item in topologies},
+        topologies,
         operations,
     )
 

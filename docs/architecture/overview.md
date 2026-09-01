@@ -39,6 +39,7 @@
 | `emaster_messages` | 从本地化资源生成只读提示文本表 | 公共类型、生成目录 | EtherCAT 行为、配置解释、控制台格式化逻辑 |
 | `emaster_protocol` | 独立于总线库的 PDO 分配/映射只读发现与结构化布局 | 公共类型 | SOEM、文件、控制台、SDO 写入、状态提升 |
 | `emaster_pdo_codec` | 根据已确认布局进行原始整数位域编解码 | 公共类型 | SOEM、文件、单位换算、控制字语义、状态提升 |
+| `emaster_session` | 组合部署、设备、运行方案和实际 PDO 的失效关闭会话门 | 配置、设备目录、PDO 布局 | SOEM、状态切换、SDO、动态分配、参数默认值 |
 | `emaster_soem_adapter` | 网卡枚举、受限 PRE-OP/SII/SDO 采集和只读 PDO 发现 | SOEM、`emaster_protocol` | JSON、文件、PDO 写入/配置、DC、SAFE-OP/OP、SDO 写入 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 总线适配、配置、目录、格式和消息 target | 控制或运动行为 |
@@ -59,6 +60,7 @@ src/catalog/               设备目录实现
 src/config/                拓扑、运行方案和部署配置生成目标
 src/messages/              消息资源生成目标
 src/protocol/              与总线实现无关的 PDO 发现、布局模型和原始位域编解码
+src/session/               过程数据会话计划、实际布局门和零输出映像准备
 src/bus/soem/              唯一 SOEM 集成边界
 tools/fingerprint/         受限 PRE-OP 操作工具、控制台展示和记录格式
 ```

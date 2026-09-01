@@ -4,6 +4,7 @@
   "status": "draft",
   "device_profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1",
   "pdo_set_id": "dynamic_csp_csv_cst",
+  "selected_mode_id": null,
   "sync": {
     "strategy": "dc",
     "assign_activate": null,
