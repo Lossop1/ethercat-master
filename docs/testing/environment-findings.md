@@ -54,3 +54,14 @@
   `08e2fcc1bfb39489a2101b026c49d290acc746e9b890f5425c5ce6d85d54e71b`。项目负责人已批准
   该文件作为 `orangepi-current-bench` 部署、`bench-current-single-slave` 台架拓扑的当前
   单从站 PDO 基线并纳入仓库；批准不扩展到其他从站、最终产品拓扑、DC、SAFE-OP/OP 或运动。
+
+## 2026-09-01 PRE-OP DC 参数准备真机验证
+
+- Orange Pi 地址为 `192.168.137.54`，EtherCAT 专用接口为 `enp49s0`，当前检测到 1 台从站；
+- 执行 `emaster-dc-prepare prepare-dc` 成功，过程包含身份核对、动态 PDO 严格匹配、SDO 写入与读回、
+  `ecx_configdc()`、Sync0 配置和寄存器读回；退出前已关闭 Sync0 并将从站恢复到 INIT；
+- 读回通过：`1C32:01=0x0001`、`1C33:01=0x0022`、`6060:00=8`，Sync0 周期为 `1000000 ns`，
+  激活位与批准方案一致；
+- `6061:00` 在 PRE-OP 下未提供有效模式显示反馈。该对象为只读 TPDO 反馈，当前未进入 SAFE-OP/OP，
+  也未交换过程数据，因此记录为“延后验证”，不伪造为通过；
+- 本次未执行 PDO 映射写入、过程数据交换、SAFE-OP/OP、控制字写入、电机使能或运动。
