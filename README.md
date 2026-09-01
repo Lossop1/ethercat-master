@@ -26,6 +26,7 @@
 - 独立于总线的多轴完整帧协调模块，校验轴集合、序号和截止时间并拒绝发布部分帧；
 - 独立于总线的原始过程数据周期交换门，通过适配回调核对 WKC、序号和截止时间；
 - 独立于总线的默认拒绝安全许可门，汇总拓扑、PDO、通信、命令、反馈和显式使能授权条件；
+- 只读的 ESI 事实检查器，用于输出设备身份、PDO、同步和协议能力候选，不修改项目配置；
 - 首版架构、安全、实时指标和验收约束。
 
 供应商原始资料位于本地 `docs/lz-joint/`，由于尚无再分发授权，不提交到公开仓库。
@@ -54,6 +55,12 @@ cmake --build build/host-debug
 
 ```sh
 python3 tools/validate_project.py --root . --require-vendor-artifacts
+```
+
+查看一份 ESI 的只读事实报告（输出到标准输出，不生成或批准设备配置）：
+
+```sh
+python3 tools/inspect_esi.py docs/lz-joint/ECAT_CIA402.xml
 ```
 
 ## 硬件指纹

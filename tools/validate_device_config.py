@@ -14,6 +14,7 @@ from validation_common import (
     non_empty_string,
     validate_hex_value,
 )
+from esi_facts import esi_modules, esi_runtime_constraints
 
 
 def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str) -> bool:
@@ -130,108 +131,6 @@ def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str
             f"{pdo_id} {direction} 字节数与条目不一致",
         )
     return len(check.errors) == initial_error_count
-
-
-def esi_modules(root: ET.Element) -> dict[int, dict[str, Any]]:
-    """提取 ESI 模块及其双向 PDO，供设备配置进行结构化对比。"""
-    modules: dict[int, dict[str, Any]] = {}
-    for module in root.findall("./Descriptions/Modules/Module"):
-        module_type = module.find("Type")
-        if module_type is None:
-            continue
-        module_ident = hex_value(module_type.attrib["ModuleIdent"])
-        result: dict[str, Any] = {}
-        for xml_tag, direction in (("RxPdo", "rx"), ("TxPdo", "tx")):
-            mappings = []
-            for pdo in module.findall(xml_tag):
-                entries = []
-                for entry in pdo.findall("Entry"):
-                    object_index = hex_value(entry.findtext("Index", default="0"))
-                    entries.append(
-                        {
-                            "index": object_index,
-                            "subindex": int(entry.findtext("SubIndex", default="0")),
-                            "bits": int(entry.findtext("BitLen", default="0")),
-                            "data_type": (
-                                "PADDING"
-                                if object_index == 0
-                                else entry.findtext("DataType", default="")
-                            ),
-                        }
-                    )
-                mappings.append(
-                    {
-                        "index": hex_value(pdo.findtext("Index", default="0")),
-                        "entries": entries,
-                    }
-                )
-            result[direction] = mappings
-        modules[module_ident] = result
-    return modules
-
-
-def little_endian_default_data(value: str) -> int:
-    """把 ESI DefaultData 的字节序列解释为 EtherCAT 小端无符号整数。"""
-    return int.from_bytes(bytes.fromhex(value), byteorder="little", signed=False)
-
-
-def esi_runtime_constraints(root: ET.Element) -> EsiRuntimeConstraints:
-    """提取 ESI 明确声明的 PDO 配置能力、同步模式和最小周期。"""
-    device = root.find("./Descriptions/Devices/Device")
-    if device is None:
-        raise ValueError("ESI 缺少 Device")
-
-    coe = device.find("./Mailbox/CoE")
-    supports_pdo_configuration = (
-        coe is not None and coe.attrib.get("PdoConfig", "false").lower() == "true"
-    )
-    dc = device.find("./Dc")
-    assign_activate_by_strategy: dict[str, int] = {}
-    if dc is not None:
-        for operation_mode in dc.findall("./OpMode"):
-            name = operation_mode.findtext("Name", default="").strip().lower()
-            description = operation_mode.findtext("Desc", default="").strip().lower()
-            assign_text = operation_mode.findtext("AssignActivate")
-            if assign_text is None:
-                continue
-            strategy = None
-            if name == "dc" or description.startswith("dc-"):
-                strategy = "dc"
-            elif name == "synchron" or description.startswith("sm-"):
-                strategy = "sm"
-            if strategy is not None:
-                assign_activate_by_strategy[strategy] = hex_value(assign_text)
-
-    default_sync_type_by_sm: dict[int, int] = {}
-    minimum_cycles: list[int] = []
-    for object_config in root.findall(
-        "./Descriptions/Devices/Device/Profile/Dictionary/Objects/Object"
-    ):
-        object_index = object_config.findtext("Index")
-        if object_index is None:
-            continue
-        object_index_value = hex_value(object_index)
-        if object_index_value not in (0x1C32, 0x1C33):
-            continue
-        sm_number = 2 if object_index_value == 0x1C32 else 3
-        for subitem in object_config.findall("./Info/SubItem"):
-            item_name = subitem.findtext("Name")
-            default_data = subitem.findtext("./Info/DefaultData")
-            if item_name == "Synchronization Type" and default_data:
-                # 1C32/1C33 的 DefaultData 是小端字节序，不能按普通十六进制文本解释。
-                default_sync_type_by_sm[sm_number] = little_endian_default_data(
-                    default_data
-                )
-            elif item_name == "Minimum Cycle Time" and default_data:
-                minimum_cycles.append(little_endian_default_data(default_data))
-
-    return EsiRuntimeConstraints(
-        assign_activate_by_strategy=assign_activate_by_strategy,
-        default_sync_type_by_sm=default_sync_type_by_sm,
-        minimum_cycle_ns=max(minimum_cycles) if minimum_cycles else None,
-        supports_pdo_configuration=supports_pdo_configuration,
-        supports_distributed_clocks="dc" in assign_activate_by_strategy,
-    )
 
 
 def validate_catalog_against_esi(
