@@ -51,5 +51,6 @@
   SDO 成功，身份和 PDO 严格匹配，且恢复 INIT 成功。该候选仍需项目负责人批准后才可进入
   后续过程数据开发。
 - 最终同步代码后的复采候选为 `orangepi-bench-20260901T034149Z.json`，SHA-256 为
-  `08e2fcc1bfb39489a2101b026c49d290acc746e9b890f5425c5ce6d85d54e71b`；该文件仍只保留在
-  Orange Pi，未纳入仓库，等待项目负责人批准。
+  `08e2fcc1bfb39489a2101b026c49d290acc746e9b890f5425c5ce6d85d54e71b`。项目负责人已批准
+  该文件作为 `orangepi-current-bench` 部署、`bench-current-single-slave` 台架拓扑的当前
+  单从站 PDO 基线并纳入仓库；批准不扩展到其他从站、最终产品拓扑、DC、SAFE-OP/OP 或运动。
