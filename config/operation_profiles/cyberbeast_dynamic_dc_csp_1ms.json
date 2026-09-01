@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "operation_profile_id": "cyberbeast.dynamic-dc-draft",
-  "status": "draft",
+  "operation_profile_id": "cyberbeast.dynamic-dc-csp-1ms",
+  "status": "approved",
   "device_profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1",
   "pdo_set_id": "dynamic_csp_csv_cst",
-  "selected_mode_id": null,
+  "selected_mode_id": "csp",
   "sync": {
     "strategy": "dc",
-    "assign_activate": null,
-    "cycle_ns": null,
-    "sync0_shift_ns": null,
-    "sm2_sync_type": null,
-    "sm3_sync_type": null
+    "assign_activate": "0x00000300",
+    "cycle_ns": 1000000,
+    "sync0_shift_ns": 250000,
+    "sm2_sync_type": "0x0001",
+    "sm3_sync_type": "0x0022"
   },
   "modes": [
     {

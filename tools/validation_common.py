@@ -22,6 +22,7 @@ class EsiRuntimeConstraints:
     """ESI 中可直接约束运行方案的同步和 PDO 配置事实。"""
 
     assign_activate_by_strategy: dict[str, int]
+    default_sync_type_by_sm: dict[int, int]
     minimum_cycle_ns: int | None
     supports_pdo_configuration: bool
     supports_distributed_clocks: bool

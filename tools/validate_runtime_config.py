@@ -142,6 +142,7 @@ def validate_sync_config(
         check.errors.append(f"运行方案 {operation_id} 缺少 sync 对象")
         return
 
+    valid_hex_fields: dict[str, bool] = {}
     for field, maximum in (
         ("assign_activate", 0xFFFFFFFF),
         ("sm2_sync_type", 0xFFFF),
@@ -149,7 +150,9 @@ def validate_sync_config(
     ):
         value = sync.get(field)
         if value is not None:
-            validate_hex_value(check, value, f"运行方案 {operation_id} 的 {field}", maximum)
+            valid_hex_fields[field] = validate_hex_value(
+                check, value, f"运行方案 {operation_id} 的 {field}", maximum
+            )
 
     assign_activate = sync.get("assign_activate")
     assign_activate_valid = isinstance(assign_activate, str) and assign_activate.startswith("0x")
@@ -160,6 +163,18 @@ def validate_sync_config(
             and hex_value(assign_activate) == expected_assign_activate,
             f"运行方案 {operation_id} 的 assign_activate 与 ESI {strategy} 模式不一致",
         )
+
+    if constraints is not None:
+        for field, sm_number in (("sm2_sync_type", 2), ("sm3_sync_type", 3)):
+            value = sync.get(field)
+            if value is None or not valid_hex_fields.get(field, False):
+                continue
+            expected_sync_type = constraints.default_sync_type_by_sm.get(sm_number)
+            check.require(
+                expected_sync_type is not None
+                and hex_value(value) == expected_sync_type,
+                f"运行方案 {operation_id} 的 {field} 与 ESI 1C3{sm_number}:01 默认值不一致",
+            )
 
     cycle_ns = sync.get("cycle_ns")
     cycle_valid = (

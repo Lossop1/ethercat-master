@@ -202,22 +202,32 @@ def esi_runtime_constraints(root: ET.Element) -> EsiRuntimeConstraints:
             if strategy is not None:
                 assign_activate_by_strategy[strategy] = hex_value(assign_text)
 
+    default_sync_type_by_sm: dict[int, int] = {}
     minimum_cycles: list[int] = []
     for object_config in root.findall(
         "./Descriptions/Devices/Device/Profile/Dictionary/Objects/Object"
     ):
         object_index = object_config.findtext("Index")
-        if object_index is None or hex_value(object_index) not in (0x1C32, 0x1C33):
+        if object_index is None:
             continue
+        object_index_value = hex_value(object_index)
+        if object_index_value not in (0x1C32, 0x1C33):
+            continue
+        sm_number = 2 if object_index_value == 0x1C32 else 3
         for subitem in object_config.findall("./Info/SubItem"):
-            if subitem.findtext("Name") != "Minimum Cycle Time":
-                continue
+            item_name = subitem.findtext("Name")
             default_data = subitem.findtext("./Info/DefaultData")
-            if default_data:
+            if item_name == "Synchronization Type" and default_data:
+                # 1C32/1C33 的 DefaultData 是小端字节序，不能按普通十六进制文本解释。
+                default_sync_type_by_sm[sm_number] = little_endian_default_data(
+                    default_data
+                )
+            elif item_name == "Minimum Cycle Time" and default_data:
                 minimum_cycles.append(little_endian_default_data(default_data))
 
     return EsiRuntimeConstraints(
         assign_activate_by_strategy=assign_activate_by_strategy,
+        default_sync_type_by_sm=default_sync_type_by_sm,
         minimum_cycle_ns=max(minimum_cycles) if minimum_cycles else None,
         supports_pdo_configuration=supports_pdo_configuration,
         supports_distributed_clocks="dc" in assign_activate_by_strategy,
