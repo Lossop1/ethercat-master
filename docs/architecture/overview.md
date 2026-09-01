@@ -36,7 +36,8 @@
 |---|---|---|---|
 | `emaster_catalog` | 强类型设备身份和已选 PDO 元数据 | 公共类型、生成目录 | 操作系统、网络、SOEM、运行时修改 |
 | `emaster_config` | 只读拓扑和部署配置目录 | 公共类型、生成目录 | 文件 I/O、操作系统、网络、SOEM、运行时修改 |
-| `emaster_soem_adapter` | 网卡枚举和受限 PRE-OP/SII/SDO 采集 | SOEM | JSON、文件、PDO 映射、DC、SAFE-OP/OP、SDO 写入 |
+| `emaster_protocol` | 独立于总线库的 PDO 分配/映射只读发现与结构化布局 | 公共类型 | SOEM、文件、控制台、SDO 写入、状态提升 |
+| `emaster_soem_adapter` | 网卡枚举、受限 PRE-OP/SII/SDO 采集和只读 PDO 发现 | SOEM、`emaster_protocol` | JSON、文件、PDO 写入/配置、DC、SAFE-OP/OP、SDO 写入 |
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 上述三个 target | 控制或运动行为 |
 
@@ -52,8 +53,9 @@ config/deployments/        主机、专用网口与所选拓扑
 include/emaster/           强类型跨模块契约，不含 SOEM 类型
 src/catalog/               设备目录实现
 src/config/                拓扑和部署配置生成目标
+src/protocol/              与总线实现无关的 PDO 只读发现和布局模型
 src/bus/soem/              唯一 SOEM 集成边界
-tools/fingerprint/         受限 PRE-OP 操作工具和记录格式
+tools/fingerprint/         受限 PRE-OP 操作工具、控制台展示和记录格式
 ```
 
 只创建有实际功能支撑的目录。例如，在对应模块需求批准之前，`src/pdo/`、`src/dc/` 和
@@ -79,6 +81,10 @@ tools/fingerprint/         受限 PRE-OP 操作工具和记录格式
 项目启动命令只表达动作，不承载 EtherCAT 行为参数。可执行程序按主机身份选择唯一部署；若无匹配
 或存在歧义则拒绝启动。周期、超时、PDO、DC、模式、安全限值和接口名均不得通过命令行临时覆盖。
 诊断证据文件路径可以作为操作输出位置传入，但不能改变总线行为。
+
+提示和命令解析属于 `tools/fingerprint/console.c` 展示层；SOEM 适配层、PDO 协议层和目录校验层只
+返回结构化结果，不直接输出中文。PDO 只读发现位于独立协议模块，按从站分配对象动态展开，不假定
+PDO 数量、索引或条目数量。
 
 最终产品的 12 轴拓扑与当前单从站台架都是配置实例。轴数要求可以存在于产品验收测试中，但不
 能进入设备目录、总线适配器、指纹格式或通用拓扑校验器。`enp49s0` 只属于 Orange Pi 部署实例。

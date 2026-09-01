@@ -99,12 +99,67 @@ static void read_sdo(ecx_contextt *context, uint16_t slave,
     }
 }
 
+typedef struct
+{
+    ecx_contextt *context;
+    uint16_t slave;
+} soem_sdo_reader_context_t;
+
+static bool read_integer(soem_sdo_reader_context_t *reader, uint16_t index,
+                         uint8_t subindex, void *value, int size)
+{
+    int actual_size = size;
+    int work_counter;
+
+    work_counter = ecx_SDOread(reader->context, reader->slave, index, subindex, FALSE,
+                               &actual_size, value, EC_TIMEOUTRXM);
+    return work_counter > 0 && actual_size == size;
+}
+
+static bool read_u8(void *user_data, uint16_t index, uint8_t subindex, uint8_t *value)
+{
+    soem_sdo_reader_context_t *reader = user_data;
+
+    return reader != NULL && value != NULL &&
+           read_integer(reader, index, subindex, value, (int)sizeof(*value));
+}
+
+static bool read_u16(void *user_data, uint16_t index, uint8_t subindex, uint16_t *value)
+{
+    soem_sdo_reader_context_t *reader = user_data;
+    uint16_t raw;
+
+    if (reader == NULL || value == NULL ||
+        !read_integer(reader, index, subindex, &raw, (int)sizeof(raw)))
+    {
+        return false;
+    }
+    *value = etohs(raw);
+    return true;
+}
+
+static bool read_u32(void *user_data, uint16_t index, uint8_t subindex, uint32_t *value)
+{
+    soem_sdo_reader_context_t *reader = user_data;
+    uint32_t raw;
+
+    if (reader == NULL || value == NULL ||
+        !read_integer(reader, index, subindex, &raw, (int)sizeof(raw)))
+    {
+        return false;
+    }
+    *value = etohl(raw);
+    return true;
+}
+
 static bool capture_slave(ecx_contextt *context, uint16_t position,
                           const emaster_sdo_request_t *requests, size_t request_count,
                           emaster_preop_slave_t *result)
 {
     const ec_slavet *slave = &context->slavelist[position];
     size_t request_index;
+    soem_sdo_reader_context_t reader_context;
+    emaster_pdo_sdo_reader_t reader;
 
     result->position = position;
     (void)snprintf(result->name, sizeof(result->name), "%s", slave->name);
@@ -133,6 +188,16 @@ static bool capture_slave(ecx_contextt *context, uint16_t position,
         {
             prepare_read(&requests[request_index], &result->sdo_reads[request_index]);
         }
+    }
+    if (result->has_coe)
+    {
+        reader_context.context = context;
+        reader_context.slave = position;
+        reader.read_u8 = read_u8;
+        reader.read_u16 = read_u16;
+        reader.read_u32 = read_u32;
+        reader.user_data = &reader_context;
+        (void)emaster_pdo_layout_discover(&reader, &result->pdo_layout);
     }
     return true;
 }
@@ -177,17 +242,16 @@ emaster_soem_visit_interfaces(emaster_interface_visitor_t visitor, void *user_da
 
 void emaster_preop_report_destroy(emaster_preop_report_t *report)
 {
-    size_t slave_index;
-
     if (report == NULL)
     {
         return;
     }
     if (report->slaves != NULL)
     {
-        for (slave_index = 0U; slave_index < report->slave_count; ++slave_index)
+        for (size_t slave_index = 0U; slave_index < report->slave_count; ++slave_index)
         {
             free(report->slaves[slave_index].sdo_reads);
+            emaster_pdo_layout_destroy(&report->slaves[slave_index].pdo_layout);
         }
     }
     free(report->slaves);
@@ -200,7 +264,6 @@ emaster_soem_preop_probe(const char *interface_name, const emaster_sdo_request_t
 {
     ecx_contextt context;
     int slave_count;
-    int position;
     emaster_preop_probe_status_t status = EMASTER_PREOP_PROBE_OK;
 
     if (interface_name == NULL || interface_name[0] == '\0' ||
@@ -277,7 +340,7 @@ emaster_soem_preop_probe(const char *interface_name, const emaster_sdo_request_t
     }
     else
     {
-        for (position = 1; position <= slave_count; ++position)
+        for (int position = 1; position <= slave_count; ++position)
         {
             if (!capture_slave(&context, (uint16_t)position, requests, request_count,
                                &report->slaves[position - 1]))
@@ -290,6 +353,12 @@ emaster_soem_preop_probe(const char *interface_name, const emaster_sdo_request_t
             {
                 /* 部分可选对象失败可以保留；全部失败说明邮箱读取基线无效。 */
                 status = EMASTER_PREOP_PROBE_SDO_READ_FAILED;
+            }
+            else if (report->slaves[position - 1].has_coe &&
+                     report->slaves[position - 1].pdo_layout.status !=
+                         EMASTER_PDO_DISCOVERY_COMPLETE)
+            {
+                status = EMASTER_PREOP_PROBE_PDO_DISCOVERY_FAILED;
             }
         }
     }

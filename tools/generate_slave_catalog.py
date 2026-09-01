@@ -9,17 +9,51 @@ from pathlib import Path
 from typing import Any
 
 
-def parse_u32(value: object, field: str) -> int:
+def parse_unsigned(value: object, field: str, maximum: int) -> int:
     if not isinstance(value, str) or not value.startswith("0x"):
         raise ValueError(f"{field} 必须是十六进制字符串")
     number = int(value, 16)
-    if not 0 <= number <= 0xFFFFFFFF:
-        raise ValueError(f"{field} 超出 uint32 范围")
+    if not 0 <= number <= maximum:
+        raise ValueError(f"{field} 超出范围")
     return number
 
 
-def c_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=True)
+def c_string(value: object) -> str:
+    return json.dumps(str(value), ensure_ascii=True)
+
+
+def direction_values(direction: dict[str, Any], field: str) -> dict[str, object]:
+    """提取一个 PDO 方向中的全部映射表，保留配置声明的顺序。"""
+    mappings = []
+    for mapping_ordinal, mapping in enumerate(direction["mappings"], start=1):
+        entries = []
+        bit_length = 0
+        for entry_ordinal, entry in enumerate(mapping["entries"], start=1):
+            bits = int(entry["bits"])
+            bit_length += bits
+            entries.append(
+                {
+                    "index": parse_unsigned(
+                        entry["index"],
+                        f"{field}.mappings[{mapping_ordinal}].entries[{entry_ordinal}].index",
+                        0xFFFF,
+                    ),
+                    "subindex": int(entry["subindex"]),
+                    "bits": bits,
+                    "data_type": c_string(entry["data_type"]),
+                    "name": c_string(entry["name"]),
+                }
+            )
+        mappings.append(
+            {
+                "index": parse_unsigned(
+                    mapping["index"], f"{field}.mappings[{mapping_ordinal}].index", 0xFFFF
+                ),
+                "entries": entries,
+                "bit_length": bit_length,
+            }
+        )
+    return {"bytes": int(direction["bytes"]), "mappings": mappings}
 
 
 def profile_values(document: dict[str, Any]) -> dict[str, object]:
@@ -37,39 +71,21 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
     if selected is None:
         raise ValueError(f"选择的 PDO 集合 {selected_id!r} 不存在")
 
-    rx = selected["rx"]
-    tx = selected["tx"]
     conversion = document["conversion"]
     protocol = document["protocol"]
-    if not all(isinstance(item, dict) for item in (rx, tx, conversion, protocol)):
+    if not all(isinstance(item, dict) for item in (conversion, protocol)):
         raise ValueError("设备配置包含无效对象")
 
     return {
-        "profile_id": c_string(str(document["profile_id"])),
-        "model": c_string(str(document["model"])),
-        "vendor_id": parse_u32(identity["vendor_id"], "identity.vendor_id"),
-        "product_code": parse_u32(identity["product_code"], "identity.product_code"),
-        "revision": parse_u32(identity["revision"], "identity.revision"),
-        "rx_index": parse_u32(rx["index"], "rx.index"),
-        "tx_index": parse_u32(tx["index"], "tx.index"),
-        "rx_bytes": int(rx["bytes"]),
-        "tx_bytes": int(tx["bytes"]),
-        "rx_entries": [
-            {
-                "index": parse_u32(entry["index"], "rx.entries.index"),
-                "subindex": int(entry["subindex"]),
-                "name": c_string(str(entry["name"])),
-            }
-            for entry in rx["entries"]
-        ],
-        "tx_entries": [
-            {
-                "index": parse_u32(entry["index"], "tx.entries.index"),
-                "subindex": int(entry["subindex"]),
-                "name": c_string(str(entry["name"])),
-            }
-            for entry in tx["entries"]
-        ],
+        "profile_id": c_string(document["profile_id"]),
+        "model": c_string(document["model"]),
+        "vendor_id": parse_unsigned(identity["vendor_id"], "identity.vendor_id", 0xFFFFFFFF),
+        "product_code": parse_unsigned(
+            identity["product_code"], "identity.product_code", 0xFFFFFFFF
+        ),
+        "revision": parse_unsigned(identity["revision"], "identity.revision", 0xFFFFFFFF),
+        "rx": direction_values(selected["rx"], "rx"),
+        "tx": direction_values(selected["tx"], "tx"),
         "encoder_counts": int(conversion["encoder_counts_per_motor_revolution_default"]),
         "requires_dc": "true" if protocol["requires_distributed_clocks"] else "false",
     }
@@ -77,6 +93,8 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
 
 def profile_initializer(values: dict[str, object], ordinal: int) -> str:
     """把一个设备配置渲染为只读 C 结构初始化器。"""
+    rx = values["rx"]
+    tx = values["tx"]
     return f"""    {{
         .profile_id = {values['profile_id']},
         .model = {values['model']},
@@ -85,17 +103,52 @@ def profile_initializer(values: dict[str, object], ordinal: int) -> str:
             .product_code = UINT32_C(0x{values['product_code']:08X}),
             .revision = UINT32_C(0x{values['revision']:08X}),
         }},
-        .rx_pdo_index = UINT16_C(0x{values['rx_index']:04X}),
-        .tx_pdo_index = UINT16_C(0x{values['tx_index']:04X}),
-        .rx_pdo_bytes = UINT16_C({values['rx_bytes']}),
-        .tx_pdo_bytes = UINT16_C({values['tx_bytes']}),
-        .rx_pdo_entries = profile_{ordinal}_rx_entries,
-        .rx_pdo_entry_count = sizeof(profile_{ordinal}_rx_entries) / sizeof(profile_{ordinal}_rx_entries[0]),
-        .tx_pdo_entries = profile_{ordinal}_tx_entries,
-        .tx_pdo_entry_count = sizeof(profile_{ordinal}_tx_entries) / sizeof(profile_{ordinal}_tx_entries[0]),
+        .rx_pdo_bytes = UINT16_C({rx['bytes']}),
+        .tx_pdo_bytes = UINT16_C({tx['bytes']}),
+        .rx_pdo_mappings = profile_{ordinal}_rx_mappings,
+        .rx_pdo_mapping_count = sizeof(profile_{ordinal}_rx_mappings) / sizeof(profile_{ordinal}_rx_mappings[0]),
+        .tx_pdo_mappings = profile_{ordinal}_tx_mappings,
+        .tx_pdo_mapping_count = sizeof(profile_{ordinal}_tx_mappings) / sizeof(profile_{ordinal}_tx_mappings[0]),
         .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
         .requires_distributed_clocks = {values['requires_dc']},
     }}"""
+
+
+def mapping_declarations(values: dict[str, object], profile_ordinal: int) -> list[str]:
+    """生成一个设备全部 PDO 条目数组和映射表数组。"""
+    declarations = []
+    for direction_name in ("rx", "tx"):
+        direction = values[direction_name]
+        mapping_initializers = []
+        for mapping_ordinal, mapping in enumerate(direction["mappings"]):
+            entries_name = (
+                f"profile_{profile_ordinal}_{direction_name}_mapping_{mapping_ordinal}_entries"
+            )
+            rendered_entries = ",\n".join(
+                "    {"
+                f"UINT16_C(0x{entry['index']:04X}), UINT8_C({entry['subindex']}), "
+                f"UINT8_C({entry['bits']}), {entry['data_type']}, {entry['name']}"
+                "}"
+                for entry in mapping["entries"]
+            )
+            declarations.append(
+                f"static const emaster_pdo_entry_t {entries_name}[] = {{\n"
+                f"{rendered_entries}\n}};"
+            )
+            mapping_initializers.append(
+                "    {"
+                f"UINT16_C(0x{mapping['index']:04X}), {entries_name}, "
+                f"sizeof({entries_name}) / sizeof({entries_name}[0]), "
+                f"UINT32_C({mapping['bit_length']})"
+                "}"
+            )
+        declarations.append(
+            f"static const emaster_pdo_mapping_profile_t "
+            f"profile_{profile_ordinal}_{direction_name}_mappings[] = {{\n"
+            + ",\n".join(mapping_initializers)
+            + "\n};"
+        )
+    return declarations
 
 
 def generate(documents: list[dict[str, Any]]) -> str:
@@ -109,18 +162,9 @@ def generate(documents: list[dict[str, Any]]) -> str:
         raise ValueError("设备配置的 profile_id 必须唯一")
 
     values = [profile_values(item) for item in ordered]
-    entry_arrays = []
+    declarations = []
     for ordinal, item in enumerate(values):
-        for direction in ("rx", "tx"):
-            entries = item[f"{direction}_entries"]
-            rendered = ",\n".join(
-                f'    {{UINT16_C(0x{entry["index"]:04X}), UINT8_C({entry["subindex"]}), {entry["name"]}}}'
-                for entry in entries
-            )
-            entry_arrays.append(
-                f"static const emaster_pdo_entry_t profile_{ordinal}_{direction}_entries[] = {{\n"
-                f"{rendered}\n}};"
-            )
+        declarations.extend(mapping_declarations(item, ordinal))
     initializers = ",\n".join(
         profile_initializer(item, ordinal) for ordinal, item in enumerate(values)
     )
@@ -129,7 +173,7 @@ def generate(documents: list[dict[str, Any]]) -> str:
 
 #include <stddef.h>
 
-{"\n\n".join(entry_arrays)}
+{"\n\n".join(declarations)}
 
 static const emaster_slave_profile_t profiles[] = {{
 {initializers},

@@ -47,6 +47,7 @@ configure_file(
     "${EMASTER_GENERATED_DIR}/emaster/version.h"
     @ONLY)
 
+add_subdirectory(src/protocol)
 add_subdirectory(src/catalog)
 add_subdirectory(src/config)
 

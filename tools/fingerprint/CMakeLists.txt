@@ -13,7 +13,7 @@ target_include_directories(
 emaster_enable_strict_warnings(emaster_fingerprint_format)
 
 if(EMASTER_BUILD_HARDWARE_TOOLS)
-    add_executable(emaster-fingerprint main.c)
+    add_executable(emaster-fingerprint main.c console.c)
     target_link_libraries(
         emaster-fingerprint
         PRIVATE emaster::soem_adapter emaster::fingerprint_format emaster::config)

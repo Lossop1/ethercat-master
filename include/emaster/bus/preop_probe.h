@@ -2,6 +2,7 @@
 #define EMASTER_BUS_PREOP_PROBE_H
 
 #include "emaster/types.h"
+#include "emaster/protocol/pdo_layout.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -62,6 +63,8 @@ typedef struct
     bool has_coe;
     size_t sdo_read_count;
     emaster_sdo_read_t *sdo_reads;
+    /* 当前生效 PDO 映射由分配对象逐层只读发现，不由设备配置预填。 */
+    emaster_pdo_layout_t pdo_layout;
 } emaster_preop_slave_t;
 
 typedef struct
@@ -83,6 +86,7 @@ typedef enum
     EMASTER_PREOP_PROBE_TOO_MANY_SLAVES,
     EMASTER_PREOP_PROBE_PREOP_NOT_REACHED,
     EMASTER_PREOP_PROBE_SDO_READ_FAILED,
+    EMASTER_PREOP_PROBE_PDO_DISCOVERY_FAILED,
     EMASTER_PREOP_PROBE_OUT_OF_MEMORY,
     EMASTER_PREOP_PROBE_RESTORE_INIT_FAILED
 } emaster_preop_probe_status_t;

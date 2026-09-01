@@ -18,6 +18,7 @@ add_library(emaster_catalog STATIC
 add_library(emaster::catalog ALIAS emaster_catalog)
 
 target_compile_features(emaster_catalog PUBLIC c_std_11)
+target_link_libraries(emaster_catalog PUBLIC emaster::protocol)
 target_include_directories(
     emaster_catalog
     PUBLIC

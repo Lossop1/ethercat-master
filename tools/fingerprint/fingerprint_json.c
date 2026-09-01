@@ -19,7 +19,17 @@ static bool sdo_type_is_valid(emaster_sdo_value_type_t type)
 
 static bool identity_matches_expected_profile(const emaster_slave_identity_t *identity,
                                               const emaster_topology_config_t *topology,
-                                              size_t slave_index);
+                                               size_t slave_index);
+
+static const emaster_slave_profile_t *expected_profile(
+    const emaster_topology_config_t *topology, size_t slave_index)
+{
+    if (topology == NULL || slave_index >= topology->slave_count)
+    {
+        return NULL;
+    }
+    return emaster_slave_profile_by_id(topology->slaves[slave_index].profile_id);
+}
 
 static bool report_is_valid(const emaster_preop_report_t *report,
                             const emaster_deployment_config_t *deployment)
@@ -46,12 +56,15 @@ static bool report_is_valid(const emaster_preop_report_t *report,
         const emaster_preop_slave_t *slave = &report->slaves[slave_index];
         const emaster_topology_slave_config_t *expected =
             &deployment->topology->slaves[slave_index];
+        const emaster_slave_profile_t *profile =
+            expected_profile(deployment->topology, slave_index);
         size_t read_index;
 
         if (slave->position != slave_index + 1U ||
             slave->position != expected->position ||
             !identity_matches_expected_profile(&slave->identity, deployment->topology,
-                                               slave_index) ||
+                                                slave_index) ||
+            !emaster_slave_pdo_layout_matches(profile, &slave->pdo_layout) ||
             !fixed_string_is_valid(slave->name, sizeof(slave->name)) ||
             slave->sdo_read_count > EMASTER_PREOP_MAX_SDO_REQUESTS ||
             (slave->sdo_read_count > 0U && slave->sdo_reads == NULL))
@@ -151,6 +164,62 @@ static bool identity_matches_expected_profile(const emaster_slave_identity_t *id
     return emaster_slave_identity_matches(profile, identity);
 }
 
+static void write_pdo_direction(FILE *output,
+                                const emaster_pdo_direction_layout_t *direction,
+                                const emaster_pdo_mapping_profile_t *expected_mappings)
+{
+    size_t mapping_ordinal;
+
+    fprintf(output,
+            "{\"assignment_index\":\"0x%04X\",\"mapping_count\":%u,"
+            "\"bit_length\":%u,\"byte_length\":%u,\"mappings\":[",
+            direction->assignment_index, (unsigned int)direction->mapping_count,
+            (unsigned int)direction->bit_length,
+            (unsigned int)((direction->bit_length + UINT32_C(7)) / UINT32_C(8)));
+    for (mapping_ordinal = 0U; mapping_ordinal < direction->mapping_count;
+         ++mapping_ordinal)
+    {
+        const emaster_pdo_mapping_t *mapping = &direction->mappings[mapping_ordinal];
+        const emaster_pdo_mapping_profile_t *expected_mapping =
+            &expected_mappings[mapping_ordinal];
+        size_t entry_ordinal;
+
+        if (mapping_ordinal > 0U)
+        {
+            fputc(',', output);
+        }
+        fprintf(output,
+                "{\"assignment_subindex\":%u,\"mapping_index\":\"0x%04X\","
+                "\"entry_count\":%u,\"bit_length\":%u,\"entries\":[",
+                (unsigned int)(mapping_ordinal + 1U), mapping->mapping_index,
+                (unsigned int)mapping->entry_count, (unsigned int)mapping->bit_length);
+        for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count; ++entry_ordinal)
+        {
+            const emaster_pdo_mapping_entry_t *entry = &mapping->entries[entry_ordinal];
+            const emaster_pdo_entry_t *expected_entry =
+                &expected_mapping->entries[entry_ordinal];
+            if (entry_ordinal > 0U)
+            {
+                fputc(',', output);
+            }
+            fprintf(output,
+                    "{\"mapping_subindex\":%u,\"raw_descriptor\":\"0x%08X\","
+                    "\"object_index\":\"0x%04X\",\"object_subindex\":%u,"
+                    "\"bit_length\":%u,\"bit_offset\":%u,\"data_type\":",
+                    (unsigned int)entry->mapping_subindex,
+                    (unsigned int)entry->raw_descriptor, entry->object_index,
+                    (unsigned int)entry->object_subindex,
+                    (unsigned int)entry->bit_length, (unsigned int)entry->bit_offset);
+            json_string(output, expected_entry->data_type);
+            fputs(",\"name\":", output);
+            json_string(output, expected_entry->name);
+            fputc('}', output);
+        }
+        fputs("]}", output);
+    }
+    fputs("]}", output);
+}
+
 bool emaster_fingerprint_has_sdo_evidence(const emaster_preop_report_t *report)
 {
     size_t slave_index;
@@ -233,7 +302,7 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
         return 1;
     }
 
-    fputs("{\n  \"schema_version\": 1,\n  \"tool\": {\"name\": \"emaster-fingerprint\", ",
+    fputs("{\n  \"schema_version\": 2,\n  \"tool\": {\"name\": \"emaster-fingerprint\", ",
           output);
     fputs("\"version\": ", output);
     json_string(output, EMASTER_VERSION);
@@ -253,6 +322,10 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
     for (slave_index = 0U; slave_index < report->slave_count; ++slave_index)
     {
         const emaster_preop_slave_t *slave = &report->slaves[slave_index];
+        const emaster_topology_slave_config_t *expected =
+            &deployment->topology->slaves[slave_index];
+        const emaster_slave_profile_t *profile =
+            expected_profile(deployment->topology, slave_index);
         size_t read_index;
 
         if (slave_index > 0U)
@@ -264,15 +337,22 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
         fprintf(output,
                 ",\"sii_identity\":{\"vendor_id\":%u,\"product_code\":%u,"
                 "\"revision\":%u},\"state\":%u,\"has_dc\":%s,\"has_coe\":%s,"
-                "\"target_profile_match\":%s,\"sdo_reads\":[",
+                "\"target_profile_id\":",
                 (unsigned int)slave->identity.vendor_id,
                 (unsigned int)slave->identity.product_code,
                 (unsigned int)slave->identity.revision, (unsigned int)slave->state,
-                slave->has_dc ? "true" : "false", slave->has_coe ? "true" : "false",
+                slave->has_dc ? "true" : "false", slave->has_coe ? "true" : "false");
+        json_string(output, expected->profile_id);
+        fprintf(output, ",\"target_profile_match\":%s,\"target_pdo_match\":%s,"
+                        "\"pdo_layout\":{\"status\":\"complete\",\"rx\":",
                 identity_matches_expected_profile(&slave->identity, deployment->topology,
-                                                  slave_index)
-                    ? "true"
-                    : "false");
+                                                  slave_index) ? "true" : "false",
+                emaster_slave_pdo_layout_matches(profile, &slave->pdo_layout)
+                    ? "true" : "false");
+        write_pdo_direction(output, &slave->pdo_layout.rx, profile->rx_pdo_mappings);
+        fputs(",\"tx\":", output);
+        write_pdo_direction(output, &slave->pdo_layout.tx, profile->tx_pdo_mappings);
+        fputs("},\"sdo_reads\":[", output);
 
         for (read_index = 0U; read_index < slave->sdo_read_count; ++read_index)
         {

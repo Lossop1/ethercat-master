@@ -16,7 +16,7 @@
     "behavior"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "tool": {
       "type": "object",
       "additionalProperties": false,
@@ -79,6 +79,84 @@
         }
       ]
     },
+    "pdo_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mapping_subindex",
+        "raw_descriptor",
+        "object_index",
+        "object_subindex",
+        "bit_length",
+        "bit_offset",
+        "data_type",
+        "name"
+      ],
+      "properties": {
+        "mapping_subindex": {"type": "integer", "minimum": 1, "maximum": 255},
+        "raw_descriptor": {"type": "string", "pattern": "^0x[0-9A-F]{8}$"},
+        "object_index": {"type": "string", "pattern": "^0x[0-9A-F]{4}$"},
+        "object_subindex": {"type": "integer", "minimum": 0, "maximum": 255},
+        "bit_length": {"type": "integer", "minimum": 1, "maximum": 255},
+        "bit_offset": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "data_type": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1}
+      }
+    },
+    "pdo_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignment_subindex",
+        "mapping_index",
+        "entry_count",
+        "bit_length",
+        "entries"
+      ],
+      "properties": {
+        "assignment_subindex": {"type": "integer", "minimum": 1, "maximum": 255},
+        "mapping_index": {"type": "string", "pattern": "^0x[0-9A-F]{4}$"},
+        "entry_count": {"type": "integer", "minimum": 0, "maximum": 255},
+        "bit_length": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "entries": {
+          "type": "array",
+          "maxItems": 255,
+          "items": {"$ref": "#/$defs/pdo_entry"}
+        }
+      }
+    },
+    "pdo_direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignment_index",
+        "mapping_count",
+        "bit_length",
+        "byte_length",
+        "mappings"
+      ],
+      "properties": {
+        "assignment_index": {"type": "string", "pattern": "^0x1C1[23]$"},
+        "mapping_count": {"type": "integer", "minimum": 0, "maximum": 255},
+        "bit_length": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "byte_length": {"type": "integer", "minimum": 0, "maximum": 536870912},
+        "mappings": {
+          "type": "array",
+          "maxItems": 255,
+          "items": {"$ref": "#/$defs/pdo_mapping"}
+        }
+      }
+    },
+    "pdo_layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "rx", "tx"],
+      "properties": {
+        "status": {"const": "complete"},
+        "rx": {"$ref": "#/$defs/pdo_direction"},
+        "tx": {"$ref": "#/$defs/pdo_direction"}
+      }
+    },
     "slave": {
       "type": "object",
       "additionalProperties": false,
@@ -89,7 +167,10 @@
         "state",
         "has_dc",
         "has_coe",
+        "target_profile_id",
         "target_profile_match",
+        "target_pdo_match",
+        "pdo_layout",
         "sdo_reads"
       ],
       "properties": {
@@ -108,7 +189,10 @@
         "state": {"type": "integer", "minimum": 0, "maximum": 65535},
         "has_dc": {"type": "boolean"},
         "has_coe": {"type": "boolean"},
-        "target_profile_match": {"type": "boolean"},
+        "target_profile_id": {"type": "string", "minLength": 1},
+        "target_profile_match": {"const": true},
+        "target_pdo_match": {"const": true},
+        "pdo_layout": {"$ref": "#/$defs/pdo_layout"},
         "sdo_reads": {
           "type": "array",
           "items": {"$ref": "#/$defs/sdo_read"}

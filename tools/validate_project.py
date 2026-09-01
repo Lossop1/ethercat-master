@@ -68,7 +68,7 @@ def load_documents(directory: Path, kind: str, check: Validation) -> list[dict[s
 
 
 def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str) -> bool:
-    """校验一个 PDO 方案的字段范围、字节对齐和声明长度。"""
+    """校验一个 PDO 方案的映射表、条目类型、字节对齐和声明长度。"""
     initial_error_count = len(check.errors)
     pdo_id = pdo_set.get("id")
     check.require(non_empty_string(pdo_id), f"设备 {profile_id} 的 PDO 方案缺少 id")
@@ -77,53 +77,103 @@ def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str
     )
 
     for direction in ("rx", "tx"):
-        pdo = pdo_set.get(direction)
-        if not isinstance(pdo, dict):
+        direction_config = pdo_set.get(direction)
+        if not isinstance(direction_config, dict):
             check.errors.append(f"PDO 方案 {pdo_id} 缺少 {direction} 对象")
             continue
-        validate_hex_value(check, pdo.get("index"), f"{pdo_id} {direction}.index", 0xFFFF)
-        byte_count = pdo.get("bytes")
+        byte_count = direction_config.get("bytes")
         byte_count_valid = (
             isinstance(byte_count, int)
             and not isinstance(byte_count, bool)
             and 0 < byte_count <= 0xFFFF
         )
         check.require(byte_count_valid, f"{pdo_id} {direction}.bytes 必须是正整数")
-        entries = pdo.get("entries")
-        if not isinstance(entries, list) or not entries:
-            check.errors.append(f"{pdo_id} {direction}.entries 必须是非空数组")
+        mappings = direction_config.get("mappings")
+        if not isinstance(mappings, list) or not mappings:
+            check.errors.append(f"{pdo_id} {direction}.mappings 必须是非空数组")
             continue
 
         bit_sum = 0
-        entries_valid = True
-        for entry_index, entry in enumerate(entries, start=1):
-            if not isinstance(entry, dict):
-                check.errors.append(f"{pdo_id} {direction} 第 {entry_index} 个条目必须是对象")
-                entries_valid = False
+        mappings_valid = True
+        mapping_indices: list[int] = []
+        for mapping_ordinal, mapping in enumerate(mappings, start=1):
+            if not isinstance(mapping, dict):
+                check.errors.append(
+                    f"{pdo_id} {direction} 第 {mapping_ordinal} 张映射表必须是对象"
+                )
+                mappings_valid = False
                 continue
-            index_valid = validate_hex_value(
+            mapping_index_valid = validate_hex_value(
                 check,
-                entry.get("index"),
-                f"{pdo_id} {direction} 第 {entry_index} 个条目的 index",
+                mapping.get("index"),
+                f"{pdo_id} {direction} 第 {mapping_ordinal} 张映射表的 index",
                 0xFFFF,
             )
-            subindex = entry.get("subindex")
-            bits = entry.get("bits")
-            subindex_valid = (
-                isinstance(subindex, int)
-                and not isinstance(subindex, bool)
-                and 0 <= subindex <= 0xFF
-            )
-            bits_valid = (
-                isinstance(bits, int) and not isinstance(bits, bool) and 0 < bits <= 0xFFFF
-            )
-            check.require(subindex_valid, f"{pdo_id} {direction} 条目的 subindex 超出范围")
-            check.require(bits_valid, f"{pdo_id} {direction} 条目的 bits 必须是正整数")
-            entries_valid = entries_valid and index_valid and subindex_valid and bits_valid
-            if bits_valid:
-                bit_sum += bits
+            if mapping_index_valid:
+                mapping_indices.append(hex_value(mapping["index"]))
+            entries = mapping.get("entries")
+            if not isinstance(entries, list) or not entries:
+                check.errors.append(
+                    f"{pdo_id} {direction} 第 {mapping_ordinal} 张映射表的 entries 必须是非空数组"
+                )
+                mappings_valid = False
+                continue
+            for entry_ordinal, entry in enumerate(entries, start=1):
+                if not isinstance(entry, dict):
+                    check.errors.append(
+                        f"{pdo_id} {direction} 第 {mapping_ordinal} 张映射表的第 "
+                        f"{entry_ordinal} 个条目必须是对象"
+                    )
+                    mappings_valid = False
+                    continue
+                object_index_valid = validate_hex_value(
+                    check,
+                    entry.get("index"),
+                    f"{pdo_id} {direction} 映射条目的 index",
+                    0xFFFF,
+                )
+                subindex = entry.get("subindex")
+                bits = entry.get("bits")
+                data_type = entry.get("data_type")
+                entry_name = entry.get("name")
+                subindex_valid = (
+                    isinstance(subindex, int)
+                    and not isinstance(subindex, bool)
+                    and 0 <= subindex <= 0xFF
+                )
+                bits_valid = (
+                    isinstance(bits, int) and not isinstance(bits, bool) and 0 < bits <= 0xFF
+                )
+                data_type_valid = non_empty_string(data_type)
+                name_valid = non_empty_string(entry_name)
+                check.require(subindex_valid, f"{pdo_id} {direction} 条目的 subindex 超出范围")
+                check.require(bits_valid, f"{pdo_id} {direction} 条目的 bits 必须为 1..255")
+                check.require(data_type_valid, f"{pdo_id} {direction} 条目缺少 data_type")
+                check.require(name_valid, f"{pdo_id} {direction} 条目缺少 name")
+                if object_index_valid and subindex_valid and data_type_valid:
+                    is_padding = hex_value(entry["index"]) == 0
+                    check.require(
+                        (is_padding and subindex == 0 and data_type == "PADDING")
+                        or (not is_padding and data_type != "PADDING"),
+                        f"{pdo_id} {direction} 的填充条目必须使用 0x0000:00/PADDING",
+                    )
+                mappings_valid = (
+                    mappings_valid
+                    and mapping_index_valid
+                    and object_index_valid
+                    and subindex_valid
+                    and bits_valid
+                    and data_type_valid
+                    and name_valid
+                )
+                if bits_valid:
+                    bit_sum += bits
 
-        if not entries_valid or not byte_count_valid:
+        check.require(
+            len(mapping_indices) == len(set(mapping_indices)),
+            f"{pdo_id} {direction} 的映射表索引必须唯一",
+        )
+        if not mappings_valid or not byte_count_valid:
             continue
         check.require(bit_sum % 8 == 0, f"{pdo_id} {direction} 未按字节对齐")
         check.require(
@@ -143,22 +193,30 @@ def esi_modules(root: ET.Element) -> dict[int, dict[str, Any]]:
         module_ident = hex_value(module_type.attrib["ModuleIdent"])
         result: dict[str, Any] = {}
         for xml_tag, direction in (("RxPdo", "rx"), ("TxPdo", "tx")):
-            pdo = module.find(xml_tag)
-            if pdo is None:
-                continue
-            entries = []
-            for entry in pdo.findall("Entry"):
-                entries.append(
+            mappings = []
+            for pdo in module.findall(xml_tag):
+                entries = []
+                for entry in pdo.findall("Entry"):
+                    object_index = hex_value(entry.findtext("Index", default="0"))
+                    entries.append(
+                        {
+                            "index": object_index,
+                            "subindex": int(entry.findtext("SubIndex", default="0")),
+                            "bits": int(entry.findtext("BitLen", default="0")),
+                            "data_type": (
+                                "PADDING"
+                                if object_index == 0
+                                else entry.findtext("DataType", default="")
+                            ),
+                        }
+                    )
+                mappings.append(
                     {
-                        "index": hex_value(entry.findtext("Index", default="0")),
-                        "subindex": int(entry.findtext("SubIndex", default="0")),
-                        "bits": int(entry.findtext("BitLen", default="0")),
+                        "index": hex_value(pdo.findtext("Index", default="0")),
+                        "entries": entries,
                     }
                 )
-            result[direction] = {
-                "index": hex_value(pdo.findtext("Index", default="0")),
-                "entries": entries,
-            }
+            result[direction] = mappings
         modules[module_ident] = result
     return modules
 
@@ -212,21 +270,25 @@ def validate_catalog_against_esi(
         for direction in ("rx", "tx"):
             expected = pdo_set[direction]
             actual = modules[module_ident][direction]
-            expected_entries = [
-                {
-                    "index": hex_value(entry["index"]),
-                    "subindex": int(entry["subindex"]),
-                    "bits": int(entry["bits"]),
-                }
-                for entry in expected["entries"]
-            ]
+            expected_mappings = []
+            for mapping in expected["mappings"]:
+                expected_mappings.append(
+                    {
+                        "index": hex_value(mapping["index"]),
+                        "entries": [
+                            {
+                                "index": hex_value(entry["index"]),
+                                "subindex": int(entry["subindex"]),
+                                "bits": int(entry["bits"]),
+                                "data_type": entry["data_type"],
+                            }
+                            for entry in mapping["entries"]
+                        ],
+                    }
+                )
             check.require(
-                hex_value(expected["index"]) == actual["index"],
-                f"{pdo_set['id']} {direction} PDO 索引与 ESI 不一致",
-            )
-            check.require(
-                expected_entries == actual["entries"],
-                f"{pdo_set['id']} {direction} PDO 条目与 ESI 不一致",
+                expected_mappings == actual,
+                f"{pdo_set['id']} {direction} PDO 映射表、顺序、条目或数据类型与 ESI 不一致",
             )
 
 
