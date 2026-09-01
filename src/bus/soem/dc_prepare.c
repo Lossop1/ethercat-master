@@ -264,9 +264,10 @@ emaster_dc_prepare_status_t emaster_soem_dc_prepare(
             axis_storage[axis_index].mode_value_readback_match &&
             axis_storage[axis_index].mode_display_readback_match;
         axis_storage[axis_index].mode_display = mode_display;
+        /* 6061 是只读 TPDO 反馈；在 PRE-OP 尚未交换 PDO 时允许暂不可读，后续周期验证再关门。 */
         if (!axis_storage[axis_index].sm2_readback_match ||
             !axis_storage[axis_index].sm3_readback_match ||
-            !axis_storage[axis_index].mode_readback_match)
+            !axis_storage[axis_index].mode_value_readback_match)
         {
             status = EMASTER_DC_PREPARE_SDO_READBACK_FAILED;
             goto cleanup;
