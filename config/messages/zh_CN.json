@@ -51,7 +51,7 @@
     "dc_prepare_plan_failed": "已批准运行方案不完整或未启用，拒绝执行 DC 准备。\n",
     "dc_prepare_success": "PRE-OP DC 参数写入、读回和 Sync0 寄存器校验成功；已关闭 Sync0 并恢复 INIT。\n",
     "dc_prepare_failed": "PRE-OP DC 准备失败：%s。已尝试关闭 Sync0 并恢复 INIT。\n",
-    "dc_prepare_axis_line": "从站位置 %u：身份=%s，PDO=%s，SM2=%s，SM3=%s，模式显示=%s，Sync0=%s\n",
+    "dc_prepare_axis_line": "从站位置 %u：身份=%s，PDO=%s，SM2=%s，SM3=%s，模式选择=%s，模式显示=%s，Sync0=%s\n",
     "dc_prepare_match": "通过",
     "dc_prepare_mismatch": "失败",
     "dc_prepare_dc_unavailable": "从站未声明分布式时钟能力",

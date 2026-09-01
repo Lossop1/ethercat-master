@@ -157,7 +157,9 @@ int main(int argc, char **argv)
         fprintf(stdout, emaster_text(EMASTER_TEXT_DC_PREPARE_AXIS_LINE),
                 (unsigned int)axis->position, result_text(axis->identity_match),
                 result_text(axis->pdo_match), result_text(axis->sm2_readback_match),
-                result_text(axis->sm3_readback_match), result_text(axis->mode_readback_match),
+                result_text(axis->sm3_readback_match),
+                result_text(axis->mode_value_readback_match),
+                result_text(axis->mode_display_readback_match),
                 result_text(axis->sync0_readback_match));
     }
     if (prepare_status == EMASTER_DC_PREPARE_OK)

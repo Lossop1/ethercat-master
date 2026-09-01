@@ -88,7 +88,7 @@ MESSAGE_FORMATS = {
     "pdo_failure": ("u", "u", "X", "X"),
     "dc_prepare_confirm_prompt": ("s", "s", "s", "u", "s"),
     "dc_prepare_failed": ("s",),
-    "dc_prepare_axis_line": ("u", "s", "s", "s", "s", "s", "s"),
+    "dc_prepare_axis_line": ("u", "s", "s", "s", "s", "s", "s", "s"),
 }
 
 PRINTF_CONVERSION = re.compile(
