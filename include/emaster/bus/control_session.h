@@ -37,6 +37,45 @@ typedef enum
     EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED
 } emaster_control_session_status_t;
 
+/*
+ * 驱动故障对象来自供应商对象字典。read_succeeded 为 false 时，其余数值不得用于
+ * 判断驱动状态；保留读取结果而不在总线层解释厂商故障码，避免协议执行与设备语义耦合。
+ */
+typedef struct
+{
+    bool read_succeeded;
+    uint16_t cia402_error_code;
+    uint8_t error_register;
+    uint32_t extended_servo_error_code;
+    uint32_t servo_error_code;
+} emaster_drive_diagnostic_t;
+
+/*
+ * 对应 EtherCAT 同步管理器参数对象 1C32/1C33。计数器在同一次控制会话末尾读取，
+ * 用于区分链路正常但主站周期不满足设备要求的情况。
+ */
+typedef struct
+{
+    bool read_succeeded;
+    uint16_t sm_event_missed;
+    uint16_t cycle_time_too_small;
+    uint16_t shift_time_too_short;
+    bool sync_error;
+} emaster_sync_diagnostic_t;
+
+/*
+ * 位置换算参数直接读取物理从站的 608F/6091，不能用 EDS 默认值替代真机值。
+ * 分子和分母均保留原始对象值，由应用层选择物理单位并执行有界换算。
+ */
+typedef struct
+{
+    bool read_succeeded;
+    uint32_t encoder_increments;
+    uint32_t encoder_motor_revolutions;
+    uint32_t gear_motor_revolutions;
+    uint32_t gear_shaft_revolutions;
+} emaster_position_scale_t;
+
 typedef struct
 {
     uint16_t position;
@@ -55,12 +94,17 @@ typedef struct
     uint16_t status_word;
     uint16_t control_word;
     int32_t initial_actual_position;
+    int32_t actual_position;
     int32_t hold_target_position;
     emaster_cia402_state_t cia402_state;
     bool switch_on_disabled_seen;
     bool ready_to_switch_on_seen;
     bool switched_on_seen;
     bool operation_enabled_seen;
+    emaster_drive_diagnostic_t drive_diagnostic;
+    emaster_sync_diagnostic_t sm2_diagnostic;
+    emaster_sync_diagnostic_t sm3_diagnostic;
+    emaster_position_scale_t position_scale;
 } emaster_control_session_axis_result_t;
 
 typedef struct

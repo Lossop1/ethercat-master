@@ -48,6 +48,32 @@ static bool read_u16(ecx_contextt *context, uint16_t slave, uint16_t index,
     return true;
 }
 
+static bool read_u8(ecx_contextt *context, uint16_t slave, uint16_t index,
+                    uint8_t subindex, uint8_t *value)
+{
+    int size = value == NULL ? 0 : (int)sizeof(*value);
+
+    return value != NULL &&
+           ecx_SDOread(context, slave, index, subindex, FALSE, &size, value, EC_TIMEOUTRXM) > 0 &&
+           size == (int)sizeof(*value);
+}
+
+static bool read_u32(ecx_contextt *context, uint16_t slave, uint16_t index,
+                     uint8_t subindex, uint32_t *value)
+{
+    uint32_t raw;
+    int size = (int)sizeof(raw);
+
+    if (value == NULL ||
+        ecx_SDOread(context, slave, index, subindex, FALSE, &size, &raw, EC_TIMEOUTRXM) <= 0 ||
+        size != (int)sizeof(raw))
+    {
+        return false;
+    }
+    *value = etohl(raw);
+    return true;
+}
+
 static bool read_i8(ecx_contextt *context, uint16_t slave, uint16_t index,
                     uint8_t subindex, int8_t *value)
 {
@@ -56,6 +82,59 @@ static bool read_i8(ecx_contextt *context, uint16_t slave, uint16_t index,
     return value != NULL &&
            ecx_SDOread(context, slave, index, subindex, FALSE, &size, value, EC_TIMEOUTRXM) > 0 &&
            size == (int)sizeof(*value);
+}
+
+static void read_drive_diagnostic(ecx_contextt *context, uint16_t slave,
+                                  emaster_drive_diagnostic_t *diagnostic)
+{
+    if (context == NULL || diagnostic == NULL)
+    {
+        return;
+    }
+    diagnostic->read_succeeded =
+        read_u16(context, slave, UINT16_C(0x603F), UINT8_C(0),
+                 &diagnostic->cia402_error_code) &&
+        read_u8(context, slave, UINT16_C(0x1001), UINT8_C(0),
+                &diagnostic->error_register) &&
+        read_u32(context, slave, UINT16_C(0x203E), UINT8_C(0),
+                 &diagnostic->extended_servo_error_code) &&
+        read_u32(context, slave, UINT16_C(0x203F), UINT8_C(0),
+                 &diagnostic->servo_error_code);
+}
+
+static void read_sync_diagnostic(ecx_contextt *context, uint16_t slave, uint16_t index,
+                                 emaster_sync_diagnostic_t *diagnostic)
+{
+    uint8_t sync_error = 0U;
+
+    if (context == NULL || diagnostic == NULL)
+    {
+        return;
+    }
+    diagnostic->read_succeeded =
+        read_u16(context, slave, index, UINT8_C(11), &diagnostic->sm_event_missed) &&
+        read_u16(context, slave, index, UINT8_C(12), &diagnostic->cycle_time_too_small) &&
+        read_u16(context, slave, index, UINT8_C(13), &diagnostic->shift_time_too_short) &&
+        read_u8(context, slave, index, UINT8_C(32), &sync_error);
+    diagnostic->sync_error = sync_error != 0U;
+}
+
+static void read_position_scale(ecx_contextt *context, uint16_t slave,
+                                emaster_position_scale_t *scale)
+{
+    if (context == NULL || scale == NULL)
+    {
+        return;
+    }
+    scale->read_succeeded =
+        read_u32(context, slave, UINT16_C(0x608F), UINT8_C(1),
+                 &scale->encoder_increments) &&
+        read_u32(context, slave, UINT16_C(0x608F), UINT8_C(2),
+                 &scale->encoder_motor_revolutions) &&
+        read_u32(context, slave, UINT16_C(0x6091), UINT8_C(1),
+                 &scale->gear_motor_revolutions) &&
+        read_u32(context, slave, UINT16_C(0x6091), UINT8_C(2),
+                 &scale->gear_shaft_revolutions);
 }
 
 static bool read_dc_register(ecx_contextt *context, uint16_t slave, uint16_t address,
@@ -206,6 +285,7 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
             axis->input_decoded = emaster_cia_process_image_decode_input(
                 &runtime[axis_index], slave->inputs, slave->Ibytes, &axis->mode_display,
                 &axis->status_word, &actual_position);
+            axis->actual_position = actual_position;
             status_words[axis_index] = axis->status_word;
             if (!axis->input_decoded ||
                 !emaster_cia402_decode_status_word(axis->status_word, &state))
@@ -513,6 +593,7 @@ emaster_control_session_status_t emaster_soem_control_session(
         axis_storage[axis_index].mode_display = mode_display;
         axis_storage[axis_index].status_word = status_word;
         axis_storage[axis_index].initial_actual_position = actual_position;
+        axis_storage[axis_index].actual_position = actual_position;
         axis_storage[axis_index].hold_target_position = actual_position;
         if (!emaster_cia_process_image_update_output(&plan->axes[axis_index], &runtime[axis_index],
                                 UINT16_C(0), actual_position,
@@ -588,6 +669,7 @@ emaster_control_session_status_t emaster_soem_control_session(
                 }
                 axis_storage[axis_index].mode_display = mode_display;
                 axis_storage[axis_index].status_word = status_word;
+                axis_storage[axis_index].actual_position = actual_position;
                 status_words[axis_index] = status_word;
             }
 
@@ -679,6 +761,18 @@ cleanup:
                 axis_result->mode_display_sdo_read = read_i8(
                     &context, (uint16_t)(axis_index + 1U), UINT16_C(0x6061), UINT8_C(0),
                     &axis_result->mode_display_sdo);
+                /*
+                 * 此时安全停机过程已经结束，但从站仍在 EtherCAT 会话中且 Sync0 尚未关闭；
+                 * 因而这里能保留本次运行产生的驱动故障和同步质量证据。
+                 */
+                read_drive_diagnostic(&context, (uint16_t)(axis_index + 1U),
+                                      &axis_result->drive_diagnostic);
+                read_sync_diagnostic(&context, (uint16_t)(axis_index + 1U),
+                                     UINT16_C(0x1C32), &axis_result->sm2_diagnostic);
+                read_sync_diagnostic(&context, (uint16_t)(axis_index + 1U),
+                                     UINT16_C(0x1C33), &axis_result->sm3_diagnostic);
+                read_position_scale(&context, (uint16_t)(axis_index + 1U),
+                                    &axis_result->position_scale);
             }
         }
         report->safe_output_sent = safe_output_sent;
