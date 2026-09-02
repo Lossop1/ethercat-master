@@ -1,6 +1,7 @@
 #ifndef EMASTER_BUS_SOEM_CIA_PROCESS_IMAGE_H
 #define EMASTER_BUS_SOEM_CIA_PROCESS_IMAGE_H
 
+#include "emaster/audit/run_audit.h"
 #include "emaster/protocol/pdo_codec.h"
 #include "emaster/session/session_plan.h"
 
@@ -58,6 +59,20 @@ bool emaster_cia_process_image_decode_input(
     int8_t *mode_display,
     uint16_t *status_word,
     int32_t *actual_position);
+
+/* 在实际发送前记录完整 RxPDO 字段，在成功解码后记录完整 TxPDO 字段。 */
+bool emaster_cia_process_image_audit_output(
+    const emaster_cia_process_image_t *image,
+    emaster_run_audit_t *audit,
+    emaster_audit_phase_t phase,
+    uint16_t slave_position,
+    uint64_t exchange);
+bool emaster_cia_process_image_audit_input(
+    const emaster_cia_process_image_t *image,
+    emaster_run_audit_t *audit,
+    emaster_audit_phase_t phase,
+    uint16_t slave_position,
+    uint64_t exchange);
 
 /* 释放初始化阶段分配的数组和 PDO 布局。 */
 void emaster_cia_process_image_destroy(emaster_cia_process_image_t *images,

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "emaster/bus/control_session.h"
+#include "emaster/audit/run_report.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/messages.h"
 
@@ -102,6 +103,8 @@ static const char *session_status_text(emaster_control_session_status_t status)
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_CYCLE_WAIT_FAILED);
         case EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED:
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_SAFE_STOP_FAILED);
+        case EMASTER_CONTROL_SESSION_AUDIT_FAILED:
+            return emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_FAILED);
         case EMASTER_CONTROL_SESSION_INTERFACE_OPEN_FAILED:
             return emaster_text(EMASTER_TEXT_PROBE_INTERFACE_OPEN_FAILED);
         case EMASTER_CONTROL_SESSION_INTERFACE_NOT_READY:
@@ -139,6 +142,7 @@ int main(int argc, char **argv)
     emaster_control_session_report_t report;
     emaster_session_plan_status_t plan_status;
     emaster_control_session_status_t session_status;
+    bool report_published;
     size_t axis_capacity;
     size_t axis_index;
 
@@ -181,8 +185,11 @@ int main(int argc, char **argv)
             deployment->topology->topology_id, (unsigned int)plan.axis_count);
     (void)fflush(stdout);
 
+    memset(&report, 0, sizeof(report));
     session_status = emaster_soem_control_session(
         &plan, results, axis_capacity, application_stop_requested, NULL, &report);
+    report_published = emaster_run_report_publish(
+        &plan, &report, deployment->run_report_path);
     for (axis_index = 0U; axis_index < report.axis_count; ++axis_index)
     {
         const emaster_control_session_axis_result_t *axis = &results[axis_index];
@@ -273,7 +280,18 @@ int main(int argc, char **argv)
         fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FAILED),
                 session_status_text(session_status));
     }
+    if (report_published)
+    {
+        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_SAVED),
+                deployment->run_report_path);
+    }
+    else
+    {
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_FAILED),
+                deployment->run_report_path);
+    }
+    emaster_control_session_report_destroy(&report);
     free(plan_axes);
     free(results);
-    return session_status == EMASTER_CONTROL_SESSION_OK ? 0 : 1;
+    return session_status == EMASTER_CONTROL_SESSION_OK && report_published ? 0 : 1;
 }

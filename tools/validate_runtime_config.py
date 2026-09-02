@@ -303,6 +303,52 @@ def validate_modes(
                         f"运行方案 {operation_id} 的模式 {mode_label} SDO 地址重复",
                     )
                     addresses.add(address)
+        final_reads = mode.get("final_sdo_reads", [])
+        check.require(
+            isinstance(final_reads, list),
+            f"运行方案 {operation_id} 的模式 {mode_label} 的 final_sdo_reads 必须是数组",
+        )
+        if isinstance(final_reads, list):
+            names: set[str] = set()
+            addresses: set[tuple[int, int]] = set()
+            for read in final_reads:
+                if not isinstance(read, dict):
+                    check.errors.append(
+                        f"运行方案 {operation_id} 的模式 {mode_label} 包含无效诊断读取"
+                    )
+                    continue
+                name = read.get("name")
+                index_valid = validate_hex_value(
+                    check, read.get("index"),
+                    f"运行方案 {operation_id} 的模式 {mode_label} 诊断读取 index",
+                    0xFFFF,
+                )
+                subindex = read.get("subindex")
+                subindex_valid = (
+                    isinstance(subindex, int) and not isinstance(subindex, bool)
+                    and 0 <= subindex <= 0xFF
+                )
+                check.require(
+                    non_empty_string(name) and name not in names,
+                    f"运行方案 {operation_id} 的模式 {mode_label} 诊断读取名称无效或重复",
+                )
+                check.require(
+                    subindex_valid,
+                    f"运行方案 {operation_id} 的模式 {mode_label} 诊断读取 subindex 超出范围",
+                )
+                check.require(
+                    read.get("type") in ("u8", "i8", "u16", "i16", "u32", "i32"),
+                    f"运行方案 {operation_id} 的模式 {mode_label} 诊断读取类型无效",
+                )
+                if non_empty_string(name):
+                    names.add(name)
+                if index_valid and subindex_valid:
+                    address = (hex_value(read["index"]), subindex)
+                    check.require(
+                        address not in addresses,
+                        f"运行方案 {operation_id} 的模式 {mode_label} 诊断读取地址重复",
+                    )
+                    addresses.add(address)
 
 
 def validate_topology(
@@ -517,6 +563,7 @@ def validate_deployments(
         interface = interface_value if non_empty_string(interface_value) else ""
         topology_id = topology_id_value if non_empty_string(topology_id_value) else ""
         management_interface = deployment.get("management_interface")
+        run_report_path = deployment.get("run_report_path")
 
         check.require(deployment.get("schema_version") == 1, f"{deployment_id} 使用不支持的部署版本")
         check.require(bool(deployment_id), "部署配置缺少 deployment_id")
@@ -531,6 +578,10 @@ def validate_deployments(
         check.require(
             management_interface is None or non_empty_string(management_interface),
             f"部署 {deployment_id} 的 management_interface 必须是非空字符串",
+        )
+        check.require(
+            non_empty_string(run_report_path),
+            f"部署 {deployment_id} 的 run_report_path 必须是非空字符串",
         )
         check.require(
             not management_interface or management_interface != interface,

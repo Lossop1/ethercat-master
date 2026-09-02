@@ -42,6 +42,7 @@ def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
             rx_name = f"operation_{ordinal}_mode_{mode_ordinal}_rx_fields"
             tx_name = f"operation_{ordinal}_mode_{mode_ordinal}_tx_fields"
             sdo_name = f"operation_{ordinal}_mode_{mode_ordinal}_safeop_to_op_sdos"
+            read_name = f"operation_{ordinal}_mode_{mode_ordinal}_final_sdo_reads"
             if mode["rx_fields"]:
                 declarations.append(
                     f"static const char *const {rx_name}[] = {{\n"
@@ -89,11 +90,31 @@ def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
                 sdo_pointer = "NULL"
                 sdo_count = "0U"
 
+            if mode["final_sdo_reads"]:
+                declarations.append(
+                    f"static const emaster_sdo_read_config_t {read_name}[] = {{\n"
+                    + ",\n".join(
+                        "    {"
+                        f"{c_string(read['name'])}, "
+                        f"UINT16_C(0x{read['index']:04X}), "
+                        f"UINT8_C({read['subindex']}), "
+                        f"EMASTER_CONFIG_SDO_VALUE_{read['type'].upper()}"
+                        "}"
+                        for read in mode["final_sdo_reads"]
+                    )
+                    + "\n};"
+                )
+                read_pointer = read_name
+                read_count = f"sizeof({read_name}) / sizeof({read_name}[0])"
+            else:
+                read_pointer = "NULL"
+                read_count = "0U"
+
             mode_initializers.append(
                 f"    {{{c_string(mode['id'])}, INT8_C({mode['value']}), "
                 f"{rx_pointer}, {rx_count}, {tx_pointer}, {tx_count}, "
                 f"EMASTER_MODE_DISPLAY_{mode['mode_display_policy'].upper()}, "
-                f"{sdo_pointer}, {sdo_count}}}"
+                f"{sdo_pointer}, {sdo_count}, {read_pointer}, {read_count}}}"
             )
         if mode_initializers:
             rendered_modes = ",\n".join(mode_initializers)
@@ -269,7 +290,8 @@ def render_deployments(
             + ", "
             + c_string(deployment["management"])
             + f", &topologies[{topology_ordinal}], "
-            + f"{operation_pointer}, {operation_count}, {motion_pointer}"
+            + f"{operation_pointer}, {operation_count}, {motion_pointer}, "
+            + c_string(deployment["run_report_path"])
             + "}"
         )
     return "\n\n".join(pointer_arrays), ",\n".join(initializers)

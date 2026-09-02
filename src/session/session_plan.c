@@ -222,7 +222,9 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
         operation_mode = find_operation_mode(operation);
         if (operation_mode == NULL ||
             (operation_mode->safeop_to_op_sdo_write_count > 0U &&
-             operation_mode->safeop_to_op_sdo_writes == NULL))
+             operation_mode->safeop_to_op_sdo_writes == NULL) ||
+            (operation_mode->final_sdo_read_count > 0U &&
+             operation_mode->final_sdo_reads == NULL))
         {
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);

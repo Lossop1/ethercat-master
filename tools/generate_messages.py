@@ -98,6 +98,9 @@ MESSAGE_KEYS = [
     "control_session_cycle_wait_failed",
     "control_session_safe_stop_failed",
     "control_session_signal_failed",
+    "control_session_report_saved",
+    "control_session_report_failed",
+    "control_session_audit_failed",
 ]
 
 # 每条格式消息允许的 printf 转换说明符。资源文本可修改，参数契约不可漂移。
@@ -129,6 +132,8 @@ MESSAGE_FORMATS = {
     "control_session_scale_line": ("u", "s", "u", "u", "u", "u"),
     "control_session_motion_line": ("u", "s", "d", "d", "d", "u", "s", "d", "u", "u"),
     "control_session_summary_line": ("s", "s", "s", "s", "s", "u", "d", "u", "s", "s", "s", "s", "s"),
+    "control_session_report_saved": ("s",),
+    "control_session_report_failed": ("s",),
 }
 
 PRINTF_CONVERSION = re.compile(

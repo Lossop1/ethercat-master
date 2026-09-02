@@ -1,6 +1,7 @@
 #ifndef EMASTER_BUS_CONTROL_SESSION_H
 #define EMASTER_BUS_CONTROL_SESSION_H
 
+#include "emaster/audit/run_audit.h"
 #include "emaster/cia402/controller.h"
 #include "emaster/motion/relative_position.h"
 #include "emaster/session/session_plan.h"
@@ -37,8 +38,25 @@ typedef enum
     EMASTER_CONTROL_SESSION_FOLLOWING_ERROR,
     EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED,
     EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED,
-    EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED
+    EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED,
+    EMASTER_CONTROL_SESSION_AUDIT_FAILED
 } emaster_control_session_status_t;
+
+/* 每轴 DC 结果同时保存方案请求值、SOEM 生效状态和 ESC 寄存器读回值。 */
+typedef struct
+{
+    bool requested;
+    bool slave_capable;
+    bool sync0_requested;
+    bool sync0_active;
+    bool register_read_succeeded;
+    uint32_t requested_cycle_ns;
+    uint32_t observed_cycle_ns;
+    int32_t requested_shift_ns;
+    int32_t soem_shift_ns;
+    uint16_t requested_assign_activate;
+    uint16_t observed_assign_activate;
+} emaster_dc_axis_result_t;
 
 /*
  * 驱动故障对象来自供应商对象字典。read_succeeded 为 false 时，其余数值不得用于
@@ -69,6 +87,9 @@ typedef struct
 typedef struct
 {
     uint16_t position;
+    uint32_t actual_vendor_id;
+    uint32_t actual_product_code;
+    uint32_t actual_revision;
     bool identity_match;
     bool pdo_match;
     bool process_map_match;
@@ -87,6 +108,8 @@ typedef struct
     int8_t mode_display_sdo;
     bool input_mode_sdo_read;
     uint16_t input_mode_sdo;
+    size_t final_diagnostic_read_count;
+    size_t final_diagnostic_success_count;
     uint16_t status_word;
     uint16_t control_word;
     int32_t initial_actual_position;
@@ -100,6 +123,12 @@ typedef struct
     uint64_t max_observed_following_error_counts;
     bool position_scale_match;
     bool motion_direction_match;
+    uint32_t output_bytes;
+    uint32_t input_bytes;
+    uint32_t output_bits;
+    uint32_t input_bits;
+    size_t output_offset_bytes;
+    size_t input_offset_bytes;
     emaster_cia402_state_t cia402_state;
     bool switch_on_disabled_seen;
     bool ready_to_switch_on_seen;
@@ -109,6 +138,7 @@ typedef struct
     emaster_sync_diagnostic_t sm2_diagnostic;
     emaster_sync_diagnostic_t sm3_diagnostic;
     emaster_position_scale_t position_scale;
+    emaster_dc_axis_result_t dc;
 } emaster_control_session_axis_result_t;
 
 typedef struct
@@ -121,6 +151,11 @@ typedef struct
     uint16_t expected_wkc;
     int actual_wkc;
     uint64_t cycle_count;
+    uint64_t process_data_exchange_count;
+    bool dc_required;
+    bool dc_configured;
+    uint16_t dc_reference_slave;
+    int64_t last_dc_time_ns;
     bool safe_op_reached;
     bool op_reached;
     bool all_axes_enabled_reached;
@@ -131,6 +166,7 @@ typedef struct
     bool safe_state_reached;
     bool sync0_disabled;
     bool restore_init_succeeded;
+    emaster_run_audit_t audit;
 } emaster_control_session_report_t;
 
 /*
@@ -152,5 +188,8 @@ emaster_control_session_status_t emaster_soem_control_session(
     emaster_control_session_stop_requested_t stop_requested,
     void *stop_user_data,
     emaster_control_session_report_t *report);
+
+/* 调用者完成报告输出后必须释放会话内部自动采集的审计记录。 */
+void emaster_control_session_report_destroy(emaster_control_session_report_t *report);
 
 #endif

@@ -19,7 +19,14 @@
       "value": 8,
       "required_rx_fields": ["control_word", "target_position"],
       "required_tx_fields": ["status_word", "actual_position"],
-      "mode_display_policy": "diagnostic"
+      "mode_display_policy": "diagnostic",
+      "final_sdo_reads": [
+        {"name": "target_position", "index": "0x607A", "subindex": 0, "type": "i32"},
+        {"name": "position_demand_value", "index": "0x6062", "subindex": 0, "type": "i32"},
+        {"name": "position_actual_value", "index": "0x6064", "subindex": 0, "type": "i32"},
+        {"name": "following_error_actual_value", "index": "0x60F4", "subindex": 0, "type": "i32"},
+        {"name": "position_demand_internal_value", "index": "0x60FC", "subindex": 0, "type": "i32"}
+      ]
     }
   ]
 }

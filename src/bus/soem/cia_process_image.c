@@ -380,6 +380,94 @@ bool emaster_cia_process_image_decode_input(
     return true;
 }
 
+static bool audit_direction_values(
+    const emaster_pdo_direction_layout_t *layout,
+    const emaster_pdo_codec_value_t *values,
+    size_t value_count,
+    emaster_run_audit_t *audit,
+    emaster_audit_phase_t phase,
+    emaster_audit_direction_t direction,
+    uint16_t slave_position,
+    uint64_t exchange)
+{
+    size_t mapping_ordinal;
+    size_t value_ordinal = 0U;
+
+    if (layout == NULL || values == NULL || audit == NULL)
+    {
+        return false;
+    }
+    for (mapping_ordinal = 0U; mapping_ordinal < layout->mapping_count;
+         ++mapping_ordinal)
+    {
+        const emaster_pdo_mapping_t *mapping = &layout->mappings[mapping_ordinal];
+        size_t entry_ordinal;
+
+        for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count;
+             ++entry_ordinal)
+        {
+            const emaster_pdo_mapping_entry_t *entry = &mapping->entries[entry_ordinal];
+            emaster_audit_value_kind_t kind;
+            uint64_t unsigned_value = 0U;
+            int64_t signed_value = 0;
+
+            if (value_ordinal >= value_count)
+            {
+                return false;
+            }
+            kind = values[value_ordinal].kind == EMASTER_PDO_CODEC_VALUE_SIGNED
+                       ? EMASTER_AUDIT_VALUE_SIGNED
+                       : EMASTER_AUDIT_VALUE_UNSIGNED;
+            if (kind == EMASTER_AUDIT_VALUE_SIGNED)
+            {
+                signed_value = values[value_ordinal].value.signed_value;
+            }
+            else if (values[value_ordinal].kind == EMASTER_PDO_CODEC_VALUE_UNSIGNED)
+            {
+                unsigned_value = values[value_ordinal].value.unsigned_value;
+            }
+            if (!emaster_run_audit_record_pdo(
+                    audit, phase, direction, kind, slave_position,
+                    entry->object_index, entry->object_subindex,
+                    entry->bit_length, entry->bit_offset, exchange,
+                    unsigned_value, signed_value))
+            {
+                return false;
+            }
+            ++value_ordinal;
+        }
+    }
+    return value_ordinal == value_count;
+}
+
+bool emaster_cia_process_image_audit_output(
+    const emaster_cia_process_image_t *image,
+    emaster_run_audit_t *audit,
+    emaster_audit_phase_t phase,
+    uint16_t slave_position,
+    uint64_t exchange)
+{
+    return image != NULL &&
+           audit_direction_values(&image->layout.rx, image->rx_values,
+                                  image->rx_field_count, audit, phase,
+                                  EMASTER_AUDIT_DIRECTION_WRITE, slave_position,
+                                  exchange);
+}
+
+bool emaster_cia_process_image_audit_input(
+    const emaster_cia_process_image_t *image,
+    emaster_run_audit_t *audit,
+    emaster_audit_phase_t phase,
+    uint16_t slave_position,
+    uint64_t exchange)
+{
+    return image != NULL &&
+           audit_direction_values(&image->layout.tx, image->tx_values,
+                                  image->tx_field_count, audit, phase,
+                                  EMASTER_AUDIT_DIRECTION_READ, slave_position,
+                                  exchange);
+}
+
 void emaster_cia_process_image_destroy(emaster_cia_process_image_t *images,
                                        size_t count)
 {

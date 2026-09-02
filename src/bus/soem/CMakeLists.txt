@@ -1,7 +1,8 @@
 add_library(emaster_soem_common STATIC soem_common.c)
 add_library(emaster::soem_common ALIAS emaster_soem_common)
 
-target_link_libraries(emaster_soem_common PRIVATE soem emaster::protocol)
+target_link_libraries(emaster_soem_common PRIVATE soem emaster::protocol
+                                                  emaster::run_audit)
 target_compile_features(emaster_soem_common PUBLIC c_std_11)
 target_include_directories(
     emaster_soem_common
@@ -30,13 +31,15 @@ target_include_directories(
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../../include>")
 emaster_enable_strict_warnings(emaster_soem_dc_prepare)
 
-add_library(emaster_soem_control_session STATIC control_session.c cia_process_image.c)
+add_library(emaster_soem_control_session STATIC control_session.c cia_process_image.c
+                                                  session_observer.c)
 add_library(emaster::soem_control_session ALIAS emaster_soem_control_session)
 
 target_link_libraries(emaster_soem_control_session PRIVATE emaster::soem_common soem
                                                          emaster::session emaster::catalog
                                                          emaster::protocol emaster::pdo_codec
-                                                         emaster::multiaxis emaster::motion)
+                                                         emaster::multiaxis emaster::motion
+                                                         emaster::run_audit)
 target_compile_features(emaster_soem_control_session PUBLIC c_std_11)
 target_include_directories(
     emaster_soem_control_session

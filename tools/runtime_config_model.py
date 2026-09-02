@@ -323,6 +323,62 @@ def operation_values(
                     {"index": index, "subindex": subindex, "type": "u16", "value": value}
                 )
 
+            final_reads_value = mode.get("final_sdo_reads", [])
+            if not isinstance(final_reads_value, list):
+                raise ValueError(
+                    f"运行方案 {operation_id} 的模式 {mode_id} 的 "
+                    "final_sdo_reads 必须是数组"
+                )
+            final_reads = []
+            final_read_names: set[str] = set()
+            final_read_addresses: set[tuple[int, int]] = set()
+            for read in final_reads_value:
+                if not isinstance(read, dict):
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} 包含无效诊断读取"
+                    )
+                name = required_string(
+                    read, "name",
+                    f"运行方案 {operation_id} 的模式 {mode_id} 诊断读取",
+                )
+                index = parse_unsigned(
+                    read.get("index"),
+                    f"运行方案 {operation_id} 的模式 {mode_id} 诊断读取 index",
+                    0xFFFF,
+                )
+                subindex = read.get("subindex")
+                value_type = read.get("type")
+                if (
+                    not isinstance(subindex, int)
+                    or isinstance(subindex, bool)
+                    or not 0 <= subindex <= 0xFF
+                ):
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} "
+                        "诊断读取 subindex 超出范围"
+                    )
+                if value_type not in ("u8", "i8", "u16", "i16", "u32", "i32"):
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} "
+                        f"诊断读取 {name} 的类型无效"
+                    )
+                address = (index, subindex)
+                if name in final_read_names or address in final_read_addresses:
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} "
+                        "诊断读取名称或地址重复"
+                    )
+                final_read_names.add(name)
+                final_read_addresses.add(address)
+                final_reads.append(
+                    {
+                        "name": name,
+                        "index": index,
+                        "subindex": subindex,
+                        "type": value_type,
+                    }
+                )
+
             if device is not None:
                 supported_modes = device.get("protocol", {}).get(
                     "supported_modes", {}
@@ -348,6 +404,7 @@ def operation_values(
                     "tx_fields": required_tx_fields,
                     "mode_display_policy": mode_display_policy,
                     "safeop_to_op_sdo_writes": sdo_writes,
+                    "final_sdo_reads": final_reads,
                 }
             )
 
@@ -642,6 +699,9 @@ def deployment_values(
                     document, "ethercat_interface", f"部署 {deployment_id}"
                 ),
                 "management": management or "",
+                "run_report_path": required_string(
+                    document, "run_report_path", f"部署 {deployment_id}"
+                ),
                 "topology": topology_id,
                 "operation_profile_ids": operation_profile_ids,
                 "motion_profile_id": motion_profile_id,

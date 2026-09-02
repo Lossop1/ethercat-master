@@ -5,6 +5,7 @@
 #include "cia_process_image.h"
 #include "emaster/catalog/slave_profile.h"
 #include "emaster/multiaxis/coordinator.h"
+#include "session_observer.h"
 #include "soem_common.h"
 
 #include "soem/soem.h"
@@ -15,138 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-static bool write_u16(ecx_contextt *context, uint16_t slave, uint16_t index,
-                      uint8_t subindex, uint16_t value)
-{
-    uint16_t raw = htoes(value);
-
-    return ecx_SDOwrite(context, slave, index, subindex, FALSE, (int)sizeof(raw), &raw,
-                        EC_TIMEOUTRXM) > 0;
-}
-
-static bool write_i8(ecx_contextt *context, uint16_t slave, uint16_t index,
-                     uint8_t subindex, int8_t value)
-{
-    return ecx_SDOwrite(context, slave, index, subindex, FALSE, (int)sizeof(value), &value,
-                        EC_TIMEOUTRXM) > 0;
-}
-
-static bool read_u16(ecx_contextt *context, uint16_t slave, uint16_t index,
-                     uint8_t subindex, uint16_t *value)
-{
-    uint16_t raw;
-    int size = (int)sizeof(raw);
-
-    if (value == NULL ||
-        ecx_SDOread(context, slave, index, subindex, FALSE, &size, &raw, EC_TIMEOUTRXM) <= 0 ||
-        size != (int)sizeof(raw))
-    {
-        return false;
-    }
-    *value = etohs(raw);
-    return true;
-}
-
-static bool read_u8(ecx_contextt *context, uint16_t slave, uint16_t index,
-                    uint8_t subindex, uint8_t *value)
-{
-    int size = value == NULL ? 0 : (int)sizeof(*value);
-
-    return value != NULL &&
-           ecx_SDOread(context, slave, index, subindex, FALSE, &size, value, EC_TIMEOUTRXM) > 0 &&
-           size == (int)sizeof(*value);
-}
-
-static bool read_u32(ecx_contextt *context, uint16_t slave, uint16_t index,
-                     uint8_t subindex, uint32_t *value)
-{
-    uint32_t raw;
-    int size = (int)sizeof(raw);
-
-    if (value == NULL ||
-        ecx_SDOread(context, slave, index, subindex, FALSE, &size, &raw, EC_TIMEOUTRXM) <= 0 ||
-        size != (int)sizeof(raw))
-    {
-        return false;
-    }
-    *value = etohl(raw);
-    return true;
-}
-
-static bool read_i8(ecx_contextt *context, uint16_t slave, uint16_t index,
-                    uint8_t subindex, int8_t *value)
-{
-    int size = (int)sizeof(*value);
-
-    return value != NULL &&
-           ecx_SDOread(context, slave, index, subindex, FALSE, &size, value, EC_TIMEOUTRXM) > 0 &&
-           size == (int)sizeof(*value);
-}
-
-static void read_drive_diagnostic(ecx_contextt *context, uint16_t slave,
-                                  emaster_drive_diagnostic_t *diagnostic)
-{
-    if (context == NULL || diagnostic == NULL)
-    {
-        return;
-    }
-    diagnostic->read_succeeded =
-        read_u16(context, slave, UINT16_C(0x603F), UINT8_C(0),
-                 &diagnostic->cia402_error_code) &&
-        read_u8(context, slave, UINT16_C(0x1001), UINT8_C(0),
-                &diagnostic->error_register) &&
-        read_u32(context, slave, UINT16_C(0x203E), UINT8_C(0),
-                 &diagnostic->extended_servo_error_code) &&
-        read_u32(context, slave, UINT16_C(0x203F), UINT8_C(0),
-                 &diagnostic->servo_error_code);
-}
-
-static void read_sync_diagnostic(ecx_contextt *context, uint16_t slave, uint16_t index,
-                                 emaster_sync_diagnostic_t *diagnostic)
-{
-    uint8_t sync_error = 0U;
-
-    if (context == NULL || diagnostic == NULL)
-    {
-        return;
-    }
-    diagnostic->read_succeeded =
-        read_u16(context, slave, index, UINT8_C(11), &diagnostic->sm_event_missed) &&
-        read_u16(context, slave, index, UINT8_C(12), &diagnostic->cycle_time_too_small) &&
-        read_u16(context, slave, index, UINT8_C(13), &diagnostic->shift_time_too_short) &&
-        read_u8(context, slave, index, UINT8_C(32), &sync_error);
-    diagnostic->sync_error = sync_error != 0U;
-}
-
-static void read_position_scale(ecx_contextt *context, uint16_t slave,
-                                emaster_position_scale_t *scale)
-{
-    if (context == NULL || scale == NULL)
-    {
-        return;
-    }
-    scale->read_succeeded =
-        read_u32(context, slave, UINT16_C(0x608F), UINT8_C(1),
-                 &scale->encoder_increments) &&
-        read_u32(context, slave, UINT16_C(0x608F), UINT8_C(2),
-                 &scale->encoder_motor_revolutions) &&
-        read_u32(context, slave, UINT16_C(0x6091), UINT8_C(1),
-                 &scale->gear_motor_revolutions) &&
-        read_u32(context, slave, UINT16_C(0x6091), UINT8_C(2),
-                 &scale->gear_shaft_revolutions);
-}
-
-static bool read_dc_register(ecx_contextt *context, uint16_t slave, uint16_t address,
-                             void *value, uint16_t size)
-{
-    if (context == NULL || value == NULL || slave == 0U)
-    {
-        return false;
-    }
-    return ecx_FPRD(&context->port, context->slavelist[slave].configadr, address, size, value,
-                    EC_TIMEOUTRET) > 0;
-}
 
 static void disable_sync0(ecx_contextt *context, emaster_cia_process_image_t *runtime, size_t count)
 {
@@ -214,7 +83,8 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
                               emaster_multiaxis_coordinator_t *coordinator,
                               ecx_contextt *context,
                               emaster_control_session_report_t *report,
-                              bool *safe_output_sent)
+                              bool *safe_output_sent,
+                              uint64_t *process_exchange)
 {
     struct timespec deadline;
     uint64_t timeout_ns;
@@ -225,6 +95,7 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
     if (plan == NULL || runtime == NULL || axes == NULL || controllers == NULL ||
         controller_outputs == NULL || status_words == NULL || coordinator == NULL ||
         context == NULL || report == NULL || safe_output_sent == NULL || plan->cycle_ns == 0U ||
+        process_exchange == NULL ||
         clock_gettime(CLOCK_MONOTONIC, &deadline) != 0 ||
         !timespec_add_ns(&deadline, plan->cycle_ns))
     {
@@ -274,6 +145,14 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
                 return false;
             }
         }
+        for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+        {
+            (void)emaster_cia_process_image_audit_output(
+                &runtime[axis_index], &report->audit,
+                EMASTER_AUDIT_PHASE_SAFE_STOP, (uint16_t)(axis_index + 1U),
+                *process_exchange + UINT64_C(1));
+        }
+        ++(*process_exchange);
         (void)ecx_send_processdata(context);
         report->actual_wkc = ecx_receive_processdata(context, EC_TIMEOUTRET);
         ++report->cycle_count;
@@ -294,6 +173,13 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
                 &axis->status_word, &actual_position);
             axis->actual_position = actual_position;
             status_words[axis_index] = axis->status_word;
+            if (axis->input_decoded)
+            {
+                (void)emaster_cia_process_image_audit_input(
+                    &runtime[axis_index], &report->audit,
+                    EMASTER_AUDIT_PHASE_SAFE_STOP,
+                    (uint16_t)(axis_index + 1U), *process_exchange);
+            }
             if (!axis->input_decoded ||
                 !emaster_cia402_decode_status_word(axis->status_word, &state))
             {
@@ -356,6 +242,8 @@ emaster_control_session_status_t emaster_soem_control_session(
     bool mode_confirmation_started = false;
     uint64_t mode_confirmation_deadline_cycle = 0U;
     uint64_t mode_confirmation_cycles;
+    uint64_t enable_deadline_cycle;
+    uint64_t process_exchange = 0U;
 
     if (plan == NULL || plan->status != EMASTER_SESSION_PLAN_READY || plan->deployment == NULL ||
         plan->deployment->ethercat_interface == NULL || axis_storage == NULL ||
@@ -367,6 +255,7 @@ emaster_control_session_status_t emaster_soem_control_session(
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
         plan->cycle_ns;
     memset(report, 0, sizeof(*report));
+    emaster_run_audit_init(&report->audit);
     memset(&motion, 0, sizeof(motion));
     report->status = EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     report->axes = axis_storage;
@@ -442,9 +331,16 @@ emaster_control_session_status_t emaster_soem_control_session(
         uint16_t sm2_value;
         uint16_t sm3_value;
         int8_t mode_value;
+        emaster_soem_sdo_reader_context_t sdo;
 
+        emaster_soem_sdo_context_init(
+            &sdo, &context, (uint16_t)(axis_index + 1U), &report->audit,
+            EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, process_exchange);
         axis_storage[axis_index].position = (uint16_t)(axis_index + 1U);
         axis_storage[axis_index].requested_mode = axis->operation_mode->value;
+        axis_storage[axis_index].actual_vendor_id = slave->eep_man;
+        axis_storage[axis_index].actual_product_code = slave->eep_id;
+        axis_storage[axis_index].actual_revision = slave->eep_rev;
         axis_storage[axis_index].identity_match = emaster_slave_identity_matches(
             axis->device_profile,
             &(emaster_slave_identity_t){slave->eep_man, slave->eep_id, slave->eep_rev});
@@ -453,8 +349,8 @@ emaster_control_session_status_t emaster_soem_control_session(
             status = EMASTER_CONTROL_SESSION_IDENTITY_MISMATCH;
             goto cleanup;
         }
-        if (!emaster_soem_discover_pdo_layout(&context, (uint16_t)(axis_index + 1U),
-                                              &runtime[axis_index].layout))
+        if (!emaster_soem_discover_pdo_layout_recorded(&sdo,
+                                                       &runtime[axis_index].layout))
         {
             status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
             goto cleanup;
@@ -467,8 +363,8 @@ emaster_control_session_status_t emaster_soem_control_session(
             emaster_soem_pdo_assignment_result_t assignment_result;
 
             emaster_pdo_layout_destroy(&runtime[axis_index].layout);
-            if (!emaster_soem_assign_pdo_set(&context, (uint16_t)(axis_index + 1U),
-                                             axis->pdo_set, &assignment_result))
+            if (!emaster_soem_assign_pdo_set_recorded(&sdo, axis->pdo_set,
+                                                      &assignment_result))
             {
                 axis_storage[axis_index].pdo_assignment_failed_index =
                     assignment_result.failed_index;
@@ -482,9 +378,8 @@ emaster_control_session_status_t emaster_soem_control_session(
                 goto cleanup;
             }
             if (
-                !emaster_soem_discover_pdo_layout(
-                    &context, (uint16_t)(axis_index + 1U),
-                    &runtime[axis_index].layout))
+                !emaster_soem_discover_pdo_layout_recorded(
+                    &sdo, &runtime[axis_index].layout))
             {
                 status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
                 goto cleanup;
@@ -500,33 +395,33 @@ emaster_control_session_status_t emaster_soem_control_session(
         }
         axis_storage[axis_index].pdo_match = true;
 
-        if (!write_u16(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x1C32), UINT8_C(0x01),
-                       axis->operation_profile->sm2_sync_type) ||
-            !write_u16(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x1C33), UINT8_C(0x01),
-                       axis->operation_profile->sm3_sync_type) ||
+        if (!emaster_soem_write_u16(&sdo, UINT16_C(0x1C32), UINT8_C(0x01),
+                                    axis->operation_profile->sm2_sync_type) ||
+            !emaster_soem_write_u16(&sdo, UINT16_C(0x1C33), UINT8_C(0x01),
+                                    axis->operation_profile->sm3_sync_type) ||
             (!axis->pdo_set->mode_init_on_safeop_to_op &&
-             !write_i8(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x6060), UINT8_C(0x00),
-                       axis->operation_mode->value)))
+             !emaster_soem_write_i8(&sdo, UINT16_C(0x6060), UINT8_C(0x00),
+                                    axis->operation_mode->value)))
         {
             status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
             goto cleanup;
         }
-        if (!read_u16(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x1C32), UINT8_C(0x01),
-                      &sm2_value) ||
-            !read_u16(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x1C33), UINT8_C(0x01),
-                       &sm3_value) ||
+        if (!emaster_soem_read_u16(&sdo, UINT16_C(0x1C32), UINT8_C(0x01),
+                                   &sm2_value) ||
+            !emaster_soem_read_u16(&sdo, UINT16_C(0x1C33), UINT8_C(0x01),
+                                   &sm3_value) ||
             sm2_value != axis->operation_profile->sm2_sync_type ||
             sm3_value != axis->operation_profile->sm3_sync_type ||
             (!axis->pdo_set->mode_init_on_safeop_to_op &&
-             (!read_i8(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x6060), UINT8_C(0x00),
-                       &mode_value) ||
+             (!emaster_soem_read_i8(&sdo, UINT16_C(0x6060), UINT8_C(0x00),
+                                    &mode_value) ||
               mode_value != axis->operation_mode->value)))
         {
             status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
             goto cleanup;
         }
-        read_position_scale(&context, (uint16_t)(axis_index + 1U),
-                            &axis_storage[axis_index].position_scale);
+        emaster_session_observer_read_position_scale(
+            &sdo, &axis_storage[axis_index].position_scale);
         if (plan->motion_profile != NULL)
         {
             if (!axis_storage[axis_index].position_scale.read_succeeded ||
@@ -545,6 +440,11 @@ emaster_control_session_status_t emaster_soem_control_session(
             }
             motion_scales[axis_index] = axis_storage[axis_index].position_scale;
             motion_axis_configs[axis_index] = axis->motion_axis;
+        }
+        if (report->audit.allocation_failed)
+        {
+            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+            goto cleanup;
         }
     }
 
@@ -578,6 +478,20 @@ emaster_control_session_status_t emaster_soem_control_session(
             slave->Obits == (uint32_t)axis->pdo_set->rx_pdo_bytes * UINT32_C(8) &&
             slave->Ibits == (uint32_t)axis->pdo_set->tx_pdo_bytes * UINT32_C(8) &&
             slave->outputs != NULL && slave->inputs != NULL;
+        axis_storage[axis_index].output_bytes = slave->Obytes;
+        axis_storage[axis_index].input_bytes = slave->Ibytes;
+        axis_storage[axis_index].output_bits = slave->Obits;
+        axis_storage[axis_index].input_bits = slave->Ibits;
+        if (slave->outputs != NULL)
+        {
+            axis_storage[axis_index].output_offset_bytes =
+                (size_t)(slave->outputs - io_map);
+        }
+        if (slave->inputs != NULL)
+        {
+            axis_storage[axis_index].input_offset_bytes =
+                (size_t)(slave->inputs - io_map);
+        }
         if (!axis_storage[axis_index].process_map_match)
         {
             status = EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
@@ -590,9 +504,18 @@ emaster_control_session_status_t emaster_soem_control_session(
         if (plan->axes[axis_index].operation_profile->sync_strategy == EMASTER_SYNC_STRATEGY_DC)
         {
             dc_required = true;
-            break;
+            axis_storage[axis_index].dc.requested = true;
+            axis_storage[axis_index].dc.requested_cycle_ns = plan->cycle_ns;
+            axis_storage[axis_index].dc.requested_shift_ns =
+                plan->axes[axis_index].operation_profile->sync0_shift_ns;
+            if (plan->axes[axis_index].operation_profile->assign_activate <= UINT16_MAX)
+            {
+                axis_storage[axis_index].dc.requested_assign_activate =
+                    (uint16_t)plan->axes[axis_index].operation_profile->assign_activate;
+            }
         }
     }
+    report->dc_required = dc_required;
     if (dc_required)
     {
         uint32_t cycle_value;
@@ -603,6 +526,8 @@ emaster_control_session_status_t emaster_soem_control_session(
             status = EMASTER_CONTROL_SESSION_DC_CONFIG_FAILED;
             goto cleanup;
         }
+        report->dc_configured = true;
+        report->dc_reference_slave = context.grouplist[0].DCnext;
         for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
         {
             const ec_slavet *slave = &context.slavelist[axis_index + 1U];
@@ -611,7 +536,9 @@ emaster_control_session_status_t emaster_soem_control_session(
             {
                 continue;
             }
-            if (slave->hasdc == 0U)
+            axis_storage[axis_index].dc.slave_capable = slave->hasdc != 0U;
+            if (slave->hasdc == 0U ||
+                plan->axes[axis_index].operation_profile->assign_activate > UINT16_MAX)
             {
                 status = EMASTER_CONTROL_SESSION_DC_CONFIG_FAILED;
                 goto cleanup;
@@ -619,22 +546,36 @@ emaster_control_session_status_t emaster_soem_control_session(
             ecx_dcsync0(&context, (uint16_t)(axis_index + 1U), TRUE, plan->cycle_ns,
                         plan->axes[axis_index].operation_profile->sync0_shift_ns);
             runtime[axis_index].sync0_configured = true;
+            axis_storage[axis_index].dc.sync0_requested = true;
+            axis_storage[axis_index].dc.sync0_active = slave->DCactive != 0U;
+            axis_storage[axis_index].dc.soem_shift_ns = slave->DCshift;
             /* 只要某一轴已经激活，后续任何失败路径都必须执行统一关闭。 */
             sync0_started = true;
             /* DCCUC 与 DCSYNCACT 是连续的 8 位寄存器；按 16 位读回才能核对完整
              * AssignActivate，而不是只确认 SOEM 当前默认激活的 Sync0 位。 */
-            if (!read_dc_register(&context, (uint16_t)(axis_index + 1U), ECT_REG_DCCYCLE0,
-                                  &cycle_value, (uint16_t)sizeof(cycle_value)) ||
-                !read_dc_register(&context, (uint16_t)(axis_index + 1U), ECT_REG_DCCUC,
-                                  &activation, (uint16_t)sizeof(activation)) ||
+            if (!emaster_session_observer_read_dc_register(
+                    &context, (uint16_t)(axis_index + 1U), ECT_REG_DCCYCLE0,
+                    &cycle_value, (uint16_t)sizeof(cycle_value), &report->audit,
+                    EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, process_exchange) ||
+                !emaster_session_observer_read_dc_register(
+                    &context, (uint16_t)(axis_index + 1U), ECT_REG_DCCUC,
+                    &activation, (uint16_t)sizeof(activation), &report->audit,
+                    EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, process_exchange) ||
                 etohl(cycle_value) != plan->cycle_ns ||
-                plan->axes[axis_index].operation_profile->assign_activate > UINT16_MAX ||
                 etohs(activation) !=
                     (uint16_t)plan->axes[axis_index].operation_profile->assign_activate)
             {
                 status = EMASTER_CONTROL_SESSION_SYNC0_CONFIG_FAILED;
                 goto cleanup;
             }
+            axis_storage[axis_index].dc.register_read_succeeded = true;
+            axis_storage[axis_index].dc.observed_cycle_ns = etohl(cycle_value);
+            axis_storage[axis_index].dc.observed_assign_activate = etohs(activation);
+        }
+        if (report->audit.allocation_failed)
+        {
+            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+            goto cleanup;
         }
     }
 
@@ -654,19 +595,25 @@ emaster_control_session_status_t emaster_soem_control_session(
             plan->axes[axis_index].operation_mode;
         int8_t mode_value;
         size_t command_index;
+        emaster_soem_sdo_reader_context_t sdo;
+
+        emaster_soem_sdo_context_init(
+            &sdo, &context, (uint16_t)(axis_index + 1U), &report->audit,
+            EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION, process_exchange);
 
         if (pdo_set->mode_init_on_safeop_to_op)
         {
-            if (!write_i8(&context, (uint16_t)(axis_index + 1U),
-                          pdo_set->mode_init_index, pdo_set->mode_init_subindex,
-                          pdo_set->mode_init_value))
+            if (!emaster_soem_write_i8(&sdo, pdo_set->mode_init_index,
+                                       pdo_set->mode_init_subindex,
+                                       pdo_set->mode_init_value))
             {
                 status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
                 goto cleanup;
             }
-            if (!read_i8(&context, (uint16_t)(axis_index + 1U),
-                         pdo_set->mode_init_index, pdo_set->mode_init_subindex,
-                         &mode_value) || mode_value != pdo_set->mode_init_value)
+            if (!emaster_soem_read_i8(&sdo, pdo_set->mode_init_index,
+                                      pdo_set->mode_init_subindex,
+                                      &mode_value) ||
+                mode_value != pdo_set->mode_init_value)
             {
                 status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
                 goto cleanup;
@@ -681,19 +628,24 @@ emaster_control_session_status_t emaster_soem_control_session(
             uint16_t observed_value;
 
             if (command->type != EMASTER_CONFIG_SDO_VALUE_U16 ||
-                !write_u16(&context, (uint16_t)(axis_index + 1U), command->index,
-                           command->subindex, command->value_u16))
+                !emaster_soem_write_u16(&sdo, command->index, command->subindex,
+                                        command->value_u16))
             {
                 status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
                 goto cleanup;
             }
-            if (!read_u16(&context, (uint16_t)(axis_index + 1U), command->index,
-                          command->subindex, &observed_value) ||
+            if (!emaster_soem_read_u16(&sdo, command->index, command->subindex,
+                                       &observed_value) ||
                 observed_value != command->value_u16)
             {
                 status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
                 goto cleanup;
             }
+        }
+        if (report->audit.allocation_failed)
+        {
+            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+            goto cleanup;
         }
     }
 
@@ -710,9 +662,27 @@ emaster_control_session_status_t emaster_soem_control_session(
             goto cleanup;
         }
     }
+    if (!emaster_session_observer_prepare_audit(
+            plan, runtime, mode_confirmation_cycles, &report->audit))
+    {
+        status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+        goto cleanup;
+    }
     report->expected_wkc = (uint16_t)(context.grouplist[0].outputsWKC * 2U +
                                       context.grouplist[0].inputsWKC);
     /* SAFE-OP 首次反馈用于锁定 CSP 当前实际位置，控制字仍保持为零。 */
+    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    {
+        if (!emaster_cia_process_image_audit_output(
+                &runtime[axis_index], &report->audit,
+                EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION,
+                (uint16_t)(axis_index + 1U), process_exchange + UINT64_C(1)))
+        {
+            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+            goto cleanup;
+        }
+    }
+    ++process_exchange;
     (void)ecx_send_processdata(&context);
     report->actual_wkc = ecx_receive_processdata(&context, EC_TIMEOUTRET);
     if (report->actual_wkc != (int)report->expected_wkc)
@@ -733,6 +703,14 @@ emaster_control_session_status_t emaster_soem_control_session(
         if (!axis_storage[axis_index].input_decoded)
         {
             status = EMASTER_CONTROL_SESSION_FEEDBACK_INVALID;
+            goto cleanup;
+        }
+        if (!emaster_cia_process_image_audit_input(
+                &runtime[axis_index], &report->audit,
+                EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION,
+                (uint16_t)(axis_index + 1U), process_exchange))
+        {
+            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
             goto cleanup;
         }
         axis_storage[axis_index].requested_mode =
@@ -759,6 +737,18 @@ emaster_control_session_status_t emaster_soem_control_session(
     cycle_output_active = true;
     context.slavelist[0].state = EC_STATE_OPERATIONAL;
     ecx_writestate(&context, 0U);
+    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    {
+        if (!emaster_cia_process_image_audit_output(
+                &runtime[axis_index], &report->audit,
+                EMASTER_AUDIT_PHASE_OPERATION_REQUEST,
+                (uint16_t)(axis_index + 1U), process_exchange + UINT64_C(1)))
+        {
+            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+            goto cleanup;
+        }
+    }
+    ++process_exchange;
     (void)ecx_send_processdata(&context);
     report->actual_wkc = ecx_receive_processdata(&context, EC_TIMEOUTRET);
     if (ecx_statecheck(&context, 0U, EC_STATE_OPERATIONAL, EC_TIMEOUTSTATE * 4) !=
@@ -768,6 +758,26 @@ emaster_control_session_status_t emaster_soem_control_session(
         goto cleanup;
     }
     report->op_reached = true;
+    enable_deadline_cycle = report->cycle_count + mode_confirmation_cycles;
+    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    {
+        const ec_slavet *slave = &context.slavelist[axis_index + 1U];
+        int8_t mode_display;
+        uint16_t status_word;
+        int32_t actual_position;
+
+        if (!emaster_cia_process_image_decode_input(
+                &runtime[axis_index], slave->inputs, slave->Ibytes,
+                &mode_display, &status_word, &actual_position) ||
+            !emaster_cia_process_image_audit_input(
+                &runtime[axis_index], &report->audit,
+                EMASTER_AUDIT_PHASE_OPERATION_REQUEST,
+                (uint16_t)(axis_index + 1U), process_exchange))
+        {
+            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+            goto cleanup;
+        }
+    }
     for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
     {
         if (!emaster_cia402_controller_set_goal(&controllers[axis_index],
@@ -797,6 +807,19 @@ emaster_control_session_status_t emaster_soem_control_session(
                 status = EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
                 goto cleanup;
             }
+            for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+            {
+                if (!emaster_cia_process_image_audit_output(
+                        &runtime[axis_index], &report->audit,
+                        EMASTER_AUDIT_PHASE_CYCLIC_OPERATION,
+                        (uint16_t)(axis_index + 1U),
+                        process_exchange + UINT64_C(1)))
+                {
+                    status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+                    goto cleanup;
+                }
+            }
+            ++process_exchange;
             (void)ecx_send_processdata(&context);
             report->actual_wkc = ecx_receive_processdata(&context, EC_TIMEOUTRET);
             ++report->cycle_count;
@@ -818,6 +841,14 @@ emaster_control_session_status_t emaster_soem_control_session(
                 if (!axis_storage[axis_index].input_decoded)
                 {
                     status = EMASTER_CONTROL_SESSION_FEEDBACK_INVALID;
+                    goto cleanup;
+                }
+                if (!emaster_cia_process_image_audit_input(
+                        &runtime[axis_index], &report->audit,
+                        EMASTER_AUDIT_PHASE_CYCLIC_OPERATION,
+                        (uint16_t)(axis_index + 1U), process_exchange))
+                {
+                    status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
                     goto cleanup;
                 }
                 axis_storage[axis_index].mode_display = mode_display;
@@ -866,9 +897,15 @@ emaster_control_session_status_t emaster_soem_control_session(
                      (mode_confirmation_started && !axis_result->mode_display_match &&
                       report->cycle_count >= mode_confirmation_deadline_cycle)))
                 {
-                    axis_result->mode_display_sdo_read = read_i8(
-                        &context, (uint16_t)(axis_index + 1U), UINT16_C(0x6061),
-                        UINT8_C(0), &axis_result->mode_display_sdo);
+                    emaster_soem_sdo_reader_context_t sdo;
+
+                    emaster_soem_sdo_context_init(
+                        &sdo, &context, (uint16_t)(axis_index + 1U),
+                        &report->audit, EMASTER_AUDIT_PHASE_CYCLIC_OPERATION,
+                        process_exchange);
+                    axis_result->mode_display_sdo_read = emaster_soem_read_i8(
+                        &sdo, UINT16_C(0x6061), UINT8_C(0),
+                        &axis_result->mode_display_sdo);
                     axis_result->mode_display = axis_result->mode_display_sdo;
                 }
                 axis_result->mode_display_match =
@@ -895,6 +932,11 @@ emaster_control_session_status_t emaster_soem_control_session(
                 }
             }
             report->all_axes_enabled_reached |= all_axes_enabled;
+            if (!all_axes_enabled && report->cycle_count >= enable_deadline_cycle)
+            {
+                status = EMASTER_CONTROL_SESSION_CONTROLLER_FAILED;
+                goto cleanup;
+            }
             if (all_axes_enabled && !mode_confirmation_started)
             {
                 mode_confirmation_started = true;
@@ -1033,7 +1075,8 @@ cleanup:
         {
             report->safe_state_reached = stop_process_data(
                 plan, runtime, axis_storage, controllers, controller_outputs, status_words,
-                &coordinator, &context, report, &safe_output_sent);
+                &coordinator, &context, report, &safe_output_sent,
+                &process_exchange);
             if (!report->safe_state_reached && status == EMASTER_CONTROL_SESSION_OK)
             {
                 status = EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED;
@@ -1045,15 +1088,19 @@ cleanup:
             {
                 emaster_control_session_axis_result_t *axis_result =
                     &axis_storage[axis_index];
+                emaster_soem_sdo_reader_context_t sdo;
 
-                axis_result->mode_command_sdo_read = read_i8(
-                    &context, (uint16_t)(axis_index + 1U), UINT16_C(0x6060), UINT8_C(0),
+                emaster_soem_sdo_context_init(
+                    &sdo, &context, (uint16_t)(axis_index + 1U), &report->audit,
+                    EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC, process_exchange);
+                axis_result->mode_command_sdo_read = emaster_soem_read_i8(
+                    &sdo, UINT16_C(0x6060), UINT8_C(0),
                     &axis_result->mode_command_sdo);
-                axis_result->mode_display_sdo_read = read_i8(
-                    &context, (uint16_t)(axis_index + 1U), UINT16_C(0x6061), UINT8_C(0),
+                axis_result->mode_display_sdo_read = emaster_soem_read_i8(
+                    &sdo, UINT16_C(0x6061), UINT8_C(0),
                     &axis_result->mode_display_sdo);
-                axis_result->input_mode_sdo_read = read_u16(
-                    &context, (uint16_t)(axis_index + 1U), UINT16_C(0x2002), UINT8_C(1),
+                axis_result->input_mode_sdo_read = emaster_soem_read_u16(
+                    &sdo, UINT16_C(0x2002), UINT8_C(1),
                     &axis_result->input_mode_sdo);
                 if (!runtime[axis_index].tx_mode_available &&
                     axis_result->mode_display_sdo_read)
@@ -1066,16 +1113,31 @@ cleanup:
                  * 此时安全停机过程已经结束，但从站仍在 EtherCAT 会话中且 Sync0 尚未关闭；
                  * 因而这里能保留本次运行产生的驱动故障和同步质量证据。
                  */
-                read_drive_diagnostic(&context, (uint16_t)(axis_index + 1U),
-                                      &axis_result->drive_diagnostic);
-                read_sync_diagnostic(&context, (uint16_t)(axis_index + 1U),
-                                     UINT16_C(0x1C32), &axis_result->sm2_diagnostic);
-                read_sync_diagnostic(&context, (uint16_t)(axis_index + 1U),
-                                     UINT16_C(0x1C33), &axis_result->sm3_diagnostic);
+                emaster_session_observer_read_drive(
+                    &sdo, &axis_result->drive_diagnostic);
+                emaster_session_observer_read_sync(
+                    &sdo, UINT16_C(0x1C32), &axis_result->sm2_diagnostic);
+                emaster_session_observer_read_sync(
+                    &sdo, UINT16_C(0x1C33), &axis_result->sm3_diagnostic);
                 if (!axis_result->position_scale.read_succeeded)
                 {
-                    read_position_scale(&context, (uint16_t)(axis_index + 1U),
-                                        &axis_result->position_scale);
+                    emaster_session_observer_read_position_scale(
+                        &sdo, &axis_result->position_scale);
+                }
+                axis_result->final_diagnostic_read_count =
+                    plan->axes[axis_index].operation_mode->final_sdo_read_count;
+                for (size_t diagnostic_index = 0U;
+                     diagnostic_index <
+                         plan->axes[axis_index].operation_mode->final_sdo_read_count;
+                     ++diagnostic_index)
+                {
+                    if (emaster_session_observer_read_configured_sdo(
+                            &sdo,
+                            &plan->axes[axis_index].operation_mode
+                                 ->final_sdo_reads[diagnostic_index]))
+                    {
+                        ++axis_result->final_diagnostic_success_count;
+                    }
                 }
             }
         }
@@ -1084,7 +1146,12 @@ cleanup:
         {
             disable_sync0(&context, runtime, plan->axis_count);
             report->sync0_disabled = true;
+            for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+            {
+                /* 配置后的激活事实保留在轴结果中，最终关闭事实由会话结果单独表示。 */
+            }
         }
+        report->last_dc_time_ns = context.DCtime;
         report->restore_init_succeeded = emaster_soem_restore_init(&context);
         ecx_close(&context);
     }
@@ -1098,8 +1165,21 @@ cleanup:
     free(controllers);
     free(io_map);
     emaster_cia_process_image_destroy(runtime, plan->axis_count);
+    report->process_data_exchange_count = process_exchange;
+    if (report->audit.allocation_failed && status == EMASTER_CONTROL_SESSION_OK)
+    {
+        status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+    }
     report->status = status == EMASTER_CONTROL_SESSION_OK && !report->restore_init_succeeded
                          ? EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED
                          : status;
     return report->status;
+}
+
+void emaster_control_session_report_destroy(emaster_control_session_report_t *report)
+{
+    if (report != NULL)
+    {
+        emaster_run_audit_destroy(&report->audit);
+    }
 }
