@@ -46,7 +46,7 @@ bool emaster_cia_process_image_update_output(
     const emaster_session_axis_plan_t *axis,
     emaster_cia_process_image_t *image,
     uint16_t control_word,
-    int32_t hold_target_position,
+    int32_t target_position,
     uint8_t *output,
     size_t output_capacity);
 

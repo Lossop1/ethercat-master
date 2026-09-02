@@ -18,19 +18,22 @@
       "id": "csp",
       "value": 8,
       "required_rx_fields": ["control_word", "target_position", "mode_of_operation"],
-      "required_tx_fields": ["status_word", "actual_position", "mode_display"]
+      "required_tx_fields": ["status_word", "actual_position", "mode_display"],
+      "mode_display_policy": "required"
     },
     {
       "id": "csv",
       "value": 9,
       "required_rx_fields": ["control_word", "target_velocity", "mode_of_operation"],
-      "required_tx_fields": ["status_word", "actual_velocity", "mode_display"]
+      "required_tx_fields": ["status_word", "actual_velocity", "mode_display"],
+      "mode_display_policy": "required"
     },
     {
       "id": "cst",
       "value": 10,
       "required_rx_fields": ["control_word", "target_torque", "mode_of_operation"],
-      "required_tx_fields": ["status_word", "actual_torque", "mode_display"]
+      "required_tx_fields": ["status_word", "actual_torque", "mode_display"],
+      "mode_display_policy": "required"
     }
   ]
 }

@@ -19,14 +19,7 @@
       "value": 8,
       "required_rx_fields": ["control_word", "target_position"],
       "required_tx_fields": ["status_word", "actual_position"],
-      "safeop_to_op_sdo_writes": [
-        {
-          "index": "0x2002",
-          "subindex": 1,
-          "type": "u16",
-          "value": "0x0003"
-        }
-      ]
+      "mode_display_policy": "diagnostic"
     }
   ]
 }

@@ -23,6 +23,29 @@ typedef enum
     EMASTER_CONFIG_SDO_VALUE_U16 = 0
 } emaster_config_sdo_value_type_t;
 
+typedef enum
+{
+    EMASTER_MODE_DISPLAY_REQUIRED = 0,
+    EMASTER_MODE_DISPLAY_DIAGNOSTIC = 1
+} emaster_mode_display_policy_t;
+
+typedef enum
+{
+    EMASTER_MOTION_PROFILE_DRAFT = 0,
+    EMASTER_MOTION_PROFILE_APPROVED = 1
+} emaster_motion_profile_approval_t;
+
+typedef enum
+{
+    EMASTER_MOTION_COORDINATE_MOTOR_ROTOR = 0,
+    EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT = 1
+} emaster_motion_coordinate_t;
+
+typedef enum
+{
+    EMASTER_MOTION_TRAJECTORY_RELATIVE_LINEAR_POSITION = 0
+} emaster_motion_trajectory_t;
+
 typedef struct
 {
     uint16_t index;
@@ -40,6 +63,8 @@ typedef struct
     size_t required_rx_field_count;
     const char *const *required_tx_fields;
     size_t required_tx_field_count;
+    /* 模式显示异常是否阻断控制由运行方案声明，诊断模式仍会持续采集并报告 6061。 */
+    emaster_mode_display_policy_t mode_display_policy;
     /* 设备模式除标准 6060 外需要的供应商 SDO，由运行配置显式声明。 */
     const emaster_sdo_write_config_t *safeop_to_op_sdo_writes;
     size_t safeop_to_op_sdo_write_count;
@@ -68,6 +93,28 @@ typedef struct
     const emaster_operation_mode_t *modes;
     size_t mode_count;
 } emaster_operation_profile_t;
+
+/* 每轴只保存工程单位下的命令和边界；运行时必须使用该轴真机换算参数生成 PDO 原始值。 */
+typedef struct
+{
+    const char *axis_id;
+    int32_t relative_angle_millidegrees;
+    uint32_t max_following_error_millidegrees;
+} emaster_motion_axis_config_t;
+
+/* 一份运动方案描述一次全轴原子发布的轨迹，不能只覆盖部署中的部分轴。 */
+typedef struct
+{
+    const char *motion_profile_id;
+    emaster_motion_profile_approval_t approval;
+    const char *required_mode_id;
+    emaster_motion_trajectory_t trajectory;
+    emaster_motion_coordinate_t coordinate;
+    uint32_t duration_ms;
+    uint32_t settle_ms;
+    const emaster_motion_axis_config_t *axes;
+    size_t axis_count;
+} emaster_motion_profile_t;
 
 /*
  * 拓扑条目只保存用户在拓扑配置中确认的静态关系。position 是总线顺序，
@@ -99,6 +146,7 @@ typedef struct
     const emaster_topology_config_t *topology;
     const emaster_operation_profile_t *const *operation_profiles;
     size_t operation_profile_count;
+    const emaster_motion_profile_t *motion_profile;
 } emaster_deployment_config_t;
 
 /* 以下接口只返回生成目录中的只读对象，调用者不得释放或修改返回值。 */
@@ -115,5 +163,9 @@ const emaster_operation_profile_t *emaster_operation_profile_at(size_t index);
 const emaster_operation_profile_t *emaster_operation_profile_by_id(const char *profile_id);
 const emaster_operation_profile_t *emaster_deployment_operation_profile_by_id(
     const emaster_deployment_config_t *deployment, const char *profile_id);
+
+size_t emaster_motion_profile_count(void);
+const emaster_motion_profile_t *emaster_motion_profile_at(size_t index);
+const emaster_motion_profile_t *emaster_motion_profile_by_id(const char *profile_id);
 
 #endif

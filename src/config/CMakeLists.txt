@@ -7,12 +7,14 @@ add_custom_command(
         --topology-input ${EMASTER_TOPOLOGY_CONFIG_FILES}
         --deployment-input ${EMASTER_DEPLOYMENT_CONFIG_FILES}
         --operation-input ${EMASTER_OPERATION_PROFILE_CONFIG_FILES}
+        --motion-input ${EMASTER_MOTION_PROFILE_CONFIG_FILES}
         --device-input ${EMASTER_DEVICE_CONFIG_FILES}
         --output "${EMASTER_GENERATED_CONFIG}"
     DEPENDS
         ${EMASTER_TOPOLOGY_CONFIG_FILES}
         ${EMASTER_DEPLOYMENT_CONFIG_FILES}
         ${EMASTER_OPERATION_PROFILE_CONFIG_FILES}
+        ${EMASTER_MOTION_PROFILE_CONFIG_FILES}
         ${EMASTER_DEVICE_CONFIG_FILES}
         "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/generate_runtime_config.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/runtime_config_model.py"

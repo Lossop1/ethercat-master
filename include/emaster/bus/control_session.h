@@ -2,6 +2,7 @@
 #define EMASTER_BUS_CONTROL_SESSION_H
 
 #include "emaster/cia402/controller.h"
+#include "emaster/motion/relative_position.h"
 #include "emaster/session/session_plan.h"
 
 #include <stdbool.h>
@@ -32,6 +33,8 @@ typedef enum
     EMASTER_CONTROL_SESSION_FEEDBACK_INVALID,
     EMASTER_CONTROL_SESSION_CONTROLLER_FAILED,
     EMASTER_CONTROL_SESSION_DRIVE_FAULT,
+    EMASTER_CONTROL_SESSION_MOTION_INVALID,
+    EMASTER_CONTROL_SESSION_FOLLOWING_ERROR,
     EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED,
     EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED,
     EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED
@@ -63,19 +66,6 @@ typedef struct
     bool sync_error;
 } emaster_sync_diagnostic_t;
 
-/*
- * 位置换算参数直接读取物理从站的 608F/6091，不能用 EDS 默认值替代真机值。
- * 分子和分母均保留原始对象值，由应用层选择物理单位并执行有界换算。
- */
-typedef struct
-{
-    bool read_succeeded;
-    uint32_t encoder_increments;
-    uint32_t encoder_motor_revolutions;
-    uint32_t gear_motor_revolutions;
-    uint32_t gear_shaft_revolutions;
-} emaster_position_scale_t;
-
 typedef struct
 {
     uint16_t position;
@@ -101,7 +91,10 @@ typedef struct
     uint16_t control_word;
     int32_t initial_actual_position;
     int32_t actual_position;
-    int32_t hold_target_position;
+    int32_t target_position;
+    int32_t motion_final_position;
+    uint64_t max_following_error_counts;
+    uint64_t max_observed_following_error_counts;
     emaster_cia402_state_t cia402_state;
     bool switch_on_disabled_seen;
     bool ready_to_switch_on_seen;
@@ -126,6 +119,8 @@ typedef struct
     bool safe_op_reached;
     bool op_reached;
     bool all_axes_enabled_reached;
+    bool motion_started;
+    bool motion_completed;
     bool stop_requested;
     bool safe_output_sent;
     bool safe_state_reached;
@@ -141,7 +136,8 @@ typedef bool (*emaster_control_session_stop_requested_t)(void *user_data);
 
 /*
  * 按部署计划建立 EtherCAT 过程数据会话。SAFE-OP 首帧会先从 6064 初始化 607A，防止 CSP
- * 使能时追逐零位置；进入 OP 后，每周期根据 6041 计算并发送 6040，直到应用请求停止。
+ * 使能时追逐零位置；进入 OP 后，每周期根据 6041 计算并发送 6040。部署未引用运动方案时持续
+ * 保持启动位置；引用已批准方案时由独立轨迹模块生成全轴目标，完成后自动执行安全停止。
  * 任意失败和正常停止路径都会发送安全输出、关闭 Sync0 并请求所有从站恢复 INIT。
  */
 emaster_control_session_status_t emaster_soem_control_session(

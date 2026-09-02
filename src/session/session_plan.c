@@ -102,6 +102,31 @@ find_operation_mode(const emaster_operation_profile_t *operation)
     return NULL;
 }
 
+static const emaster_motion_axis_config_t *
+find_motion_axis(const emaster_motion_profile_t *motion, const char *axis_id)
+{
+    const emaster_motion_axis_config_t *match = NULL;
+    size_t index;
+
+    if (motion == NULL || motion->axes == NULL || axis_id == NULL)
+    {
+        return NULL;
+    }
+    for (index = 0U; index < motion->axis_count; ++index)
+    {
+        const emaster_motion_axis_config_t *candidate = &motion->axes[index];
+        if (candidate->axis_id != NULL && strcmp(candidate->axis_id, axis_id) == 0)
+        {
+            if (match != NULL)
+            {
+                return NULL;
+            }
+            match = candidate;
+        }
+    }
+    return match;
+}
+
 emaster_session_plan_status_t
 emaster_session_plan_build(const emaster_deployment_config_t *deployment,
                            emaster_session_axis_plan_t *axis_storage,
@@ -130,6 +155,21 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
     {
         return fail_plan(result, NULL, 0U, EMASTER_SESSION_PLAN_DISABLED);
     }
+    if (deployment->motion_profile != NULL &&
+        deployment->motion_profile->approval != EMASTER_MOTION_PROFILE_APPROVED)
+    {
+        return fail_plan(result, NULL, 0U,
+                         EMASTER_SESSION_PLAN_MOTION_PROFILE_NOT_APPROVED);
+    }
+    if (deployment->motion_profile != NULL &&
+        (deployment->motion_profile->axes == NULL ||
+         deployment->motion_profile->required_mode_id == NULL ||
+         deployment->motion_profile->axis_count != topology->slave_count ||
+         deployment->motion_profile->duration_ms == 0U))
+    {
+        return fail_plan(result, NULL, 0U,
+                         EMASTER_SESSION_PLAN_MOTION_PROFILE_INCOMPLETE);
+    }
     if (axis_storage == NULL)
     {
         return fail_plan(result, NULL, 0U, EMASTER_SESSION_PLAN_INVALID_ARGUMENT);
@@ -149,6 +189,7 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
         const emaster_operation_profile_t *operation = NULL;
         const emaster_operation_mode_t *operation_mode;
         const emaster_pdo_set_profile_t *pdo_set;
+        const emaster_motion_axis_config_t *motion_axis = NULL;
         emaster_session_plan_status_t status;
 
         if (topology_slave->profile_id == NULL)
@@ -206,6 +247,23 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);
         }
+        if (deployment->motion_profile != NULL)
+        {
+            if (operation_mode->mode_id == NULL ||
+                strcmp(operation_mode->mode_id,
+                       deployment->motion_profile->required_mode_id) != 0)
+            {
+                return fail_plan(result, axis_storage, topology->slave_count,
+                                 EMASTER_SESSION_PLAN_MOTION_PROFILE_INCOMPLETE);
+            }
+            motion_axis = find_motion_axis(deployment->motion_profile,
+                                           topology_slave->axis_id);
+            if (motion_axis == NULL)
+            {
+                return fail_plan(result, axis_storage, topology->slave_count,
+                                 EMASTER_SESSION_PLAN_MOTION_PROFILE_INCOMPLETE);
+            }
+        }
         if (axis_index == 0U)
         {
             cycle_ns = operation->cycle_ns;
@@ -221,6 +279,7 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
         axis_storage[axis_index].operation_profile = operation;
         axis_storage[axis_index].operation_mode = operation_mode;
         axis_storage[axis_index].pdo_set = pdo_set;
+        axis_storage[axis_index].motion_axis = motion_axis;
     }
 
     result->status = EMASTER_SESSION_PLAN_READY;
@@ -228,6 +287,7 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
     result->axes = axis_storage;
     result->axis_count = topology->slave_count;
     result->cycle_ns = cycle_ns;
+    result->motion_profile = deployment->motion_profile;
     return result->status;
 }
 

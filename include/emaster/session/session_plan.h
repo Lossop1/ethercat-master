@@ -26,7 +26,9 @@ typedef enum
     EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE,
     EMASTER_SESSION_PLAN_PDO_SET_NOT_FOUND,
     EMASTER_SESSION_PLAN_DC_NOT_SUPPORTED,
-    EMASTER_SESSION_PLAN_CYCLE_TIME_MISMATCH
+    EMASTER_SESSION_PLAN_CYCLE_TIME_MISMATCH,
+    EMASTER_SESSION_PLAN_MOTION_PROFILE_NOT_APPROVED,
+    EMASTER_SESSION_PLAN_MOTION_PROFILE_INCOMPLETE
 } emaster_session_plan_status_t;
 
 /* 每个轴的计划只持有生成目录中的只读指针，不复制或拥有配置对象。 */
@@ -37,6 +39,7 @@ typedef struct
     const emaster_operation_profile_t *operation_profile;
     const emaster_operation_mode_t *operation_mode;
     const emaster_pdo_set_profile_t *pdo_set;
+    const emaster_motion_axis_config_t *motion_axis;
 } emaster_session_axis_plan_t;
 
 /*
@@ -50,6 +53,7 @@ typedef struct
     emaster_session_axis_plan_t *axes;
     size_t axis_count;
     uint32_t cycle_ns;
+    const emaster_motion_profile_t *motion_profile;
 } emaster_session_plan_t;
 
 /*

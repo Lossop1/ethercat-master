@@ -51,65 +51,6 @@ def _bool_attribute(element: ET.Element | None, name: str, default: bool = False
     raise ValueError(f"ESI 属性 {element.tag}@{name} 不是有效布尔值：{value!r}")
 
 
-def esi_modules(root: ET.Element) -> dict[int, dict[str, Any]]:
-    """提取 ESI 模块及其双向 PDO，供设备配置进行结构化对比。"""
-    modules: dict[int, dict[str, Any]] = {}
-    module_slots: dict[int, int] = {}
-    device = root.find("./Descriptions/Devices/Device")
-    if device is not None:
-        for slot_ordinal, slot in enumerate(device.findall("./Slots/Slot"), start=1):
-            for module_ident_element in slot.findall("ModuleIdent"):
-                if module_ident_element.text:
-                    module_slots[hex_value(module_ident_element.text)] = slot_ordinal
-    for module in root.findall("./Descriptions/Modules/Module"):
-        module_type = module.find("Type")
-        if module_type is None:
-            continue
-        module_ident = hex_value(module_type.attrib["ModuleIdent"])
-        if module_ident in modules:
-            raise ValueError(f"ESI 模块标识重复：{_hex_text(module_ident, 8)}")
-        result: dict[str, Any] = {"module_slot": module_slots.get(module_ident)}
-        for xml_tag, direction in (("RxPdo", "rx"), ("TxPdo", "tx")):
-            mappings = []
-            for pdo in module.findall(xml_tag):
-                entries = []
-                for entry in pdo.findall("Entry"):
-                    object_index = hex_value(entry.findtext("Index", default="0"))
-                    entries.append(
-                        {
-                            "index": object_index,
-                            "subindex": int(entry.findtext("SubIndex", default="0")),
-                            "bits": int(entry.findtext("BitLen", default="0")),
-                            "data_type": (
-                                "PADDING"
-                                if object_index == 0
-                                else entry.findtext("DataType", default="")
-                            ),
-                        }
-                    )
-                mappings.append(
-                    {
-                        "index": hex_value(pdo.findtext("Index", default="0")),
-                        "entries": entries,
-                    }
-                )
-            result[direction] = mappings
-        init_command = module.find("Mailbox/CoE/InitCmd")
-        if init_command is None:
-            result["mode_initialization"] = None
-        else:
-            transition = init_command.findtext("Transition", default="").strip()
-            raw_data = bytes.fromhex(init_command.findtext("Data", default=""))
-            result["mode_initialization"] = {
-                "transition": "safeop_to_op" if transition == "SO" else transition,
-                "index": hex_value(init_command.findtext("Index", default="0")),
-                "subindex": int(init_command.findtext("SubIndex", default="0")),
-                "value": int.from_bytes(raw_data, byteorder="little", signed=True),
-            }
-        modules[module_ident] = result
-    return modules
-
-
 def little_endian_default_data(value: str) -> int:
     """把 ESI DefaultData 的字节序列解释为 EtherCAT 小端无符号整数。"""
     try:
@@ -170,14 +111,6 @@ def _device_runtime_constraints(device: ET.Element) -> EsiRuntimeConstraints:
         supports_pdo_configuration=supports_pdo_configuration,
         supports_distributed_clocks="dc" in assign_activate_by_strategy,
     )
-
-
-def esi_runtime_constraints(root: ET.Element) -> EsiRuntimeConstraints:
-    """为现有单型号设备目录校验提取第一项 Device 的约束。"""
-    device = root.find("./Descriptions/Devices/Device")
-    if device is None:
-        raise ValueError("ESI 缺少 Device")
-    return _device_runtime_constraints(device)
 
 
 def _entry_fact(entry: ET.Element) -> dict[str, Any]:

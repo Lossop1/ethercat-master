@@ -1,19 +1,15 @@
-"""校验设备目录结构，并把目录事实与受控 ESI 逐项比较。"""
+"""校验设备目录自身的结构和字段关系。"""
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import Any
 
 from validation_common import (
-    EsiRuntimeConstraints,
     Validation,
     hex_value,
     non_empty_string,
     validate_hex_value,
 )
-from esi_facts import esi_modules, esi_runtime_constraints
 
 
 def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str) -> bool:
@@ -163,104 +159,8 @@ def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str
     return len(check.errors) == initial_error_count
 
 
-def validate_catalog_against_esi(
-    check: Validation,
-    root_dir: Path,
-    profile: dict[str, Any],
-) -> EsiRuntimeConstraints | None:
-    """校验 ESI 身份、全部 PDO 方案和可用于运行方案的能力事实。"""
-    esi_path = root_dir / profile["source"]["esi"]
-    if not esi_path.is_file():
-        return None
-
-    root = ET.parse(esi_path).getroot()
-    vendor = root.find("./Vendor")
-    device_type = root.find("./Descriptions/Devices/Device/Type")
-    check.require(vendor is not None, "ESI 缺少 Vendor 部分")
-    check.require(device_type is not None, "ESI 缺少 Device Type")
-    if vendor is None or device_type is None:
-        return None
-
-    identity = profile["identity"]
-    check.require(
-        hex_value(vendor.findtext("Id", default="0")) == hex_value(identity["vendor_id"]),
-        "ESI Vendor ID 与设备目录不一致",
-    )
-    check.require(device_type.text == profile["model"], "ESI 型号与设备目录不一致")
-    check.require(
-        hex_value(device_type.attrib["ProductCode"]) == hex_value(identity["product_code"]),
-        "ESI Product Code 与设备目录不一致",
-    )
-    check.require(
-        hex_value(device_type.attrib["RevisionNo"]) == hex_value(identity["revision"]),
-        "ESI Revision 与设备目录不一致",
-    )
-
-    modules = esi_modules(root)
-    for pdo_set in profile["pdo_sets"]:
-        module_ident = hex_value(pdo_set["module_ident"])
-        check.require(module_ident in modules, f"ESI 缺少模块 0x{module_ident:08X}")
-        if module_ident not in modules:
-            continue
-        check.require(
-            pdo_set.get("module_slot") == modules[module_ident]["module_slot"],
-            f"{pdo_set['id']} 的模块槽位与 ESI 不一致",
-        )
-        configured_init = pdo_set.get("mode_initialization")
-        if isinstance(configured_init, dict):
-            expected_init = {
-                "transition": configured_init.get("transition"),
-                "index": hex_value(configured_init.get("index", "0x0")),
-                "subindex": configured_init.get("subindex"),
-                "value": configured_init.get("value"),
-            }
-        else:
-            expected_init = None
-        check.require(
-            expected_init == modules[module_ident]["mode_initialization"],
-            f"{pdo_set['id']} 的模式初始化命令与 ESI 不一致",
-        )
-        for direction in ("rx", "tx"):
-            actual = modules[module_ident][direction]
-            expected_mappings = [
-                {
-                    "index": hex_value(mapping["index"]),
-                    "entries": [
-                        {
-                            "index": hex_value(entry["index"]),
-                            "subindex": int(entry["subindex"]),
-                            "bits": int(entry["bits"]),
-                            "data_type": entry["data_type"],
-                        }
-                        for entry in mapping["entries"]
-                    ],
-                }
-                for mapping in pdo_set[direction]["mappings"]
-            ]
-            check.require(
-                expected_mappings == actual,
-                f"{pdo_set['id']} {direction} PDO 映射表、顺序、条目或数据类型与 ESI 不一致",
-            )
-
-    constraints = esi_runtime_constraints(root)
-    protocol = profile["protocol"]
-    check.require(
-        protocol["supports_pdo_assignment"] == constraints.supports_pdo_assignment,
-        f"{profile['profile_id']} 的 PDO 分配能力与 ESI CoE/PdoAssign 不一致",
-    )
-    check.require(
-        protocol["supports_pdo_configuration"] == constraints.supports_pdo_configuration,
-        f"{profile['profile_id']} 的 PDO 配置能力与 ESI CoE/PdoConfig 不一致",
-    )
-    check.require(
-        protocol["supports_distributed_clocks"] == constraints.supports_distributed_clocks,
-        f"{profile['profile_id']} 的 DC 能力与 ESI 不一致",
-    )
-    return constraints
-
-
 def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
-    """校验生成目录和 ESI 对比所需的完整设备配置结构。"""
+    """校验生成设备目录所需的完整配置结构。"""
     initial_error_count = len(check.errors)
     profile_id_value = profile.get("profile_id")
     profile_id = profile_id_value if non_empty_string(profile_id_value) else "<未知设备>"
@@ -318,29 +218,20 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
             f"设备 {profile_id} 的默认编码器计数必须是正整数",
         )
 
-    source = profile.get("source")
-    if not isinstance(source, dict):
-        check.errors.append(f"设备 {profile_id} 缺少 source 对象")
-    else:
-        check.require(non_empty_string(source.get("esi")), f"设备 {profile_id} 缺少 ESI 路径")
-
     return len(check.errors) == initial_error_count
 
 
 def validate_profiles(
     check: Validation, profiles: list[dict[str, Any]]
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+) -> dict[str, dict[str, Any]]:
     """校验设备配置集合，并建立供拓扑引用的稳定 ID 索引。"""
     by_id: dict[str, dict[str, Any]] = {}
-    valid_profiles: list[dict[str, Any]] = []
     for profile in profiles:
-        structurally_valid = validate_profile(check, profile)
+        validate_profile(check, profile)
         profile_id_value = profile.get("profile_id")
         profile_id = profile_id_value if non_empty_string(profile_id_value) else ""
         is_unique = profile_id not in by_id
         check.require(not profile_id or is_unique, f"设备配置 ID 重复：{profile_id}")
         if profile_id and is_unique:
             by_id[profile_id] = profile
-        if structurally_valid:
-            valid_profiles.append(profile)
-    return by_id, valid_profiles
+    return by_id

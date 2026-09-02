@@ -268,7 +268,14 @@ def operation_values(
                         raise ValueError(
                             f"运行方案 {operation_id} 的模式 {mode_id} 引用了"
                             f"不存在的 PDO 字段：{', '.join(sorted(unknown_fields))}"
-                    )
+                        )
+
+            mode_display_policy = mode.get("mode_display_policy")
+            if mode_display_policy not in ("required", "diagnostic"):
+                raise ValueError(
+                    f"运行方案 {operation_id} 的模式 {mode_id} 必须明确声明 "
+                    "mode_display_policy 为 required 或 diagnostic"
+                )
 
             sdo_writes_value = mode.get("safeop_to_op_sdo_writes", [])
             if not isinstance(sdo_writes_value, list):
@@ -339,6 +346,7 @@ def operation_values(
                     "value": mode_value,
                     "rx_fields": required_rx_fields,
                     "tx_fields": required_tx_fields,
+                    "mode_display_policy": mode_display_policy,
                     "safeop_to_op_sdo_writes": sdo_writes,
                 }
             )
@@ -394,17 +402,111 @@ def operation_values(
     return sorted(values, key=lambda item: item["id"])
 
 
+def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """解析独立运动方案，所有轨迹和边界参数都必须由配置显式给出。"""
+    values: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for document in documents:
+        profile_id = required_string(document, "motion_profile_id", "运动方案")
+        if profile_id in seen:
+            raise ValueError(f"运动方案 ID 重复：{profile_id}")
+        seen.add(profile_id)
+        status = required_string(document, "status", f"运动方案 {profile_id}")
+        if status not in ("draft", "approved"):
+            raise ValueError(f"运动方案 {profile_id} 的 status 必须是 draft 或 approved")
+        required_mode_id = required_string(
+            document, "required_mode_id", f"运动方案 {profile_id}"
+        )
+        trajectory = required_string(document, "trajectory", f"运动方案 {profile_id}")
+        if trajectory != "relative_linear_position":
+            raise ValueError(f"运动方案 {profile_id} 使用了不支持的轨迹：{trajectory}")
+        coordinate = required_string(document, "coordinate_frame", f"运动方案 {profile_id}")
+        if coordinate not in ("motor_rotor", "output_shaft"):
+            raise ValueError(
+                f"运动方案 {profile_id} 的 coordinate_frame 必须是 motor_rotor 或 output_shaft"
+            )
+
+        duration_ms = document.get("duration_ms")
+        settle_ms = document.get("settle_ms")
+        if (
+            not isinstance(duration_ms, int)
+            or isinstance(duration_ms, bool)
+            or not 0 < duration_ms <= 0xFFFFFFFF
+        ):
+            raise ValueError(f"运动方案 {profile_id} 的 duration_ms 必须是正整数")
+        if (
+            not isinstance(settle_ms, int)
+            or isinstance(settle_ms, bool)
+            or not 0 <= settle_ms <= 0xFFFFFFFF
+        ):
+            raise ValueError(f"运动方案 {profile_id} 的 settle_ms 必须是非负整数")
+
+        axes = document.get("axes")
+        if not isinstance(axes, list) or not axes:
+            raise ValueError(f"运动方案 {profile_id} 的 axes 必须是非空数组")
+        axis_values: list[dict[str, Any]] = []
+        axis_ids: set[str] = set()
+        for axis in axes:
+            if not isinstance(axis, dict):
+                raise ValueError(f"运动方案 {profile_id} 的轴条目必须是对象")
+            axis_id = required_string(axis, "axis_id", f"运动方案 {profile_id} 的轴")
+            relative_angle = axis.get("relative_angle_millidegrees")
+            following_error = axis.get("max_following_error_millidegrees")
+            if axis_id in axis_ids:
+                raise ValueError(f"运动方案 {profile_id} 的轴 ID 重复：{axis_id}")
+            if (
+                not isinstance(relative_angle, int)
+                or isinstance(relative_angle, bool)
+                or relative_angle == 0
+                or not -(1 << 31) <= relative_angle < (1 << 31)
+            ):
+                raise ValueError(
+                    f"运动方案 {profile_id} 的轴 {axis_id} 相对角度必须是非零 32 位整数"
+                )
+            if (
+                not isinstance(following_error, int)
+                or isinstance(following_error, bool)
+                or not 0 < following_error <= 0xFFFFFFFF
+            ):
+                raise ValueError(
+                    f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数"
+                )
+            axis_ids.add(axis_id)
+            axis_values.append(
+                {
+                    "axis_id": axis_id,
+                    "relative_angle_millidegrees": relative_angle,
+                    "max_following_error_millidegrees": following_error,
+                }
+            )
+        values.append(
+            {
+                "id": profile_id,
+                "status": status,
+                "required_mode_id": required_mode_id,
+                "trajectory": trajectory,
+                "coordinate": coordinate,
+                "duration_ms": duration_ms,
+                "settle_ms": settle_ms,
+                "axes": sorted(axis_values, key=lambda item: item["axis_id"]),
+            }
+        )
+    return sorted(values, key=lambda item: item["id"])
+
+
 def deployment_values(
     documents: list[dict[str, Any]],
     topologies: list[dict[str, Any]],
     operations: list[dict[str, Any]],
+    motions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """解析部署绑定，并确保部署只引用已批准的运行方案。"""
+    """解析部署绑定，并确保部署只引用已批准且完整覆盖拓扑的方案。"""
     values = []
     seen: set[str] = set()
     topology_by_id = {topology["id"]: topology for topology in topologies}
     operation_by_id = {operation["id"]: operation for operation in operations}
     operation_ids = set(operation_by_id)
+    motion_by_id = {motion["id"]: motion for motion in motions}
     for document in documents:
         deployment_id = required_string(document, "deployment_id", "部署配置")
         if deployment_id in seen:
@@ -476,6 +578,36 @@ def deployment_values(
                     f"部署 {deployment_id} 启用的运行方案必须使用相同周期"
                 )
 
+        motion_profile_id = document.get("motion_profile_id")
+        if motion_profile_id is not None and (
+            not isinstance(motion_profile_id, str) or not motion_profile_id.strip()
+        ):
+            raise ValueError(
+                f"部署 {deployment_id} 的 motion_profile_id 必须是非空字符串或 null"
+            )
+        if motion_profile_id is not None:
+            motion = motion_by_id.get(motion_profile_id)
+            if motion is None:
+                raise ValueError(f"部署 {deployment_id} 引用了未知运动方案：{motion_profile_id}")
+            if motion["status"] != "approved":
+                raise ValueError(f"部署 {deployment_id} 只能引用已批准运动方案：{motion_profile_id}")
+            selected_modes = {
+                operation_by_id[operation_id]["selected_mode_id"]
+                for operation_id in operation_profile_ids
+            }
+            if selected_modes != {motion["required_mode_id"]}:
+                raise ValueError(
+                    f"部署 {deployment_id} 的运行模式与运动方案要求不一致"
+                )
+            topology_axis_ids = {
+                axis_id for _, axis_id, _ in topology_by_id[topology_id]["slaves"]
+            }
+            motion_axis_ids = {axis["axis_id"] for axis in motion["axes"]}
+            if motion_axis_ids != topology_axis_ids:
+                raise ValueError(
+                    f"部署 {deployment_id} 的运动方案必须完整覆盖拓扑中的全部轴"
+                )
+
         values.append(
             {
                 "id": deployment_id,
@@ -488,6 +620,7 @@ def deployment_values(
                 "management": management or "",
                 "topology": topology_id,
                 "operation_profile_ids": operation_profile_ids,
+                "motion_profile_id": motion_profile_id,
             }
         )
     return sorted(values, key=lambda item: item["id"])

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from validation_common import (
-    EsiRuntimeConstraints,
     Validation,
     hex_value,
     non_empty_string,
@@ -35,7 +34,6 @@ def validate_operation_profile(
     check: Validation,
     operation: dict[str, Any],
     profiles: dict[str, dict[str, Any]],
-    esi_constraints: dict[str, EsiRuntimeConstraints],
 ) -> bool:
     """校验运行方案引用、同步策略和模式字段，不替运行者补默认参数。"""
     initial_error_count = len(check.errors)
@@ -98,12 +96,7 @@ def validate_operation_profile(
             supports_dc is True,
             f"运行方案 {operation_id} 要求 DC，但设备目录未声明支持",
         )
-    constraints = (
-        esi_constraints.get(device_profile_id)
-        if non_empty_string(device_profile_id)
-        else None
-    )
-    validate_sync_config(check, operation_id, status, strategy, sync, constraints)
+    validate_sync_config(check, operation_id, status, strategy, sync)
     validate_modes(check, operation_id, operation.get("modes"), device, pdo_set)
     selected_mode_id = operation.get("selected_mode_id")
     selected_mode_valid = selected_mode_id is None or non_empty_string(selected_mode_id)
@@ -146,14 +139,12 @@ def validate_sync_config(
     status: object,
     strategy: object,
     sync: object,
-    constraints: EsiRuntimeConstraints | None,
 ) -> None:
-    """校验可选同步参数；参数存在时必须满足 ESI 明确给出的约束。"""
+    """校验运行方案显式给出的同步参数。"""
     if not isinstance(sync, dict):
         check.errors.append(f"运行方案 {operation_id} 缺少 sync 对象")
         return
 
-    valid_hex_fields: dict[str, bool] = {}
     for field, maximum in (
         ("assign_activate", 0xFFFFFFFF),
         ("sm2_sync_type", 0xFFFF),
@@ -161,30 +152,8 @@ def validate_sync_config(
     ):
         value = sync.get(field)
         if value is not None:
-            valid_hex_fields[field] = validate_hex_value(
+            validate_hex_value(
                 check, value, f"运行方案 {operation_id} 的 {field}", maximum
-            )
-
-    assign_activate = sync.get("assign_activate")
-    assign_activate_valid = isinstance(assign_activate, str) and assign_activate.startswith("0x")
-    if assign_activate_valid and constraints is not None and strategy in ("sm", "dc"):
-        expected_assign_activate = constraints.assign_activate_by_strategy.get(strategy)
-        check.require(
-            expected_assign_activate is not None
-            and hex_value(assign_activate) == expected_assign_activate,
-            f"运行方案 {operation_id} 的 assign_activate 与 ESI {strategy} 模式不一致",
-        )
-
-    if constraints is not None:
-        for field, sm_number in (("sm2_sync_type", 2), ("sm3_sync_type", 3)):
-            value = sync.get(field)
-            if value is None or not valid_hex_fields.get(field, False):
-                continue
-            expected_sync_type = constraints.default_sync_type_by_sm.get(sm_number)
-            check.require(
-                expected_sync_type is not None
-                and hex_value(value) == expected_sync_type,
-                f"运行方案 {operation_id} 的 {field} 与 ESI 1C3{sm_number}:01 默认值不一致",
             )
 
     cycle_ns = sync.get("cycle_ns")
@@ -197,17 +166,6 @@ def validate_sync_config(
         )
     )
     check.require(cycle_valid, f"运行方案 {operation_id} 的 cycle_ns 必须是正整数或 null")
-    if (
-        isinstance(cycle_ns, int)
-        and not isinstance(cycle_ns, bool)
-        and constraints is not None
-        and constraints.minimum_cycle_ns is not None
-    ):
-        check.require(
-            cycle_ns >= constraints.minimum_cycle_ns,
-            f"运行方案 {operation_id} 的 cycle_ns 小于 ESI 最小周期 "
-            f"{constraints.minimum_cycle_ns} ns",
-        )
 
     shift = sync.get("sync0_shift_ns")
     check.require(
@@ -299,6 +257,11 @@ def validate_modes(
                         field in available,
                         f"运行方案 {operation_id} 的模式 {mode_label} 引用了不存在的 PDO 字段：{field}",
                     )
+        check.require(
+            mode.get("mode_display_policy") in ("required", "diagnostic"),
+            f"运行方案 {operation_id} 的模式 {mode_label} 必须明确声明 "
+            "mode_display_policy 为 required 或 diagnostic",
+        )
         sdo_writes = mode.get("safeop_to_op_sdo_writes", [])
         check.require(
             isinstance(sdo_writes, list),
@@ -414,7 +377,6 @@ def validate_operations(
     check: Validation,
     operations: list[dict[str, Any]],
     profiles: dict[str, dict[str, Any]],
-    esi_constraints: dict[str, EsiRuntimeConstraints],
 ) -> dict[str, dict[str, Any]]:
     """校验运行方案集合并建立稳定 ID 索引。"""
     by_id: dict[str, dict[str, Any]] = {}
@@ -425,9 +387,93 @@ def validate_operations(
             not operation_id or operation_id not in by_id,
             f"运行方案 ID 重复：{operation_id}",
         )
-        validate_operation_profile(check, operation, profiles, esi_constraints)
+        validate_operation_profile(check, operation, profiles)
         if operation_id and operation_id not in by_id:
             by_id[operation_id] = operation
+    return by_id
+
+
+def validate_motion_profiles(
+    check: Validation, motions: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """校验独立运动方案，不给任何角度、时间或误差边界补默认值。"""
+    by_id: dict[str, dict[str, Any]] = {}
+    for motion in motions:
+        profile_id_value = motion.get("motion_profile_id")
+        profile_id = profile_id_value if non_empty_string(profile_id_value) else ""
+        check.require(motion.get("schema_version") == 1, f"{profile_id} 使用不支持的运动方案版本")
+        check.require(bool(profile_id), "运动方案配置缺少 motion_profile_id")
+        check.require(
+            not profile_id or profile_id not in by_id,
+            f"运动方案 ID 重复：{profile_id}",
+        )
+        check.require(
+            motion.get("status") in ("draft", "approved"),
+            f"运动方案 {profile_id} 的 status 必须是 draft 或 approved",
+        )
+        check.require(
+            non_empty_string(motion.get("required_mode_id")),
+            f"运动方案 {profile_id} 缺少 required_mode_id",
+        )
+        check.require(
+            motion.get("trajectory") == "relative_linear_position",
+            f"运动方案 {profile_id} 只支持 relative_linear_position",
+        )
+        check.require(
+            motion.get("coordinate_frame") in ("motor_rotor", "output_shaft"),
+            f"运动方案 {profile_id} 的坐标系必须是 motor_rotor 或 output_shaft",
+        )
+        duration_ms = motion.get("duration_ms")
+        settle_ms = motion.get("settle_ms")
+        check.require(
+            isinstance(duration_ms, int)
+            and not isinstance(duration_ms, bool)
+            and 0 < duration_ms <= 0xFFFFFFFF,
+            f"运动方案 {profile_id} 的 duration_ms 必须是正整数",
+        )
+        check.require(
+            isinstance(settle_ms, int)
+            and not isinstance(settle_ms, bool)
+            and 0 <= settle_ms <= 0xFFFFFFFF,
+            f"运动方案 {profile_id} 的 settle_ms 必须是非负整数",
+        )
+        axes = motion.get("axes")
+        check.require(
+            isinstance(axes, list) and bool(axes),
+            f"运动方案 {profile_id} 的 axes 必须是非空数组",
+        )
+        axis_ids: set[str] = set()
+        if isinstance(axes, list):
+            for axis in axes:
+                if not isinstance(axis, dict):
+                    check.errors.append(f"运动方案 {profile_id} 的轴条目必须是对象")
+                    continue
+                axis_id_value = axis.get("axis_id")
+                axis_id = axis_id_value if non_empty_string(axis_id_value) else ""
+                relative_angle = axis.get("relative_angle_millidegrees")
+                following_error = axis.get("max_following_error_millidegrees")
+                check.require(bool(axis_id), f"运动方案 {profile_id} 的轴 ID 不能为空")
+                check.require(
+                    not axis_id or axis_id not in axis_ids,
+                    f"运动方案 {profile_id} 的轴 ID 重复：{axis_id}",
+                )
+                check.require(
+                    isinstance(relative_angle, int)
+                    and not isinstance(relative_angle, bool)
+                    and relative_angle != 0
+                    and -(1 << 31) <= relative_angle < (1 << 31),
+                    f"运动方案 {profile_id} 的轴 {axis_id} 相对角度必须是非零 32 位整数",
+                )
+                check.require(
+                    isinstance(following_error, int)
+                    and not isinstance(following_error, bool)
+                    and 0 < following_error <= 0xFFFFFFFF,
+                    f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数",
+                )
+                if axis_id:
+                    axis_ids.add(axis_id)
+        if profile_id and profile_id not in by_id:
+            by_id[profile_id] = motion
     return by_id
 
 
@@ -436,6 +482,7 @@ def validate_deployments(
     deployments: list[dict[str, Any]],
     topologies: dict[str, dict[str, Any]],
     operations: dict[str, dict[str, Any]],
+    motions: dict[str, dict[str, Any]],
 ) -> None:
     """校验物理部署引用、候选运行方案及同一网口的唯一占用。"""
     deployment_ids: set[str] = set()
@@ -526,6 +573,48 @@ def validate_deployments(
                 check.require(
                     len(cycle_values) == 1 and None not in cycle_values,
                     f"部署 {deployment_id} 启用的运行方案必须使用相同且已确认的周期",
+                )
+
+        motion_profile_id = deployment.get("motion_profile_id")
+        check.require(
+            motion_profile_id is None or non_empty_string(motion_profile_id),
+            f"部署 {deployment_id} 的 motion_profile_id 必须是非空字符串或 null",
+        )
+        if non_empty_string(motion_profile_id):
+            motion = motions.get(motion_profile_id)
+            check.require(
+                motion is not None,
+                f"部署 {deployment_id} 引用了未知运动方案：{motion_profile_id}",
+            )
+            if motion is not None:
+                check.require(
+                    motion.get("status") == "approved",
+                    f"部署 {deployment_id} 只能引用已批准运动方案：{motion_profile_id}",
+                )
+                selected_modes = {
+                    operations[operation_id].get("selected_mode_id")
+                    for operation_id in operation_profile_ids
+                    if operation_id in operations
+                }
+                check.require(
+                    selected_modes == {motion.get("required_mode_id")},
+                    f"部署 {deployment_id} 的运行模式与运动方案要求不一致",
+                )
+                topology = topologies.get(topology_id)
+                topology_axis_ids = {
+                    slave.get("axis_id")
+                    for slave in topology.get("slaves", [])
+                    if isinstance(slave, dict) and non_empty_string(slave.get("axis_id"))
+                } if isinstance(topology, dict) else set()
+                motion_axes = motion.get("axes")
+                motion_axis_ids = {
+                    axis.get("axis_id")
+                    for axis in motion_axes
+                    if isinstance(axis, dict) and non_empty_string(axis.get("axis_id"))
+                } if isinstance(motion_axes, list) else set()
+                check.require(
+                    motion_axis_ids == topology_axis_ids,
+                    f"部署 {deployment_id} 的运动方案必须完整覆盖拓扑中的全部轴",
                 )
 
         # 网口名只在部署层有意义；用主机和接口组成物理资源唯一键。

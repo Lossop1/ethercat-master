@@ -38,6 +38,8 @@ file(GLOB EMASTER_DEPLOYMENT_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/deployments/*.json")
 file(GLOB EMASTER_OPERATION_PROFILE_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/operation_profiles/*.json")
+file(GLOB EMASTER_MOTION_PROFILE_CONFIG_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/motion_profiles/*.json")
 if(NOT EMASTER_TOPOLOGY_CONFIG_FILES OR NOT EMASTER_DEPLOYMENT_CONFIG_FILES OR
    NOT EMASTER_OPERATION_PROFILE_CONFIG_FILES)
     message(FATAL_ERROR
@@ -65,6 +67,7 @@ add_subdirectory(src/catalog)
 add_subdirectory(src/config)
 add_subdirectory(src/messages)
 add_subdirectory(src/session)
+add_subdirectory(src/motion)
 add_subdirectory(src/cia402)
 add_subdirectory(src/multiaxis)
 add_subdirectory(src/cyclic)

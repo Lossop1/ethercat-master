@@ -36,7 +36,7 @@ add_library(emaster::soem_control_session ALIAS emaster_soem_control_session)
 target_link_libraries(emaster_soem_control_session PRIVATE emaster::soem_common soem
                                                          emaster::session emaster::catalog
                                                          emaster::protocol emaster::pdo_codec
-                                                         emaster::multiaxis)
+                                                         emaster::multiaxis emaster::motion)
 target_compile_features(emaster_soem_control_session PUBLIC c_std_11)
 target_include_directories(
     emaster_soem_control_session

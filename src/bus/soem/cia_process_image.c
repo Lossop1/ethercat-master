@@ -303,7 +303,7 @@ bool emaster_cia_process_image_update_output(
     const emaster_session_axis_plan_t *axis,
     emaster_cia_process_image_t *image,
     uint16_t control_word,
-    int32_t hold_target_position,
+    int32_t target_position,
     uint8_t *output,
     size_t output_capacity)
 {
@@ -320,7 +320,7 @@ bool emaster_cia_process_image_update_output(
     if (image->rx_target_position_ordinal != SIZE_MAX)
     {
         image->rx_values[image->rx_target_position_ordinal].value.signed_value =
-            hold_target_position;
+            target_position;
     }
     return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
                                     image->rx_field_count, image->rx_values,

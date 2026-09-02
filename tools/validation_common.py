@@ -59,11 +59,14 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_documents(directory: Path, kind: str, check: Validation) -> list[dict[str, Any]]:
+def load_documents(
+    directory: Path, kind: str, check: Validation, required: bool = True
+) -> list[dict[str, Any]]:
     """按文件名稳定排序加载一类配置，并把读取错误转为可汇总的校验错误。"""
     documents: list[dict[str, Any]] = []
     paths = sorted(directory.glob("*.json")) if directory.is_dir() else []
-    check.require(bool(paths), f"未找到{kind}配置：{directory}")
+    if required:
+        check.require(bool(paths), f"未找到{kind}配置：{directory}")
     for path in paths:
         try:
             document = load_json(path)

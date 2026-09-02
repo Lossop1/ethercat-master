@@ -39,7 +39,7 @@
 - `ptp4l-enp49s0.service`、`livo-drivers.service`、`robot-ui-preview.service` 均保持停止；
 - chrony 已选择 `time.neu.edu.cn`，`timedatectl` 报告 NTP 已同步，采集时系统时间与 NTP 的
   偏差约为 `0.07 ms`；
-- Orange Pi 上的 Debug、RelWithDebInfo、资料一致性和 cppcheck 检查均已通过；
+- Orange Pi 上的 Debug、RelWithDebInfo、项目配置一致性和 cppcheck 检查均已通过；
 - 受限 PRE-OP 已确认一台从站身份与当前部署拓扑一致并恢复 INIT。首次报告中的
   `1C12:02`、`1C13:02` 失败来自读取计划无依据地预读第二个分配项，不能作为最终通过证据。
 - 修正计划后重新采集的候选记录为 `orangepi-bench-20260901T023814Z.json`，SHA-256 为

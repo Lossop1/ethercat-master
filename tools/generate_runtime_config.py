@@ -11,6 +11,7 @@ from typing import Any
 from runtime_config_model import (
     deployment_values,
     load_documents,
+    motion_values,
     operation_values,
     required_string,
     topology_values,
@@ -20,6 +21,15 @@ from runtime_config_model import (
 def c_string(value: str) -> str:
     """使用 JSON 转义规则生成可移植的 C 字符串字面量。"""
     return json.dumps(value, ensure_ascii=True)
+
+
+def c_int32(value: int) -> str:
+    """生成可移植的 32 位有符号整数常量，包括无法直接取正值的 INT32_MIN。"""
+    if value == -(1 << 31):
+        return "(-INT32_C(2147483647) - INT32_C(1))"
+    if value < 0:
+        return f"(-INT32_C({-value}))"
+    return f"INT32_C({value})"
 
 
 def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
@@ -82,6 +92,7 @@ def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
             mode_initializers.append(
                 f"    {{{c_string(mode['id'])}, INT8_C({mode['value']}), "
                 f"{rx_pointer}, {rx_count}, {tx_pointer}, {tx_count}, "
+                f"EMASTER_MODE_DISPLAY_{mode['mode_display_policy'].upper()}, "
                 f"{sdo_pointer}, {sdo_count}}}"
             )
         if mode_initializers:
@@ -120,7 +131,7 @@ def operation_initializers(operations: list[dict[str, Any]]) -> str:
         .has_cycle_ns = {'true' if operation['cycle_present'] else 'false'},
         .cycle_ns = UINT32_C({operation['cycle_ns']}),
         .has_sync0_shift_ns = {'true' if operation['shift_present'] else 'false'},
-        .sync0_shift_ns = INT32_C({operation['shift_ns']}),
+        .sync0_shift_ns = {c_int32(operation['shift_ns'])},
         .has_sm2_sync_type = {'true' if operation['sm2_present'] else 'false'},
         .sm2_sync_type = UINT16_C(0x{operation['sm2_type']:04X}),
         .has_sm3_sync_type = {'true' if operation['sm3_present'] else 'false'},
@@ -131,6 +142,46 @@ def operation_initializers(operations: list[dict[str, Any]]) -> str:
     }}"""
         )
     return ",\n".join(rendered)
+
+
+def motion_declarations(motions: list[dict[str, Any]]) -> tuple[str, str]:
+    """生成运动方案的每轴参数数组和只读目录。"""
+    declarations: list[str] = []
+    initializers: list[str] = []
+    for ordinal, motion in enumerate(motions):
+        axes_name = f"motion_{ordinal}_axes"
+        declarations.append(
+            f"static const emaster_motion_axis_config_t {axes_name}[] = {{\n"
+            + ",\n".join(
+                "    {"
+                f"{c_string(axis['axis_id'])}, "
+                f"{c_int32(axis['relative_angle_millidegrees'])}, "
+                f"UINT32_C({axis['max_following_error_millidegrees']})"
+                "}"
+                for axis in motion["axes"]
+            )
+            + "\n};"
+        )
+        initializers.append(
+            "    {"
+            f"{c_string(motion['id'])}, "
+            f"EMASTER_MOTION_PROFILE_{motion['status'].upper()}, "
+            f"{c_string(motion['required_mode_id'])}, "
+            f"EMASTER_MOTION_TRAJECTORY_{motion['trajectory'].upper()}, "
+            f"EMASTER_MOTION_COORDINATE_{motion['coordinate'].upper()}, "
+            f"UINT32_C({motion['duration_ms']}), UINT32_C({motion['settle_ms']}), "
+            f"{axes_name}, sizeof({axes_name}) / sizeof({axes_name}[0])"
+            "}"
+        )
+    if motions:
+        array = (
+            "static const emaster_motion_profile_t motion_profiles[] = {\n"
+            + ",\n".join(initializers)
+            + "\n};"
+        )
+    else:
+        array = "static const emaster_motion_profile_t motion_profiles[1] = {{0}};"
+    return "\n\n".join(declarations), array
 
 
 def render_topologies(
@@ -166,6 +217,7 @@ def render_deployments(
     deployments: list[dict[str, Any]],
     topologies: list[dict[str, Any]],
     operations: list[dict[str, Any]],
+    motions: list[dict[str, Any]],
 ) -> tuple[str, str]:
     """渲染部署允许使用的方案指针数组和部署初始化器。"""
     topology_ordinals = {
@@ -174,6 +226,7 @@ def render_deployments(
     operation_ordinals = {
         operation["id"]: ordinal for ordinal, operation in enumerate(operations)
     }
+    motion_ordinals = {motion["id"]: ordinal for ordinal, motion in enumerate(motions)}
     pointer_arrays: list[str] = []
     initializers = []
     for ordinal, deployment in enumerate(deployments):
@@ -197,6 +250,11 @@ def render_deployments(
             operation_count = "0U"
 
         topology_ordinal = topology_ordinals[deployment["topology"]]
+        motion_pointer = (
+            f"&motion_profiles[{motion_ordinals[deployment['motion_profile_id']]}]"
+            if deployment["motion_profile_id"] is not None
+            else "NULL"
+        )
         initializers.append(
             "    {"
             + c_string(deployment["id"])
@@ -207,7 +265,7 @@ def render_deployments(
             + ", "
             + c_string(deployment["management"])
             + f", &topologies[{topology_ordinal}], "
-            + f"{operation_pointer}, {operation_count}"
+            + f"{operation_pointer}, {operation_count}, {motion_pointer}"
             + "}"
         )
     return "\n\n".join(pointer_arrays), ",\n".join(initializers)
@@ -217,6 +275,7 @@ def generate(
     topology_documents: list[dict[str, Any]],
     deployment_documents: list[dict[str, Any]],
     operation_documents: list[dict[str, Any]],
+    motion_documents: list[dict[str, Any]],
     device_documents: list[dict[str, Any]] | None = None,
 ) -> str:
     """解析各层配置，并生成只读目录及其查找函数。"""
@@ -228,21 +287,24 @@ def generate(
             for document in device_documents
         }
     operations = operation_values(operation_documents, profiles)
+    motions = motion_values(motion_documents)
     deployments = deployment_values(
         deployment_documents,
         topologies,
         operations,
+        motions,
     )
 
     topology_arrays, topology_initializers = render_topologies(topologies)
     operation_declaration_text = "\n\n".join(operation_declarations(operations))
+    motion_declaration_text, motion_array = motion_declarations(motions)
     operation_array = (
         "static const emaster_operation_profile_t operation_profiles[] = {\n"
         + operation_initializers(operations)
         + "\n};"
     )
     operation_pointers, deployment_initializers = render_deployments(
-        deployments, topologies, operations
+        deployments, topologies, operations, motions
     )
     return f"""/* 由 tools/generate_runtime_config.py 生成，禁止手工修改。 */
 #include "emaster/config/runtime_config.h"
@@ -256,6 +318,10 @@ def generate(
 {operation_declaration_text}
 
 {operation_array}
+
+{motion_declaration_text}
+
+{motion_array}
 
 static const emaster_topology_config_t topologies[] = {{
 {topology_initializers},
@@ -321,6 +387,33 @@ const emaster_operation_profile_t *emaster_operation_profile_by_id(const char *p
     return NULL;
 }}
 
+size_t emaster_motion_profile_count(void)
+{{
+    return {len(motions)}U;
+}}
+
+const emaster_motion_profile_t *emaster_motion_profile_at(size_t index)
+{{
+    return index < emaster_motion_profile_count() ? &motion_profiles[index] : NULL;
+}}
+
+const emaster_motion_profile_t *emaster_motion_profile_by_id(const char *profile_id)
+{{
+    size_t index;
+    if (profile_id == NULL)
+    {{
+        return NULL;
+    }}
+    for (index = 0U; index < emaster_motion_profile_count(); ++index)
+    {{
+        if (strcmp(motion_profiles[index].motion_profile_id, profile_id) == 0)
+        {{
+            return &motion_profiles[index];
+        }}
+    }}
+    return NULL;
+}}
+
 size_t emaster_deployment_config_count(void)
 {{
     return sizeof(deployments) / sizeof(deployments[0]);
@@ -374,6 +467,7 @@ def main() -> int:
     parser.add_argument("--topology-input", required=True, type=Path, nargs="+")
     parser.add_argument("--deployment-input", required=True, type=Path, nargs="+")
     parser.add_argument("--operation-input", type=Path, nargs="*", default=[])
+    parser.add_argument("--motion-input", type=Path, nargs="*", default=[])
     parser.add_argument("--device-input", type=Path, nargs="*", default=[])
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -381,10 +475,11 @@ def main() -> int:
     topologies = load_documents(args.topology_input, "拓扑")
     deployments = load_documents(args.deployment_input, "部署")
     operations = load_documents(args.operation_input, "运行方案")
+    motions = load_documents(args.motion_input, "运动方案")
     devices = load_documents(args.device_input, "设备") if args.device_input else None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
-        generate(topologies, deployments, operations, devices),
+        generate(topologies, deployments, operations, motions, devices),
         encoding="utf-8",
         newline="\n",
     )

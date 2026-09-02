@@ -262,7 +262,7 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
             if (!emaster_cia_process_image_update_output(
                     &plan->axes[axis_index], &runtime[axis_index],
                     controller_outputs[axis_index].control_word,
-                    axes[axis_index].hold_target_position, slave->outputs, slave->Obytes))
+                    axes[axis_index].target_position, slave->outputs, slave->Obytes))
             {
                 return false;
             }
@@ -326,6 +326,12 @@ emaster_control_session_status_t emaster_soem_control_session(
     emaster_cia402_controller_t *controllers = NULL;
     emaster_cia402_output_t *controller_outputs = NULL;
     uint16_t *status_words = NULL;
+    int32_t *actual_positions = NULL;
+    int32_t *target_positions = NULL;
+    emaster_position_scale_t *motion_scales = NULL;
+    const emaster_motion_axis_config_t **motion_axis_configs = NULL;
+    emaster_relative_motion_axis_t *motion_axes = NULL;
+    emaster_relative_motion_t motion;
     emaster_multiaxis_coordinator_t coordinator;
     uint8_t *io_map = NULL;
     emaster_control_session_status_t status = EMASTER_CONTROL_SESSION_OK;
@@ -339,6 +345,7 @@ emaster_control_session_status_t emaster_soem_control_session(
     bool process_map_ready = false;
     bool cycle_output_active = false;
     bool safe_output_sent = false;
+    bool motion_initialized = false;
     bool mode_confirmation_started = false;
     uint64_t mode_confirmation_deadline_cycle = 0U;
     uint64_t mode_confirmation_cycles;
@@ -353,6 +360,7 @@ emaster_control_session_status_t emaster_soem_control_session(
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
         plan->cycle_ns;
     memset(report, 0, sizeof(*report));
+    memset(&motion, 0, sizeof(motion));
     report->status = EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     report->axes = axis_storage;
     report->axis_count = plan->axis_count;
@@ -368,6 +376,21 @@ emaster_control_session_status_t emaster_soem_control_session(
     {
         status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
         goto cleanup;
+    }
+    if (plan->motion_profile != NULL)
+    {
+        actual_positions = calloc(plan->axis_count, sizeof(*actual_positions));
+        target_positions = calloc(plan->axis_count, sizeof(*target_positions));
+        motion_scales = calloc(plan->axis_count, sizeof(*motion_scales));
+        motion_axis_configs = calloc(plan->axis_count, sizeof(*motion_axis_configs));
+        motion_axes = calloc(plan->axis_count, sizeof(*motion_axes));
+        if (actual_positions == NULL || target_positions == NULL ||
+            motion_scales == NULL || motion_axis_configs == NULL ||
+            motion_axes == NULL)
+        {
+            status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
+            goto cleanup;
+        }
     }
     if (!emaster_multiaxis_coordinator_init(&coordinator, controllers, plan->axis_count))
     {
@@ -494,6 +517,19 @@ emaster_control_session_status_t emaster_soem_control_session(
         {
             status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
             goto cleanup;
+        }
+        read_position_scale(&context, (uint16_t)(axis_index + 1U),
+                            &axis_storage[axis_index].position_scale);
+        if (plan->motion_profile != NULL)
+        {
+            if (!axis_storage[axis_index].position_scale.read_succeeded ||
+                axis->motion_axis == NULL)
+            {
+                status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
+                goto cleanup;
+            }
+            motion_scales[axis_index] = axis_storage[axis_index].position_scale;
+            motion_axis_configs[axis_index] = axis->motion_axis;
         }
     }
 
@@ -690,7 +726,12 @@ emaster_control_session_status_t emaster_soem_control_session(
         axis_storage[axis_index].status_word = status_word;
         axis_storage[axis_index].initial_actual_position = actual_position;
         axis_storage[axis_index].actual_position = actual_position;
-        axis_storage[axis_index].hold_target_position = actual_position;
+        axis_storage[axis_index].target_position = actual_position;
+        if (plan->motion_profile != NULL)
+        {
+            actual_positions[axis_index] = actual_position;
+            target_positions[axis_index] = actual_position;
+        }
         if (!emaster_cia_process_image_update_output(&plan->axes[axis_index], &runtime[axis_index],
                                 UINT16_C(0), actual_position,
                                 context.slavelist[axis_index + 1U].outputs,
@@ -768,6 +809,10 @@ emaster_control_session_status_t emaster_soem_control_session(
                 axis_storage[axis_index].status_word = status_word;
                 axis_storage[axis_index].actual_position = actual_position;
                 status_words[axis_index] = status_word;
+                if (plan->motion_profile != NULL)
+                {
+                    actual_positions[axis_index] = actual_position;
+                }
             }
 
             frame.sequence = report->cycle_count;
@@ -818,7 +863,9 @@ emaster_control_session_status_t emaster_soem_control_session(
                         : axis_result->mode_display_sdo_read &&
                               axis_result->mode_display ==
                                   plan->axes[axis_index].operation_mode->value;
-                if (!axis_result->mode_display_match)
+                if (!axis_result->mode_display_match &&
+                    plan->axes[axis_index].operation_mode->mode_display_policy ==
+                        EMASTER_MODE_DISPLAY_REQUIRED)
                 {
                     all_modes_confirmed = false;
                 }
@@ -830,15 +877,6 @@ emaster_control_session_status_t emaster_soem_control_session(
                 if (!operation_enabled)
                 {
                     all_axes_enabled = false;
-                }
-                if (!emaster_cia_process_image_update_output(&plan->axes[axis_index], &runtime[axis_index],
-                                        controller_outputs[axis_index].control_word,
-                                        axis_result->hold_target_position,
-                                        context.slavelist[axis_index + 1U].outputs,
-                                        context.slavelist[axis_index + 1U].Obytes))
-                {
-                    status = EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
-                    goto cleanup;
                 }
             }
             report->all_axes_enabled_reached |= all_axes_enabled;
@@ -853,6 +891,86 @@ emaster_control_session_status_t emaster_soem_control_session(
             {
                 status = EMASTER_CONTROL_SESSION_FEEDBACK_INVALID;
                 goto cleanup;
+            }
+            if (plan->motion_profile != NULL && all_axes_enabled && all_modes_confirmed)
+            {
+                emaster_relative_motion_status_t motion_status;
+
+                if (!motion_initialized)
+                {
+                    int32_t *initial_positions = target_positions;
+
+                    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+                    {
+                        initial_positions[axis_index] =
+                            axis_storage[axis_index].initial_actual_position;
+                    }
+                    motion_status = emaster_relative_motion_init(
+                        plan->motion_profile, motion_axis_configs, motion_scales,
+                        initial_positions, plan->axis_count, plan->cycle_ns,
+                        motion_axes, &motion);
+                    if (motion_status != EMASTER_RELATIVE_MOTION_ACTIVE)
+                    {
+                        status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
+                        goto cleanup;
+                    }
+                    motion_initialized = true;
+                    report->motion_started = true;
+                    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+                    {
+                        axis_storage[axis_index].motion_final_position =
+                            motion_axes[axis_index].final_position;
+                        axis_storage[axis_index].max_following_error_counts =
+                            motion_axes[axis_index].max_following_error_counts;
+                    }
+                }
+                motion_status = emaster_relative_motion_step(
+                    &motion, actual_positions, target_positions, plan->axis_count);
+                /* 即使本周期因跟随误差退出，也要把触发值保留到会话报告。 */
+                for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+                {
+                    axis_storage[axis_index].max_observed_following_error_counts =
+                        motion_axes[axis_index].max_observed_following_error_counts;
+                }
+                if (motion_status == EMASTER_RELATIVE_MOTION_FOLLOWING_ERROR)
+                {
+                    status = EMASTER_CONTROL_SESSION_FOLLOWING_ERROR;
+                    goto cleanup;
+                }
+                if (motion_status != EMASTER_RELATIVE_MOTION_ACTIVE &&
+                    motion_status != EMASTER_RELATIVE_MOTION_SETTLING &&
+                    motion_status != EMASTER_RELATIVE_MOTION_COMPLETE)
+                {
+                    status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
+                    goto cleanup;
+                }
+                for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+                {
+                    axis_storage[axis_index].target_position =
+                        target_positions[axis_index];
+                }
+                report->motion_completed =
+                    motion_status == EMASTER_RELATIVE_MOTION_COMPLETE;
+            }
+            for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+            {
+                emaster_control_session_axis_result_t *axis_result =
+                    &axis_storage[axis_index];
+
+                if (!emaster_cia_process_image_update_output(
+                        &plan->axes[axis_index], &runtime[axis_index],
+                        controller_outputs[axis_index].control_word,
+                        axis_result->target_position,
+                        context.slavelist[axis_index + 1U].outputs,
+                        context.slavelist[axis_index + 1U].Obytes))
+                {
+                    status = EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
+                    goto cleanup;
+                }
+            }
+            if (report->motion_completed)
+            {
+                break;
             }
             if (stop_requested != NULL && stop_requested(stop_user_data))
             {
@@ -908,8 +1026,11 @@ cleanup:
                                      UINT16_C(0x1C32), &axis_result->sm2_diagnostic);
                 read_sync_diagnostic(&context, (uint16_t)(axis_index + 1U),
                                      UINT16_C(0x1C33), &axis_result->sm3_diagnostic);
-                read_position_scale(&context, (uint16_t)(axis_index + 1U),
-                                    &axis_result->position_scale);
+                if (!axis_result->position_scale.read_succeeded)
+                {
+                    read_position_scale(&context, (uint16_t)(axis_index + 1U),
+                                        &axis_result->position_scale);
+                }
             }
         }
         report->safe_output_sent = safe_output_sent;
@@ -922,6 +1043,11 @@ cleanup:
         ecx_close(&context);
     }
     free(status_words);
+    free(motion_axes);
+    free(motion_axis_configs);
+    free(motion_scales);
+    free(target_positions);
+    free(actual_positions);
     free(controller_outputs);
     free(controllers);
     free(io_map);

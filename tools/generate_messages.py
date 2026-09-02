@@ -76,9 +76,11 @@ MESSAGE_KEYS = [
     "control_session_pdo_assignment_line",
     "control_session_diagnostic_line",
     "control_session_scale_line",
+    "control_session_motion_line",
     "control_session_summary_line",
     "control_session_match",
     "control_session_mismatch",
+    "control_session_not_configured",
     "control_session_sdo_write_failed",
     "control_session_sdo_readback_failed",
     "control_session_interface_not_ready",
@@ -91,6 +93,8 @@ MESSAGE_KEYS = [
     "control_session_feedback_invalid",
     "control_session_controller_failed",
     "control_session_drive_fault",
+    "control_session_motion_invalid",
+    "control_session_following_error",
     "control_session_cycle_wait_failed",
     "control_session_safe_stop_failed",
     "control_session_signal_failed",
@@ -123,7 +127,8 @@ MESSAGE_FORMATS = {
     "control_session_pdo_assignment_line": ("u", "X", "X", "s", "X"),
     "control_session_diagnostic_line": ("u", "s", "X", "X", "X", "X", "s", "u", "u", "u", "s", "s", "u", "u", "u", "s"),
     "control_session_scale_line": ("u", "s", "u", "u", "u", "u"),
-    "control_session_summary_line": ("s", "s", "s", "u", "d", "u", "s", "s", "s", "s", "s"),
+    "control_session_motion_line": ("u", "d", "d", "u", "u"),
+    "control_session_summary_line": ("s", "s", "s", "s", "s", "u", "d", "u", "s", "s", "s", "s", "s"),
 }
 
 PRINTF_CONVERSION = re.compile(

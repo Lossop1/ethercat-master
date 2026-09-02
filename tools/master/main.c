@@ -94,6 +94,10 @@ static const char *session_status_text(emaster_control_session_status_t status)
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_CONTROLLER_FAILED);
         case EMASTER_CONTROL_SESSION_DRIVE_FAULT:
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_DRIVE_FAULT);
+        case EMASTER_CONTROL_SESSION_MOTION_INVALID:
+            return emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_INVALID);
+        case EMASTER_CONTROL_SESSION_FOLLOWING_ERROR:
+            return emaster_text(EMASTER_TEXT_CONTROL_SESSION_FOLLOWING_ERROR);
         case EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED:
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_CYCLE_WAIT_FAILED);
         case EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED:
@@ -189,7 +193,7 @@ int main(int argc, char **argv)
                 result_text(axis->mode_display_match), (int)axis->requested_mode,
                 (int)axis->mode_display, (unsigned int)axis->status_word,
                 (unsigned int)axis->control_word, (int)axis->initial_actual_position,
-                (int)axis->actual_position, (int)axis->hold_target_position,
+                (int)axis->actual_position, (int)axis->target_position,
                 result_text(axis->operation_enabled_seen),
                 result_text(axis->mode_command_sdo_read), (int)axis->mode_command_sdo,
                 result_text(axis->mode_display_sdo_read), (int)axis->mode_display_sdo,
@@ -231,10 +235,25 @@ int main(int argc, char **argv)
                 (unsigned long)axis->position_scale.encoder_motor_revolutions,
                 (unsigned long)axis->position_scale.gear_motor_revolutions,
                 (unsigned long)axis->position_scale.gear_shaft_revolutions);
+        if (plan.motion_profile != NULL)
+        {
+            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_LINE),
+                    (unsigned int)axis->position,
+                    (int)axis->motion_final_position,
+                    (int)axis->target_position,
+                    (unsigned long long)axis->max_following_error_counts,
+                    (unsigned long long)axis->max_observed_following_error_counts);
+        }
     }
     fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUMMARY_LINE),
             result_text(report.safe_op_reached), result_text(report.op_reached),
             result_text(report.all_axes_enabled_reached),
+            plan.motion_profile == NULL
+                ? emaster_text(EMASTER_TEXT_CONTROL_SESSION_NOT_CONFIGURED)
+                : result_text(report.motion_started),
+            plan.motion_profile == NULL
+                ? emaster_text(EMASTER_TEXT_CONTROL_SESSION_NOT_CONFIGURED)
+                : result_text(report.motion_completed),
             (unsigned int)report.expected_wkc, report.actual_wkc,
             (unsigned long long)report.cycle_count, result_text(report.stop_requested),
             result_text(report.safe_output_sent), result_text(report.safe_state_reached),
