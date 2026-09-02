@@ -82,6 +82,10 @@ typedef struct
     bool identity_match;
     bool pdo_match;
     bool process_map_match;
+    uint16_t pdo_assignment_failed_index;
+    uint8_t pdo_assignment_failed_subindex;
+    bool pdo_assignment_abort_code_available;
+    uint32_t pdo_assignment_abort_code;
     bool output_initialized;
     bool input_decoded;
     bool mode_display_match;
@@ -91,6 +95,8 @@ typedef struct
     int8_t mode_command_sdo;
     bool mode_display_sdo_read;
     int8_t mode_display_sdo;
+    bool input_mode_sdo_read;
+    uint16_t input_mode_sdo;
     uint16_t status_word;
     uint16_t control_word;
     int32_t initial_actual_position;

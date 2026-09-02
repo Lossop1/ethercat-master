@@ -2,6 +2,7 @@
 #define EMASTER_SOEM_COMMON_H
 
 #include "emaster/protocol/pdo_layout.h"
+#include "emaster/catalog/slave_profile.h"
 
 #include "soem/soem.h"
 
@@ -35,5 +36,18 @@ bool emaster_soem_read_u32(void *user_data, uint16_t index, uint8_t subindex,
 /* 发现指定从站当前生效的完整 PDO 布局；调用者负责析构结果。 */
 bool emaster_soem_discover_pdo_layout(ecx_contextt *context, uint16_t slave,
                                       emaster_pdo_layout_t *layout);
+
+typedef struct
+{
+    uint16_t failed_index;
+    uint8_t failed_subindex;
+    bool abort_code_available;
+    uint32_t abort_code;
+} emaster_soem_pdo_assignment_result_t;
+
+/* 在 PRE-OP 选择设备模块并按方案分配 RxPDO/TxPDO，所有写入均读回确认。 */
+bool emaster_soem_assign_pdo_set(ecx_contextt *context, uint16_t slave,
+                                 const emaster_pdo_set_profile_t *pdo_set,
+                                 emaster_soem_pdo_assignment_result_t *result);
 
 #endif

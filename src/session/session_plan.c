@@ -179,7 +179,9 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
                              EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);
         }
         operation_mode = find_operation_mode(operation);
-        if (operation_mode == NULL)
+        if (operation_mode == NULL ||
+            (operation_mode->safeop_to_op_sdo_write_count > 0U &&
+             operation_mode->safeop_to_op_sdo_writes == NULL))
         {
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);
@@ -195,6 +197,14 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
         {
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_PDO_SET_NOT_FOUND);
+        }
+        if (pdo_set->module_slot == 0U ||
+            (pdo_set->mode_init_on_safeop_to_op &&
+             (pdo_set->mode_init_index == 0U ||
+              pdo_set->mode_init_value != operation_mode->value)))
+        {
+            return fail_plan(result, axis_storage, topology->slave_count,
+                             EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);
         }
         if (axis_index == 0U)
         {
@@ -238,7 +248,8 @@ emaster_session_axis_validate_layout(const emaster_session_axis_plan_t *axis,
     {
         return EMASTER_SESSION_LAYOUT_MATCH;
     }
-    return axis->device_profile->supports_pdo_configuration
+    return (axis->device_profile->supports_pdo_assignment ||
+            axis->device_profile->supports_pdo_configuration)
                ? EMASTER_SESSION_LAYOUT_CONFIGURATION_REQUIRED
                : EMASTER_SESSION_LAYOUT_CONFIGURATION_UNSUPPORTED;
 }

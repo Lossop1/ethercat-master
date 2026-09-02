@@ -126,6 +126,17 @@ def validate_operation_profile(
             selected_mode_id is not None,
             f"已批准运行方案 {operation_id} 缺少 selected_mode_id",
         )
+    mode_initialization = pdo_set.get("mode_initialization") if pdo_set is not None else None
+    if isinstance(mode_initialization, dict) and selected_mode_id is not None and isinstance(modes, list):
+        selected_mode = next(
+            (mode for mode in modes if isinstance(mode, dict) and mode.get("id") == selected_mode_id),
+            None,
+        )
+        check.require(
+            selected_mode is not None and
+            selected_mode.get("value") == mode_initialization.get("value"),
+            f"运行方案 {operation_id} 的模式值与所选 PDO 模块初始化值不一致",
+        )
     return len(check.errors) == initial_error_count
 
 
@@ -288,6 +299,47 @@ def validate_modes(
                         field in available,
                         f"运行方案 {operation_id} 的模式 {mode_label} 引用了不存在的 PDO 字段：{field}",
                     )
+        sdo_writes = mode.get("safeop_to_op_sdo_writes", [])
+        check.require(
+            isinstance(sdo_writes, list),
+            f"运行方案 {operation_id} 的模式 {mode_label} 的 safeop_to_op_sdo_writes 必须是数组",
+        )
+        if isinstance(sdo_writes, list):
+            addresses: set[tuple[int, int]] = set()
+            for command in sdo_writes:
+                if not isinstance(command, dict):
+                    check.errors.append(
+                        f"运行方案 {operation_id} 的模式 {mode_label} 包含无效 SDO 写入"
+                    )
+                    continue
+                index_valid = validate_hex_value(
+                    check, command.get("index"),
+                    f"运行方案 {operation_id} 的模式 {mode_label} SDO index", 0xFFFF,
+                )
+                subindex = command.get("subindex")
+                subindex_valid = (
+                    isinstance(subindex, int) and not isinstance(subindex, bool) and
+                    0 <= subindex <= 0xFF
+                )
+                check.require(
+                    subindex_valid,
+                    f"运行方案 {operation_id} 的模式 {mode_label} SDO subindex 超出范围",
+                )
+                check.require(
+                    command.get("type") == "u16",
+                    f"运行方案 {operation_id} 的模式 {mode_label} SDO 类型当前必须为 u16",
+                )
+                validate_hex_value(
+                    check, command.get("value"),
+                    f"运行方案 {operation_id} 的模式 {mode_label} SDO value", 0xFFFF,
+                )
+                if index_valid and subindex_valid:
+                    address = (hex_value(command["index"]), subindex)
+                    check.require(
+                        address not in addresses,
+                        f"运行方案 {operation_id} 的模式 {mode_label} SDO 地址重复",
+                    )
+                    addresses.add(address)
 
 
 def validate_topology(

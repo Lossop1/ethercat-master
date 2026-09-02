@@ -5,6 +5,210 @@
 #include <stdio.h>
 #include <string.h>
 
+static bool write_u8(ecx_contextt *context, uint16_t slave, uint16_t index,
+                     uint8_t subindex, uint8_t value)
+{
+    return context != NULL &&
+           ecx_SDOwrite(context, slave, index, subindex, FALSE, (int)sizeof(value), &value,
+                        EC_TIMEOUTRXM) > 0;
+}
+
+static bool write_u16(ecx_contextt *context, uint16_t slave, uint16_t index,
+                      uint8_t subindex, uint16_t value)
+{
+    uint16_t raw = htoes(value);
+
+    return context != NULL &&
+           ecx_SDOwrite(context, slave, index, subindex, FALSE, (int)sizeof(raw), &raw,
+                        EC_TIMEOUTRXM) > 0;
+}
+
+static bool write_u32(ecx_contextt *context, uint16_t slave, uint16_t index,
+                      uint8_t subindex, uint32_t value)
+{
+    uint32_t raw = htoel(value);
+
+    return context != NULL &&
+           ecx_SDOwrite(context, slave, index, subindex, FALSE, (int)sizeof(raw), &raw,
+                        EC_TIMEOUTRXM) > 0;
+}
+
+static bool read_u8(ecx_contextt *context, uint16_t slave, uint16_t index,
+                    uint8_t subindex, uint8_t *value)
+{
+    int size = value == NULL ? 0 : (int)sizeof(*value);
+
+    return context != NULL && value != NULL &&
+           ecx_SDOread(context, slave, index, subindex, FALSE, &size, value,
+                       EC_TIMEOUTRXM) > 0 &&
+           size == (int)sizeof(*value);
+}
+
+static bool read_u16(ecx_contextt *context, uint16_t slave, uint16_t index,
+                     uint8_t subindex, uint16_t *value)
+{
+    uint16_t raw;
+    int size = (int)sizeof(raw);
+
+    if (context == NULL || value == NULL ||
+        ecx_SDOread(context, slave, index, subindex, FALSE, &size, &raw,
+                    EC_TIMEOUTRXM) <= 0 || size != (int)sizeof(raw))
+    {
+        return false;
+    }
+    *value = etohs(raw);
+    return true;
+}
+
+static bool read_u32(ecx_contextt *context, uint16_t slave, uint16_t index,
+                     uint8_t subindex, uint32_t *value)
+{
+    uint32_t raw;
+    int size = (int)sizeof(raw);
+
+    if (context == NULL || value == NULL ||
+        ecx_SDOread(context, slave, index, subindex, FALSE, &size, &raw,
+                    EC_TIMEOUTRXM) <= 0 || size != (int)sizeof(raw))
+    {
+        return false;
+    }
+    *value = etohl(raw);
+    return true;
+}
+
+static bool assignment_failed(ecx_contextt *context,
+                              emaster_soem_pdo_assignment_result_t *result,
+                              uint16_t index, uint8_t subindex)
+{
+    ec_errort error;
+
+    result->failed_index = index;
+    result->failed_subindex = subindex;
+    while (context != NULL && ecx_poperror(context, &error))
+    {
+        if (error.Etype == EC_ERR_TYPE_SDO_ERROR && error.Index == index &&
+            error.SubIdx == subindex)
+        {
+            result->abort_code_available = true;
+            result->abort_code = (uint32_t)error.AbortCode;
+        }
+    }
+    return false;
+}
+
+static bool assign_direction(ecx_contextt *context, uint16_t slave, uint16_t index,
+                             const emaster_pdo_mapping_profile_t *mappings,
+                             size_t mapping_count,
+                             emaster_soem_pdo_assignment_result_t *result)
+{
+    size_t ordinal;
+    uint8_t count;
+    uint16_t observed_index;
+
+    if (mapping_count > UINT8_MAX || (mapping_count > 0U && mappings == NULL) ||
+        result == NULL)
+    {
+        return false;
+    }
+    if (!write_u8(context, slave, index, UINT8_C(0), UINT8_C(0)))
+    {
+        return assignment_failed(context, result, index, UINT8_C(0));
+    }
+    if (!read_u8(context, slave, index, UINT8_C(0), &count) || count != 0U)
+    {
+        return assignment_failed(context, result, index, UINT8_C(0));
+    }
+    for (ordinal = 0U; ordinal < mapping_count; ++ordinal)
+    {
+        if (!write_u16(context, slave, index, (uint8_t)(ordinal + 1U),
+                       mappings[ordinal].index) ||
+            !read_u16(context, slave, index, (uint8_t)(ordinal + 1U), &observed_index) ||
+            observed_index != mappings[ordinal].index)
+        {
+            return assignment_failed(context, result, index,
+                                     (uint8_t)(ordinal + 1U));
+        }
+    }
+    if (!write_u8(context, slave, index, UINT8_C(0), (uint8_t)mapping_count) ||
+        !read_u8(context, slave, index, UINT8_C(0), &count))
+    {
+        return assignment_failed(context, result, index, UINT8_C(0));
+    }
+    return count == (uint8_t)mapping_count;
+}
+
+static bool assignment_matches(ecx_contextt *context, uint16_t slave, uint16_t index,
+                               const emaster_pdo_mapping_profile_t *mappings,
+                               size_t mapping_count, bool *matches,
+                               emaster_soem_pdo_assignment_result_t *result)
+{
+    uint8_t count;
+    size_t ordinal;
+
+    if (mappings == NULL || matches == NULL || result == NULL ||
+        !read_u8(context, slave, index, UINT8_C(0), &count))
+    {
+        return assignment_failed(context, result, index, UINT8_C(0));
+    }
+    *matches = (size_t)count == mapping_count;
+    for (ordinal = 0U; *matches && ordinal < mapping_count; ++ordinal)
+    {
+        uint16_t observed_index;
+
+        if (!read_u16(context, slave, index, (uint8_t)(ordinal + 1U),
+                      &observed_index))
+        {
+            return assignment_failed(context, result, index,
+                                     (uint8_t)(ordinal + 1U));
+        }
+        *matches = observed_index == mappings[ordinal].index;
+    }
+    return true;
+}
+
+bool emaster_soem_assign_pdo_set(ecx_contextt *context, uint16_t slave,
+                                 const emaster_pdo_set_profile_t *pdo_set,
+                                 emaster_soem_pdo_assignment_result_t *result)
+{
+    uint32_t module_ident;
+    uint32_t observed_module_ident;
+    bool rx_matches;
+    bool tx_matches;
+
+    if (result != NULL)
+    {
+        memset(result, 0, sizeof(*result));
+    }
+    if (context == NULL || slave == 0U || pdo_set == NULL || result == NULL ||
+        pdo_set->rx_mappings == NULL || pdo_set->tx_mappings == NULL)
+    {
+        return false;
+    }
+    /* F030 是模块化从站的配置模块列表；先选择方案对应模块，再分配 PDO。 */
+    module_ident = pdo_set->module_ident;
+    if (!write_u32(context, slave, UINT16_C(0xF030), pdo_set->module_slot, module_ident) ||
+        !read_u32(context, slave, UINT16_C(0xF030), pdo_set->module_slot,
+                  &observed_module_ident) ||
+        observed_module_ident != module_ident)
+    {
+        return assignment_failed(context, result, UINT16_C(0xF030),
+                                 pdo_set->module_slot);
+    }
+    if (!assignment_matches(context, slave, UINT16_C(0x1C12), pdo_set->rx_mappings,
+                            pdo_set->rx_mapping_count, &rx_matches, result) ||
+        !assignment_matches(context, slave, UINT16_C(0x1C13), pdo_set->tx_mappings,
+                            pdo_set->tx_mapping_count, &tx_matches, result))
+    {
+        return false;
+    }
+    return (rx_matches ||
+            assign_direction(context, slave, UINT16_C(0x1C12), pdo_set->rx_mappings,
+                             pdo_set->rx_mapping_count, result)) &&
+           (tx_matches ||
+            assign_direction(context, slave, UINT16_C(0x1C13), pdo_set->tx_mappings,
+                             pdo_set->tx_mapping_count, result));
+}
+
 bool emaster_soem_restore_init(ecx_contextt *context)
 {
     if (context == NULL)

@@ -339,6 +339,9 @@ emaster_control_session_status_t emaster_soem_control_session(
     bool process_map_ready = false;
     bool cycle_output_active = false;
     bool safe_output_sent = false;
+    bool mode_confirmation_started = false;
+    uint64_t mode_confirmation_deadline_cycle = 0U;
+    uint64_t mode_confirmation_cycles;
 
     if (plan == NULL || plan->status != EMASTER_SESSION_PLAN_READY || plan->deployment == NULL ||
         plan->deployment->ethercat_interface == NULL || axis_storage == NULL ||
@@ -346,6 +349,9 @@ emaster_control_session_status_t emaster_soem_control_session(
     {
         return EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     }
+    mode_confirmation_cycles =
+        ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
+        plan->cycle_ns;
     memset(report, 0, sizeof(*report));
     report->status = EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     report->axes = axis_storage;
@@ -402,6 +408,7 @@ emaster_control_session_status_t emaster_soem_control_session(
     {
         const emaster_session_axis_plan_t *axis = &plan->axes[axis_index];
         const ec_slavet *slave = &context.slavelist[axis_index + 1U];
+        emaster_session_layout_status_t layout_status;
         uint16_t sm2_value;
         uint16_t sm3_value;
         int8_t mode_value;
@@ -417,9 +424,45 @@ emaster_control_session_status_t emaster_soem_control_session(
             goto cleanup;
         }
         if (!emaster_soem_discover_pdo_layout(&context, (uint16_t)(axis_index + 1U),
-                                              &runtime[axis_index].layout) ||
-            emaster_session_axis_validate_layout(axis, &runtime[axis_index].layout) !=
-                EMASTER_SESSION_LAYOUT_MATCH ||
+                                              &runtime[axis_index].layout))
+        {
+            status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
+            goto cleanup;
+        }
+        layout_status =
+            emaster_session_axis_validate_layout(axis, &runtime[axis_index].layout);
+        if (layout_status == EMASTER_SESSION_LAYOUT_CONFIGURATION_REQUIRED &&
+            axis->device_profile->supports_pdo_assignment)
+        {
+            emaster_soem_pdo_assignment_result_t assignment_result;
+
+            emaster_pdo_layout_destroy(&runtime[axis_index].layout);
+            if (!emaster_soem_assign_pdo_set(&context, (uint16_t)(axis_index + 1U),
+                                             axis->pdo_set, &assignment_result))
+            {
+                axis_storage[axis_index].pdo_assignment_failed_index =
+                    assignment_result.failed_index;
+                axis_storage[axis_index].pdo_assignment_failed_subindex =
+                    assignment_result.failed_subindex;
+                axis_storage[axis_index].pdo_assignment_abort_code_available =
+                    assignment_result.abort_code_available;
+                axis_storage[axis_index].pdo_assignment_abort_code =
+                    assignment_result.abort_code;
+                status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
+                goto cleanup;
+            }
+            if (
+                !emaster_soem_discover_pdo_layout(
+                    &context, (uint16_t)(axis_index + 1U),
+                    &runtime[axis_index].layout))
+            {
+                status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
+                goto cleanup;
+            }
+            layout_status =
+                emaster_session_axis_validate_layout(axis, &runtime[axis_index].layout);
+        }
+        if (layout_status != EMASTER_SESSION_LAYOUT_MATCH ||
             !emaster_cia_process_image_init(axis, &runtime[axis_index]))
         {
             status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
@@ -431,8 +474,9 @@ emaster_control_session_status_t emaster_soem_control_session(
                        axis->operation_profile->sm2_sync_type) ||
             !write_u16(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x1C33), UINT8_C(0x01),
                        axis->operation_profile->sm3_sync_type) ||
-            !write_i8(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x6060), UINT8_C(0x00),
-                      axis->operation_mode->value))
+            (!axis->pdo_set->mode_init_on_safeop_to_op &&
+             !write_i8(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x6060), UINT8_C(0x00),
+                       axis->operation_mode->value)))
         {
             status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
             goto cleanup;
@@ -441,11 +485,12 @@ emaster_control_session_status_t emaster_soem_control_session(
                       &sm2_value) ||
             !read_u16(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x1C33), UINT8_C(0x01),
                        &sm3_value) ||
-            !read_i8(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x6060), UINT8_C(0x00),
-                     &mode_value) ||
             sm2_value != axis->operation_profile->sm2_sync_type ||
             sm3_value != axis->operation_profile->sm3_sync_type ||
-            mode_value != axis->operation_mode->value)
+            (!axis->pdo_set->mode_init_on_safeop_to_op &&
+             (!read_i8(&context, (uint16_t)(axis_index + 1U), UINT16_C(0x6060), UINT8_C(0x00),
+                       &mode_value) ||
+              mode_value != axis->operation_mode->value)))
         {
             status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
             goto cleanup;
@@ -550,6 +595,57 @@ emaster_control_session_status_t emaster_soem_control_session(
     }
     report->safe_op_reached = true;
 
+    /* ESI 的 SO 初始化命令必须在从站已到 SAFE-OP、请求 OP 之前执行。 */
+    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    {
+        const emaster_pdo_set_profile_t *pdo_set = plan->axes[axis_index].pdo_set;
+        const emaster_operation_mode_t *operation_mode =
+            plan->axes[axis_index].operation_mode;
+        int8_t mode_value;
+        size_t command_index;
+
+        if (pdo_set->mode_init_on_safeop_to_op)
+        {
+            if (!write_i8(&context, (uint16_t)(axis_index + 1U),
+                          pdo_set->mode_init_index, pdo_set->mode_init_subindex,
+                          pdo_set->mode_init_value))
+            {
+                status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
+                goto cleanup;
+            }
+            if (!read_i8(&context, (uint16_t)(axis_index + 1U),
+                         pdo_set->mode_init_index, pdo_set->mode_init_subindex,
+                         &mode_value) || mode_value != pdo_set->mode_init_value)
+            {
+                status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
+                goto cleanup;
+            }
+        }
+        for (command_index = 0U;
+             command_index < operation_mode->safeop_to_op_sdo_write_count;
+             ++command_index)
+        {
+            const emaster_sdo_write_config_t *command =
+                &operation_mode->safeop_to_op_sdo_writes[command_index];
+            uint16_t observed_value;
+
+            if (command->type != EMASTER_CONFIG_SDO_VALUE_U16 ||
+                !write_u16(&context, (uint16_t)(axis_index + 1U), command->index,
+                           command->subindex, command->value_u16))
+            {
+                status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
+                goto cleanup;
+            }
+            if (!read_u16(&context, (uint16_t)(axis_index + 1U), command->index,
+                          command->subindex, &observed_value) ||
+                observed_value != command->value_u16)
+            {
+                status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
+                goto cleanup;
+            }
+        }
+    }
+
     for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
     {
         const emaster_session_axis_plan_t *axis = &plan->axes[axis_index];
@@ -638,6 +734,7 @@ emaster_control_session_status_t emaster_soem_control_session(
         {
             emaster_multiaxis_frame_t frame;
             bool all_axes_enabled = true;
+            bool all_modes_confirmed = true;
 
             if (!wait_for_cycle(&deadline) || !timespec_add_ns(&deadline, plan->cycle_ns))
             {
@@ -704,9 +801,27 @@ emaster_control_session_status_t emaster_soem_control_session(
                 axis_result->switched_on_seen |=
                     controller_outputs[axis_index].observed_state ==
                     EMASTER_CIA402_STATE_SWITCHED_ON;
+                if (!runtime[axis_index].tx_mode_available && operation_enabled &&
+                    (!axis_result->mode_display_sdo_read ||
+                     (mode_confirmation_started && !axis_result->mode_display_match &&
+                      report->cycle_count >= mode_confirmation_deadline_cycle)))
+                {
+                    axis_result->mode_display_sdo_read = read_i8(
+                        &context, (uint16_t)(axis_index + 1U), UINT16_C(0x6061),
+                        UINT8_C(0), &axis_result->mode_display_sdo);
+                    axis_result->mode_display = axis_result->mode_display_sdo;
+                }
                 axis_result->mode_display_match =
-                    axis_result->mode_display ==
-                    plan->axes[axis_index].operation_mode->value;
+                    runtime[axis_index].tx_mode_available
+                        ? axis_result->mode_display ==
+                              plan->axes[axis_index].operation_mode->value
+                        : axis_result->mode_display_sdo_read &&
+                              axis_result->mode_display ==
+                                  plan->axes[axis_index].operation_mode->value;
+                if (!axis_result->mode_display_match)
+                {
+                    all_modes_confirmed = false;
+                }
                 if (controller_outputs[axis_index].fault_present)
                 {
                     status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;
@@ -727,6 +842,18 @@ emaster_control_session_status_t emaster_soem_control_session(
                 }
             }
             report->all_axes_enabled_reached |= all_axes_enabled;
+            if (all_axes_enabled && !mode_confirmation_started)
+            {
+                mode_confirmation_started = true;
+                mode_confirmation_deadline_cycle =
+                    report->cycle_count + mode_confirmation_cycles;
+            }
+            if (mode_confirmation_started && !all_modes_confirmed &&
+                report->cycle_count >= mode_confirmation_deadline_cycle)
+            {
+                status = EMASTER_CONTROL_SESSION_FEEDBACK_INVALID;
+                goto cleanup;
+            }
             if (stop_requested != NULL && stop_requested(stop_user_data))
             {
                 report->stop_requested = true;
@@ -761,6 +888,16 @@ cleanup:
                 axis_result->mode_display_sdo_read = read_i8(
                     &context, (uint16_t)(axis_index + 1U), UINT16_C(0x6061), UINT8_C(0),
                     &axis_result->mode_display_sdo);
+                axis_result->input_mode_sdo_read = read_u16(
+                    &context, (uint16_t)(axis_index + 1U), UINT16_C(0x2002), UINT8_C(1),
+                    &axis_result->input_mode_sdo);
+                if (!runtime[axis_index].tx_mode_available &&
+                    axis_result->mode_display_sdo_read)
+                {
+                    axis_result->mode_display = axis_result->mode_display_sdo;
+                    axis_result->mode_display_match =
+                        axis_result->mode_display == axis_result->requested_mode;
+                }
                 /*
                  * 此时安全停机过程已经结束，但从站仍在 EtherCAT 会话中且 Sync0 尚未关闭；
                  * 因而这里能保留本次运行产生的驱动故障和同步质量证据。

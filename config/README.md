@@ -25,7 +25,8 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 - `identity`：供应商 ID、产品代码和修订号，必须与受控 ESI 及物理指纹一致；
 - `pdo_sets`：供应商声明的全部 PDO 方案；每个方向由有序的 `mappings` 数组组成，条目位长总和必须与声明字节数一致；
 - `reference_pdo_set_id`：当前指纹基线使用的静态参照，只用于证据核对，不是运行时选择；
-- `protocol.supports_pdo_configuration`：ESI 的 `CoE/PdoConfig` 能力；为 `false` 时禁止通过 SDO 重映射；
+- `protocol.supports_pdo_assignment`：ESI 的 `CoE/PdoAssign` 能力，决定能否选择已有 PDO 映射表；
+- `protocol.supports_pdo_configuration`：ESI 的 `CoE/PdoConfig` 能力，决定能否修改映射表条目；两者必须独立判断；
 - `protocol.supports_distributed_clocks`：ESI 声明的能力，不表示所有运行方案都必须启用 DC；
 - `conversion`：设备资料提供的换算来源和默认值，不能替代每台物理从站的采集值；
 - `source`：受控 ESI 的仓库相对路径和 SHA-256。

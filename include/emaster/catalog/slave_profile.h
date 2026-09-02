@@ -29,12 +29,18 @@ typedef struct
 {
     const char *pdo_set_id;
     uint32_t module_ident;
+    uint8_t module_slot;
     uint16_t rx_pdo_bytes;
     uint16_t tx_pdo_bytes;
     const emaster_pdo_mapping_profile_t *rx_mappings;
     size_t rx_mapping_count;
     const emaster_pdo_mapping_profile_t *tx_mappings;
     size_t tx_mapping_count;
+    /* 固定模块可声明在 SAFE-OP 到 OP 过渡时执行的模式初始化。 */
+    bool mode_init_on_safeop_to_op;
+    uint16_t mode_init_index;
+    uint8_t mode_init_subindex;
+    int8_t mode_init_value;
 } emaster_pdo_set_profile_t;
 
 typedef struct
@@ -51,6 +57,8 @@ typedef struct
     /* 默认换算值来自设备资料，不能替代每台物理从站的指纹事实。 */
     uint32_t encoder_counts_per_motor_revolution_default;
     /* 这是 ESI 的 CoE/PdoConfig 能力；为 false 时生命周期层不得尝试 SDO 重映射。 */
+    /* PdoAssign 与 PdoConfig 是两个独立能力，不能混为一个开关。 */
+    bool supports_pdo_assignment;
     bool supports_pdo_configuration;
     /* 这是 ESI 声明的能力，不表示所有运行方案都必须启用 DC。 */
     bool supports_distributed_clocks;

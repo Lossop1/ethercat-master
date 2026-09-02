@@ -268,7 +268,53 @@ def operation_values(
                         raise ValueError(
                             f"运行方案 {operation_id} 的模式 {mode_id} 引用了"
                             f"不存在的 PDO 字段：{', '.join(sorted(unknown_fields))}"
-                        )
+                    )
+
+            sdo_writes_value = mode.get("safeop_to_op_sdo_writes", [])
+            if not isinstance(sdo_writes_value, list):
+                raise ValueError(
+                    f"运行方案 {operation_id} 的模式 {mode_id} 的 "
+                    "safeop_to_op_sdo_writes 必须是数组"
+                )
+            sdo_writes = []
+            sdo_addresses: set[tuple[int, int]] = set()
+            for command in sdo_writes_value:
+                if not isinstance(command, dict):
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} 包含无效 SDO 写入"
+                    )
+                index = parse_unsigned(
+                    command.get("index"),
+                    f"运行方案 {operation_id} 的模式 {mode_id} SDO index",
+                    0xFFFF,
+                )
+                subindex = command.get("subindex")
+                if (
+                    not isinstance(subindex, int)
+                    or isinstance(subindex, bool)
+                    or not 0 <= subindex <= 0xFF
+                ):
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} SDO subindex 超出范围"
+                    )
+                if command.get("type") != "u16":
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} SDO 类型当前必须为 u16"
+                    )
+                value = parse_unsigned(
+                    command.get("value"),
+                    f"运行方案 {operation_id} 的模式 {mode_id} SDO value",
+                    0xFFFF,
+                )
+                address = (index, subindex)
+                if address in sdo_addresses:
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} SDO 地址重复"
+                    )
+                sdo_addresses.add(address)
+                sdo_writes.append(
+                    {"index": index, "subindex": subindex, "type": "u16", "value": value}
+                )
 
             if device is not None:
                 supported_modes = device.get("protocol", {}).get(
@@ -293,6 +339,7 @@ def operation_values(
                     "value": mode_value,
                     "rx_fields": required_rx_fields,
                     "tx_fields": required_tx_fields,
+                    "safeop_to_op_sdo_writes": sdo_writes,
                 }
             )
 
@@ -312,6 +359,16 @@ def operation_values(
             raise ValueError(
                 f"已批准运行方案 {operation_id} 缺少 selected_mode_id"
             )
+        mode_initialization = pdo_set.get("mode_initialization") if pdo_set is not None else None
+        if isinstance(mode_initialization, dict) and selected_mode_id is not None:
+            selected_mode = next(
+                (mode for mode in mode_values if mode["id"] == selected_mode_id),
+                None,
+            )
+            if selected_mode is None or selected_mode["value"] != mode_initialization.get("value"):
+                raise ValueError(
+                    f"运行方案 {operation_id} 的模式值与所选 PDO 模块初始化值不一致"
+                )
 
         values.append(
             {
