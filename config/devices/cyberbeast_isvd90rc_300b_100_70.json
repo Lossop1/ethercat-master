@@ -12,6 +12,7 @@
     "profile": "CiA 402",
     "mailbox": "CoE",
     "ethernet": "100BASE-TX",
+    "supports_pdo_assignment": true,
     "supports_pdo_configuration": false,
     "supports_distributed_clocks": true,
     "safe_stop_status_mask": "0x0004",
@@ -27,6 +28,7 @@
     {
       "id": "dynamic_csp_csv_cst",
       "module_ident": "0x00119800",
+      "module_slot": 1,
       "rx": {
         "bytes": 14,
         "mappings": [
@@ -63,6 +65,13 @@
     {
       "id": "fixed_csp",
       "module_ident": "0x00219800",
+      "module_slot": 1,
+      "mode_initialization": {
+        "transition": "safeop_to_op",
+        "index": "0x6060",
+        "subindex": 0,
+        "value": 8
+      },
       "rx": {
         "bytes": 8,
         "mappings": [
@@ -93,6 +102,13 @@
     {
       "id": "fixed_csv",
       "module_ident": "0x00319800",
+      "module_slot": 1,
+      "mode_initialization": {
+        "transition": "safeop_to_op",
+        "index": "0x6060",
+        "subindex": 0,
+        "value": 9
+      },
       "rx": {
         "bytes": 8,
         "mappings": [
@@ -130,7 +146,6 @@
     "must_read_from_each_physical_slave": true
   },
   "source": {
-    "esi": "docs/lz-joint/ECAT_CIA402.xml",
-    "esi_sha256": "2ec971368723aaf18867c9644767d2b233ef0ed5ca2f2ec37e452e72b1a3e9f0"
+    "esi": "docs/lz-joint/ECAT_CIA402.xml"
   }
 }

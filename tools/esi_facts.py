@@ -54,6 +54,13 @@ def _bool_attribute(element: ET.Element | None, name: str, default: bool = False
 def esi_modules(root: ET.Element) -> dict[int, dict[str, Any]]:
     """提取 ESI 模块及其双向 PDO，供设备配置进行结构化对比。"""
     modules: dict[int, dict[str, Any]] = {}
+    module_slots: dict[int, int] = {}
+    device = root.find("./Descriptions/Devices/Device")
+    if device is not None:
+        for slot_ordinal, slot in enumerate(device.findall("./Slots/Slot"), start=1):
+            for module_ident_element in slot.findall("ModuleIdent"):
+                if module_ident_element.text:
+                    module_slots[hex_value(module_ident_element.text)] = slot_ordinal
     for module in root.findall("./Descriptions/Modules/Module"):
         module_type = module.find("Type")
         if module_type is None:
@@ -61,7 +68,7 @@ def esi_modules(root: ET.Element) -> dict[int, dict[str, Any]]:
         module_ident = hex_value(module_type.attrib["ModuleIdent"])
         if module_ident in modules:
             raise ValueError(f"ESI 模块标识重复：{_hex_text(module_ident, 8)}")
-        result: dict[str, Any] = {}
+        result: dict[str, Any] = {"module_slot": module_slots.get(module_ident)}
         for xml_tag, direction in (("RxPdo", "rx"), ("TxPdo", "tx")):
             mappings = []
             for pdo in module.findall(xml_tag):
@@ -87,6 +94,18 @@ def esi_modules(root: ET.Element) -> dict[int, dict[str, Any]]:
                     }
                 )
             result[direction] = mappings
+        init_command = module.find("Mailbox/CoE/InitCmd")
+        if init_command is None:
+            result["mode_initialization"] = None
+        else:
+            transition = init_command.findtext("Transition", default="").strip()
+            raw_data = bytes.fromhex(init_command.findtext("Data", default=""))
+            result["mode_initialization"] = {
+                "transition": "safeop_to_op" if transition == "SO" else transition,
+                "index": hex_value(init_command.findtext("Index", default="0")),
+                "subindex": int(init_command.findtext("SubIndex", default="0")),
+                "value": int.from_bytes(raw_data, byteorder="little", signed=True),
+            }
         modules[module_ident] = result
     return modules
 
@@ -102,6 +121,9 @@ def little_endian_default_data(value: str) -> int:
 def _device_runtime_constraints(device: ET.Element) -> EsiRuntimeConstraints:
     """提取一个 Device 明确声明的 PDO 配置能力、同步模式和最小周期。"""
     coe = device.find("Mailbox/CoE")
+    supports_pdo_assignment = (
+        coe is not None and coe.attrib.get("PdoAssign", "false").lower() == "true"
+    )
     supports_pdo_configuration = (
         coe is not None and coe.attrib.get("PdoConfig", "false").lower() == "true"
     )
@@ -144,6 +166,7 @@ def _device_runtime_constraints(device: ET.Element) -> EsiRuntimeConstraints:
         assign_activate_by_strategy=assign_activate_by_strategy,
         default_sync_type_by_sm=default_sync_type_by_sm,
         minimum_cycle_ns=max(minimum_cycles) if minimum_cycles else None,
+        supports_pdo_assignment=supports_pdo_assignment,
         supports_pdo_configuration=supports_pdo_configuration,
         supports_distributed_clocks="dc" in assign_activate_by_strategy,
     )
@@ -273,6 +296,7 @@ def _device_facts(vendor: ET.Element, device: ET.Element) -> dict[str, Any]:
             "supports_distributed_clocks": constraints.supports_distributed_clocks,
         },
         "capabilities": {
+            "supports_pdo_assignment": constraints.supports_pdo_assignment,
             "supports_pdo_configuration": constraints.supports_pdo_configuration,
             "supports_distributed_clocks": constraints.supports_distributed_clocks,
         },

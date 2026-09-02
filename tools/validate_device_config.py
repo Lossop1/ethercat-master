@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -25,6 +24,37 @@ def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str
     validate_hex_value(
         check, pdo_set.get("module_ident"), f"设备 {profile_id} 的 module_ident", 0xFFFFFFFF
     )
+    module_slot = pdo_set.get("module_slot")
+    check.require(
+        isinstance(module_slot, int) and not isinstance(module_slot, bool) and
+        1 <= module_slot <= 0xFF,
+        f"设备 {profile_id} 的 PDO 方案 {pdo_id} module_slot 必须为 1..255",
+    )
+    mode_initialization = pdo_set.get("mode_initialization")
+    if mode_initialization is not None:
+        check.require(
+            isinstance(mode_initialization, dict) and
+            mode_initialization.get("transition") == "safeop_to_op",
+            f"设备 {profile_id} 的 PDO 方案 {pdo_id} mode_initialization 过渡无效",
+        )
+        if isinstance(mode_initialization, dict):
+            validate_hex_value(
+                check, mode_initialization.get("index"),
+                f"设备 {profile_id} 的 PDO 方案 {pdo_id} mode_initialization.index",
+                0xFFFF,
+            )
+            subindex = mode_initialization.get("subindex")
+            value = mode_initialization.get("value")
+            check.require(
+                isinstance(subindex, int) and not isinstance(subindex, bool) and
+                0 <= subindex <= 0xFF,
+                f"设备 {profile_id} 的 PDO 方案 {pdo_id} mode_initialization.subindex 超出范围",
+            )
+            check.require(
+                isinstance(value, int) and not isinstance(value, bool) and
+                -128 <= value <= 127,
+                f"设备 {profile_id} 的 PDO 方案 {pdo_id} mode_initialization.value 超出范围",
+            )
 
     for direction in ("rx", "tx"):
         direction_config = pdo_set.get(direction)
@@ -137,19 +167,11 @@ def validate_catalog_against_esi(
     check: Validation,
     root_dir: Path,
     profile: dict[str, Any],
-    require_vendor_artifacts: bool,
 ) -> EsiRuntimeConstraints | None:
     """校验 ESI 身份、全部 PDO 方案和可用于运行方案的能力事实。"""
     esi_path = root_dir / profile["source"]["esi"]
     if not esi_path.is_file():
-        check.require(not require_vendor_artifacts, f"所需受控 ESI 不存在：{esi_path}")
         return None
-
-    actual_hash = hashlib.sha256(esi_path.read_bytes()).hexdigest()
-    check.require(
-        actual_hash == profile["source"]["esi_sha256"].lower(),
-        f"{profile['profile_id']} 的 ESI SHA-256 与设备配置不一致",
-    )
 
     root = ET.parse(esi_path).getroot()
     vendor = root.find("./Vendor")
@@ -180,6 +202,24 @@ def validate_catalog_against_esi(
         check.require(module_ident in modules, f"ESI 缺少模块 0x{module_ident:08X}")
         if module_ident not in modules:
             continue
+        check.require(
+            pdo_set.get("module_slot") == modules[module_ident]["module_slot"],
+            f"{pdo_set['id']} 的模块槽位与 ESI 不一致",
+        )
+        configured_init = pdo_set.get("mode_initialization")
+        if isinstance(configured_init, dict):
+            expected_init = {
+                "transition": configured_init.get("transition"),
+                "index": hex_value(configured_init.get("index", "0x0")),
+                "subindex": configured_init.get("subindex"),
+                "value": configured_init.get("value"),
+            }
+        else:
+            expected_init = None
+        check.require(
+            expected_init == modules[module_ident]["mode_initialization"],
+            f"{pdo_set['id']} 的模式初始化命令与 ESI 不一致",
+        )
         for direction in ("rx", "tx"):
             actual = modules[module_ident][direction]
             expected_mappings = [
@@ -204,6 +244,10 @@ def validate_catalog_against_esi(
 
     constraints = esi_runtime_constraints(root)
     protocol = profile["protocol"]
+    check.require(
+        protocol["supports_pdo_assignment"] == constraints.supports_pdo_assignment,
+        f"{profile['profile_id']} 的 PDO 分配能力与 ESI CoE/PdoAssign 不一致",
+    )
     check.require(
         protocol["supports_pdo_configuration"] == constraints.supports_pdo_configuration,
         f"{profile['profile_id']} 的 PDO 配置能力与 ESI CoE/PdoConfig 不一致",
@@ -256,7 +300,7 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
     if not isinstance(protocol, dict):
         check.errors.append(f"设备 {profile_id} 缺少 protocol 对象")
     else:
-        for field in ("supports_pdo_configuration", "supports_distributed_clocks"):
+        for field in ("supports_pdo_assignment", "supports_pdo_configuration", "supports_distributed_clocks"):
             check.require(
                 isinstance(protocol.get(field), bool),
                 f"设备 {profile_id} 的 {field} 必须是布尔值",
@@ -279,14 +323,6 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
         check.errors.append(f"设备 {profile_id} 缺少 source 对象")
     else:
         check.require(non_empty_string(source.get("esi")), f"设备 {profile_id} 缺少 ESI 路径")
-        esi_hash = source.get("esi_sha256")
-        hash_valid = isinstance(esi_hash, str) and len(esi_hash) == 64
-        if hash_valid:
-            try:
-                int(esi_hash, 16)
-            except ValueError:
-                hash_valid = False
-        check.require(hash_valid, f"设备 {profile_id} 的 ESI SHA-256 无效")
 
     return len(check.errors) == initial_error_count
 

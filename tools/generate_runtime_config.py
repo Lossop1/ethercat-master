@@ -31,6 +31,7 @@ def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
         for mode_ordinal, mode in enumerate(operation["modes"]):
             rx_name = f"operation_{ordinal}_mode_{mode_ordinal}_rx_fields"
             tx_name = f"operation_{ordinal}_mode_{mode_ordinal}_tx_fields"
+            sdo_name = f"operation_{ordinal}_mode_{mode_ordinal}_safeop_to_op_sdos"
             if mode["rx_fields"]:
                 declarations.append(
                     f"static const char *const {rx_name}[] = {{\n"
@@ -59,9 +60,29 @@ def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
                 tx_pointer = "NULL"
                 tx_count = "0U"
 
+            if mode["safeop_to_op_sdo_writes"]:
+                declarations.append(
+                    f"static const emaster_sdo_write_config_t {sdo_name}[] = {{\n"
+                    + ",\n".join(
+                        "    {"
+                        f"UINT16_C(0x{command['index']:04X}), "
+                        f"UINT8_C({command['subindex']}), EMASTER_CONFIG_SDO_VALUE_U16, "
+                        f"UINT16_C(0x{command['value']:04X})"
+                        "}"
+                        for command in mode["safeop_to_op_sdo_writes"]
+                    )
+                    + "\n};"
+                )
+                sdo_pointer = sdo_name
+                sdo_count = f"sizeof({sdo_name}) / sizeof({sdo_name}[0])"
+            else:
+                sdo_pointer = "NULL"
+                sdo_count = "0U"
+
             mode_initializers.append(
                 f"    {{{c_string(mode['id'])}, INT8_C({mode['value']}), "
-                f"{rx_pointer}, {rx_count}, {tx_pointer}, {tx_count}}}"
+                f"{rx_pointer}, {rx_count}, {tx_pointer}, {tx_count}, "
+                f"{sdo_pointer}, {sdo_count}}}"
             )
         if mode_initializers:
             rendered_modes = ",\n".join(mode_initializers)

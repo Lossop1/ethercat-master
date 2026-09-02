@@ -193,9 +193,20 @@ int main(int argc, char **argv)
                 result_text(axis->operation_enabled_seen),
                 result_text(axis->mode_command_sdo_read), (int)axis->mode_command_sdo,
                 result_text(axis->mode_display_sdo_read), (int)axis->mode_display_sdo,
+                result_text(axis->input_mode_sdo_read),
+                (unsigned int)axis->input_mode_sdo,
                 result_text(axis->switch_on_disabled_seen),
                 result_text(axis->ready_to_switch_on_seen),
                 result_text(axis->switched_on_seen));
+        if (axis->pdo_assignment_failed_index != 0U)
+        {
+            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PDO_ASSIGNMENT_LINE),
+                    (unsigned int)axis->position,
+                    (unsigned int)axis->pdo_assignment_failed_index,
+                    (unsigned int)axis->pdo_assignment_failed_subindex,
+                    result_text(axis->pdo_assignment_abort_code_available),
+                    (unsigned long)axis->pdo_assignment_abort_code);
+        }
         fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_DIAGNOSTIC_LINE),
                 (unsigned int)axis->position,
                 result_text(axis->drive_diagnostic.read_succeeded),

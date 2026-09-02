@@ -24,6 +24,9 @@ typedef struct
     size_t tx_status_ordinal;
     size_t rx_target_position_ordinal;
     size_t tx_actual_position_ordinal;
+    /* 动态模块通过 PDO 提供模式字段；固定模块没有该字段。 */
+    bool rx_mode_available;
+    bool tx_mode_available;
     bool sync0_configured;
 } emaster_cia_process_image_t;
 

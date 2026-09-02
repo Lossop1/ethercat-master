@@ -69,13 +69,37 @@ def direction_values(direction: dict[str, Any], field: str) -> dict[str, object]
 def pdo_set_values(pdo_set: dict[str, Any], profile_id: str) -> dict[str, object]:
     """生成一个设备 PDO 方案的结构化值，保留所有可选方案。"""
     pdo_id = required_string(pdo_set, "id", f"设备 {profile_id} 的 PDO 方案")
+    mode_initialization = pdo_set.get("mode_initialization")
+    mode_init_enabled = mode_initialization is not None
+    mode_init_index = 0
+    mode_init_subindex = 0
+    mode_init_value = 0
+    if mode_init_enabled:
+        if not isinstance(mode_initialization, dict) or mode_initialization.get("transition") != "safeop_to_op":
+            raise ValueError(f"设备 {profile_id} PDO 方案 {pdo_id} 的 mode_initialization 必须声明 safeop_to_op")
+        mode_init_index = parse_unsigned(
+            mode_initialization.get("index"),
+            f"设备 {profile_id} PDO 方案 {pdo_id} mode_initialization.index",
+            0xFFFF,
+        )
+        mode_init_subindex = int(mode_initialization.get("subindex", 0))
+        if not 0 <= mode_init_subindex <= 0xFF:
+            raise ValueError(f"设备 {profile_id} PDO 方案 {pdo_id} mode_initialization.subindex 超出范围")
+        mode_init_value = int(mode_initialization.get("value"))
+        if not -128 <= mode_init_value <= 127:
+            raise ValueError(f"设备 {profile_id} PDO 方案 {pdo_id} mode_initialization.value 超出范围")
     return {
         "id": pdo_id,
         "module_ident": parse_unsigned(
             pdo_set["module_ident"], f"设备 {profile_id} PDO 方案 {pdo_id} 的 module_ident", 0xFFFFFFFF
         ),
+        "module_slot": int(pdo_set["module_slot"]),
         "rx": direction_values(pdo_set["rx"], f"设备 {profile_id} PDO 方案 {pdo_id} rx"),
         "tx": direction_values(pdo_set["tx"], f"设备 {profile_id} PDO 方案 {pdo_id} tx"),
+        "mode_init_on_safeop_to_op": mode_init_enabled,
+        "mode_init_index": mode_init_index,
+        "mode_init_subindex": mode_init_subindex,
+        "mode_init_value": mode_init_value,
     }
 
 
@@ -115,6 +139,9 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
         "reference_pdo_set_id": c_string(reference_id),
         "pdo_sets": pdo_values,
         "encoder_counts": int(conversion["encoder_counts_per_motor_revolution_default"]),
+        "supports_pdo_assignment": "true"
+        if protocol.get("supports_pdo_assignment", False)
+        else "false",
         "supports_pdo_configuration": "true"
         if protocol["supports_pdo_configuration"]
         else "false",
@@ -175,13 +202,18 @@ def pdo_set_initializer(pdo_set: dict[str, object], profile_ordinal: int, pdo_se
     return (
         "    {"
         f"{c_string(pdo_set['id'])}, UINT32_C(0x{pdo_set['module_ident']:08X}), "
+        f"UINT8_C({pdo_set['module_slot']}), "
         f"UINT16_C({rx['bytes']}), UINT16_C({tx['bytes']}), "
         f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings, "
         f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings) / "
         f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings[0]), "
         f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings, "
         f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings) / "
-        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings[0])"
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings[0]), "
+        f"{'true' if pdo_set['mode_init_on_safeop_to_op'] else 'false'}, "
+        f"UINT16_C(0x{pdo_set['mode_init_index']:04X}), "
+        f"UINT8_C({pdo_set['mode_init_subindex']}), "
+        f"INT8_C({pdo_set['mode_init_value']})"
         "}"
     )
 
@@ -200,6 +232,7 @@ def profile_initializer(values: dict[str, object], ordinal: int) -> str:
         .pdo_sets = profile_{ordinal}_pdo_sets,
         .pdo_set_count = sizeof(profile_{ordinal}_pdo_sets) / sizeof(profile_{ordinal}_pdo_sets[0]),
         .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
+        .supports_pdo_assignment = {values['supports_pdo_assignment']},
         .supports_pdo_configuration = {values['supports_pdo_configuration']},
         .supports_distributed_clocks = {values['supports_dc']},
         .safe_stop_status_mask = UINT16_C(0x{values['safe_stop_status_mask']:04X}),

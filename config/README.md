@@ -9,7 +9,7 @@
 
 | 目录 | 描述的事实 | 允许引用 | 禁止包含 |
 |---|---|---|---|
-| `devices/` | 型号身份、协议能力、PDO、换算默认值、受控资料来源 | ESI 和供应商资料 | 轴号、主机名、网卡名 |
+| `devices/` | 型号身份、协议能力、PDO、换算默认值、ESI 来源 | ESI 和供应商资料 | 轴号、主机名、网卡名 |
 | `topologies/` | 按总线顺序排列的逻辑从站及其设备配置 | `profile_id` | 主机名、网卡名、阶段安全授权 |
 | `operation_profiles/` | 设备 PDO 方案上的同步、周期和模式候选 | `device_profile_id`、`pdo_set_id` | 主机名、网卡名、未批准默认值 |
 | `deployments/` | 某台主机使用哪个物理接口运行哪个拓扑及已批准方案 | `topology_id`、`operation_profile_ids` | 设备协议细节、放宽工具能力的开关 |
@@ -25,7 +25,8 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 - `identity`：供应商 ID、产品代码和修订号，必须与受控 ESI 及物理指纹一致；
 - `pdo_sets`：供应商声明的全部 PDO 方案；每个方向由有序的 `mappings` 数组组成，条目位长总和必须与声明字节数一致；
 - `reference_pdo_set_id`：当前指纹基线使用的静态参照，只用于证据核对，不是运行时选择；
-- `protocol.supports_pdo_configuration`：ESI 的 `CoE/PdoConfig` 能力；为 `false` 时禁止通过 SDO 重映射；
+- `protocol.supports_pdo_assignment`：ESI 的 `CoE/PdoAssign` 能力，决定能否选择已有 PDO 映射表；
+- `protocol.supports_pdo_configuration`：ESI 的 `CoE/PdoConfig` 能力，决定能否修改映射表条目；两者必须独立判断；
 - `protocol.supports_distributed_clocks`：ESI 声明的能力，不表示所有运行方案都必须启用 DC；
 - `conversion`：设备资料提供的换算来源和默认值，不能替代每台物理从站的采集值；
 - `source`：受控 ESI 的仓库相对路径和 SHA-256。

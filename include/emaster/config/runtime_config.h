@@ -18,6 +18,19 @@ typedef enum
     EMASTER_OPERATION_PROFILE_APPROVED = 1
 } emaster_operation_profile_approval_t;
 
+typedef enum
+{
+    EMASTER_CONFIG_SDO_VALUE_U16 = 0
+} emaster_config_sdo_value_type_t;
+
+typedef struct
+{
+    uint16_t index;
+    uint8_t subindex;
+    emaster_config_sdo_value_type_t type;
+    uint16_t value_u16;
+} emaster_sdo_write_config_t;
+
 /* 一个运行方案声明可选的 CiA 402 模式及其需要的收发 PDO 字段。 */
 typedef struct
 {
@@ -27,6 +40,9 @@ typedef struct
     size_t required_rx_field_count;
     const char *const *required_tx_fields;
     size_t required_tx_field_count;
+    /* 设备模式除标准 6060 外需要的供应商 SDO，由运行配置显式声明。 */
+    const emaster_sdo_write_config_t *safeop_to_op_sdo_writes;
+    size_t safeop_to_op_sdo_write_count;
 } emaster_operation_mode_t;
 
 /* 运行方案是设备事实之上的可选择配置，不把任何数值写死在通用代码中。 */

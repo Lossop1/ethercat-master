@@ -101,6 +101,7 @@ static bool build_direction_codec(
     emaster_pdo_codec_field_t *fields,
     size_t field_count,
     uint16_t mode_index,
+    bool mode_required,
     size_t *mode_ordinal,
     size_t *status_ordinal,
     size_t *control_ordinal)
@@ -111,11 +112,14 @@ static bool build_direction_codec(
     bool status_found = status_ordinal == NULL;
     bool control_found = control_ordinal == NULL;
 
-    if (actual == NULL || fields == NULL || field_count == 0U || mode_ordinal == NULL)
+    if (actual == NULL || fields == NULL || field_count == 0U)
     {
         return false;
     }
-    *mode_ordinal = SIZE_MAX;
+    if (mode_ordinal != NULL)
+    {
+        *mode_ordinal = SIZE_MAX;
+    }
     if (status_ordinal != NULL)
     {
         *status_ordinal = SIZE_MAX;
@@ -164,7 +168,10 @@ static bool build_direction_codec(
                 {
                     return false;
                 }
-                *mode_ordinal = field_ordinal;
+                if (mode_ordinal != NULL)
+                {
+                    *mode_ordinal = field_ordinal;
+                }
                 mode_found = true;
             }
             if (status_ordinal != NULL &&
@@ -192,7 +199,8 @@ static bool build_direction_codec(
             ++field_ordinal;
         }
     }
-    return field_ordinal == field_count && mode_found && status_found && control_found;
+    return field_ordinal == field_count && (!mode_required || mode_found) && status_found &&
+           control_found;
 }
 
 bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
@@ -225,18 +233,24 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     image->tx_field_count = tx_count;
     image->rx_target_position_ordinal = SIZE_MAX;
     image->tx_actual_position_ordinal = SIZE_MAX;
+    image->rx_mode_available = false;
+    image->tx_mode_available = false;
     if (!build_direction_codec(&image->layout.rx, axis->pdo_set->rx_mappings,
                                axis->pdo_set->rx_mapping_count, image->rx_fields,
                                rx_count, EMASTER_CIA402_MODE_OF_OPERATION_INDEX,
+                               false,
                                &image->rx_mode_ordinal, NULL,
                                &image->rx_control_ordinal) ||
         !build_direction_codec(&image->layout.tx, axis->pdo_set->tx_mappings,
                                axis->pdo_set->tx_mapping_count, image->tx_fields,
                                tx_count, EMASTER_CIA402_MODE_DISPLAY_INDEX,
+                               false,
                                &image->tx_mode_ordinal, &image->tx_status_ordinal, NULL))
     {
         return false;
     }
+    image->rx_mode_available = image->rx_mode_ordinal != SIZE_MAX;
+    image->tx_mode_available = image->tx_mode_ordinal != SIZE_MAX;
     if (axis->operation_mode->value == INT8_C(8))
     {
         image->rx_target_position_ordinal = field_ordinal_for(
@@ -273,8 +287,11 @@ bool emaster_cia_process_image_prepare_output(
     {
         image->rx_values[field_ordinal].kind = image->rx_fields[field_ordinal].kind;
     }
-    image->rx_values[image->rx_mode_ordinal].value.signed_value =
-        axis->operation_mode->value;
+    if (image->rx_mode_available)
+    {
+        image->rx_values[image->rx_mode_ordinal].value.signed_value =
+            axis->operation_mode->value;
+    }
     image->rx_values[image->rx_control_ordinal].value.unsigned_value = UINT64_C(0);
     return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
                                     image->rx_field_count, image->rx_values,
@@ -295,8 +312,11 @@ bool emaster_cia_process_image_update_output(
         return false;
     }
     image->rx_values[image->rx_control_ordinal].value.unsigned_value = control_word;
-    image->rx_values[image->rx_mode_ordinal].value.signed_value =
-        axis->operation_mode->value;
+    if (image->rx_mode_available)
+    {
+        image->rx_values[image->rx_mode_ordinal].value.signed_value =
+            axis->operation_mode->value;
+    }
     if (image->rx_target_position_ordinal != SIZE_MAX)
     {
         image->rx_values[image->rx_target_position_ordinal].value.signed_value =
@@ -325,15 +345,22 @@ bool emaster_cia_process_image_decode_input(
     {
         return false;
     }
-    if (image->tx_values[image->tx_mode_ordinal].kind !=
-            EMASTER_PDO_CODEC_VALUE_SIGNED ||
-        image->tx_values[image->tx_status_ordinal].kind !=
+    if (image->tx_values[image->tx_status_ordinal].kind !=
             EMASTER_PDO_CODEC_VALUE_UNSIGNED)
     {
         return false;
     }
-    *mode_display =
-        (int8_t)image->tx_values[image->tx_mode_ordinal].value.signed_value;
+    *mode_display = 0;
+    if (image->tx_mode_available)
+    {
+        if (image->tx_values[image->tx_mode_ordinal].kind !=
+            EMASTER_PDO_CODEC_VALUE_SIGNED)
+        {
+            return false;
+        }
+        *mode_display =
+            (int8_t)image->tx_values[image->tx_mode_ordinal].value.signed_value;
+    }
     *status_word =
         (uint16_t)image->tx_values[image->tx_status_ordinal].value.unsigned_value;
     *actual_position = 0;
