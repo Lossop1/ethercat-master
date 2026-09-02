@@ -76,9 +76,7 @@ static bool goal_reached(emaster_cia402_goal_t goal, emaster_cia402_state_t stat
     {
         case EMASTER_CIA402_GOAL_SAFE_STOP:
             return state == EMASTER_CIA402_STATE_NOT_READY_TO_SWITCH_ON ||
-                   state == EMASTER_CIA402_STATE_SWITCH_ON_DISABLED ||
-                   state == EMASTER_CIA402_STATE_QUICK_STOP_ACTIVE ||
-                   state == EMASTER_CIA402_STATE_FAULT;
+                   state == EMASTER_CIA402_STATE_SWITCH_ON_DISABLED;
         case EMASTER_CIA402_GOAL_READY_TO_SWITCH_ON:
             return state == EMASTER_CIA402_STATE_READY_TO_SWITCH_ON;
         case EMASTER_CIA402_GOAL_SWITCHED_ON:
@@ -94,6 +92,15 @@ static uint16_t control_word_for_goal(emaster_cia402_goal_t goal,
 {
     if (goal == EMASTER_CIA402_GOAL_SAFE_STOP)
     {
+        /* 逐级撤销运行使能和接通状态，兼容不接受跨级停用的驱动器。 */
+        if (state == EMASTER_CIA402_STATE_OPERATION_ENABLED)
+        {
+            return EMASTER_CIA402_CONTROL_SWITCH_ON;
+        }
+        if (state == EMASTER_CIA402_STATE_SWITCHED_ON)
+        {
+            return EMASTER_CIA402_CONTROL_SHUTDOWN;
+        }
         return EMASTER_CIA402_CONTROL_DISABLE_VOLTAGE;
     }
     switch (state)
@@ -105,13 +112,19 @@ static uint16_t control_word_for_goal(emaster_cia402_goal_t goal,
                        ? EMASTER_CIA402_CONTROL_SHUTDOWN
                        : EMASTER_CIA402_CONTROL_SWITCH_ON;
         case EMASTER_CIA402_STATE_SWITCHED_ON:
+            if (goal == EMASTER_CIA402_GOAL_READY_TO_SWITCH_ON)
+            {
+                return EMASTER_CIA402_CONTROL_SHUTDOWN;
+            }
             return goal == EMASTER_CIA402_GOAL_OPERATION_ENABLED
                        ? EMASTER_CIA402_CONTROL_ENABLE_OPERATION
                        : EMASTER_CIA402_CONTROL_SWITCH_ON;
         case EMASTER_CIA402_STATE_OPERATION_ENABLED:
-            return goal == EMASTER_CIA402_GOAL_OPERATION_ENABLED
-                       ? EMASTER_CIA402_CONTROL_ENABLE_OPERATION
-                       : EMASTER_CIA402_CONTROL_SWITCH_ON;
+            if (goal == EMASTER_CIA402_GOAL_OPERATION_ENABLED)
+            {
+                return EMASTER_CIA402_CONTROL_ENABLE_OPERATION;
+            }
+            return EMASTER_CIA402_CONTROL_SWITCH_ON;
         case EMASTER_CIA402_STATE_QUICK_STOP_ACTIVE:
             return goal == EMASTER_CIA402_GOAL_OPERATION_ENABLED
                        ? EMASTER_CIA402_CONTROL_ENABLE_OPERATION

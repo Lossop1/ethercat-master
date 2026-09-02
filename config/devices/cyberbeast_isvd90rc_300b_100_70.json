@@ -14,6 +14,8 @@
     "ethernet": "100BASE-TX",
     "supports_pdo_configuration": false,
     "supports_distributed_clocks": true,
+    "safe_stop_status_mask": "0x0004",
+    "safe_stop_status_value": "0x0000",
     "supported_modes": {
       "csp": 8,
       "csv": 9,

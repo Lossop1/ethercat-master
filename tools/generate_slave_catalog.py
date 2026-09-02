@@ -95,6 +95,14 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
     pdo_values = [pdo_set_values(item, profile_id) for item in pdo_sets]
     if reference_id not in {item["id"] for item in pdo_values}:
         raise ValueError(f"设备 {profile_id} 的 reference_pdo_set_id 不存在")
+    safe_stop_status_mask = parse_unsigned(
+        protocol["safe_stop_status_mask"], "protocol.safe_stop_status_mask", 0xFFFF
+    )
+    safe_stop_status_value = parse_unsigned(
+        protocol["safe_stop_status_value"], "protocol.safe_stop_status_value", 0xFFFF
+    )
+    if safe_stop_status_mask == 0 or safe_stop_status_value & ~safe_stop_status_mask:
+        raise ValueError(f"设备 {profile_id} 的停用状态字条件无效")
 
     return {
         "profile_id": c_string(profile_id),
@@ -113,6 +121,8 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
         "supports_dc": "true"
         if protocol["supports_distributed_clocks"]
         else "false",
+        "safe_stop_status_mask": safe_stop_status_mask,
+        "safe_stop_status_value": safe_stop_status_value,
     }
 
 
@@ -192,6 +202,8 @@ def profile_initializer(values: dict[str, object], ordinal: int) -> str:
         .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
         .supports_pdo_configuration = {values['supports_pdo_configuration']},
         .supports_distributed_clocks = {values['supports_dc']},
+        .safe_stop_status_mask = UINT16_C(0x{values['safe_stop_status_mask']:04X}),
+        .safe_stop_status_value = UINT16_C(0x{values['safe_stop_status_value']:04X}),
     }}"""
 
 

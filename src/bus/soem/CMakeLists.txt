@@ -30,14 +30,15 @@ target_include_directories(
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../../include>")
 emaster_enable_strict_warnings(emaster_soem_dc_prepare)
 
-add_library(emaster_soem_cia_preflight STATIC cia_preflight.c)
-add_library(emaster::soem_cia_preflight ALIAS emaster_soem_cia_preflight)
+add_library(emaster_soem_control_session STATIC control_session.c cia_process_image.c)
+add_library(emaster::soem_control_session ALIAS emaster_soem_control_session)
 
-target_link_libraries(emaster_soem_cia_preflight PRIVATE emaster::soem_common soem
+target_link_libraries(emaster_soem_control_session PRIVATE emaster::soem_common soem
                                                          emaster::session emaster::catalog
-                                                         emaster::protocol emaster::pdo_codec)
-target_compile_features(emaster_soem_cia_preflight PUBLIC c_std_11)
+                                                         emaster::protocol emaster::pdo_codec
+                                                         emaster::multiaxis)
+target_compile_features(emaster_soem_control_session PUBLIC c_std_11)
 target_include_directories(
-    emaster_soem_cia_preflight
+    emaster_soem_control_session
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../../include>")
-emaster_enable_strict_warnings(emaster_soem_cia_preflight)
+emaster_enable_strict_warnings(emaster_soem_control_session)

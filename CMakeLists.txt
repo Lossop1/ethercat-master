@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(
     emaster
     VERSION 0.1.0
-    DESCRIPTION "具有安全阶段门的 12 轴机器人 EtherCAT 主站"
+    DESCRIPTION "具有安全阶段门的多轴机器人 EtherCAT 主站"
     LANGUAGES C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -84,7 +84,7 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     add_subdirectory(external/SOEM EXCLUDE_FROM_ALL)
     add_subdirectory(src/bus/soem)
     add_subdirectory(tools/dc_prepare)
-    add_subdirectory(tools/cia_preflight)
+    add_subdirectory(tools/master)
 endif()
 
 add_subdirectory(tools/fingerprint)

@@ -42,7 +42,7 @@
 | `emaster_session` | 组合部署、设备、运行方案和实际 PDO 的失效关闭会话门 | 配置、设备目录、PDO 布局 | SOEM、状态切换、SDO、动态分配、参数默认值 |
 | `emaster_soem_adapter` | 网卡枚举、受限 PRE-OP/SII/SDO 采集和只读 PDO 发现 | SOEM、`emaster_protocol` | JSON、文件、PDO 写入/配置、DC、SAFE-OP/OP、SDO 写入 |
 | `emaster_soem_dc_prepare` | 按已批准会话计划在 PRE-OP 写入并读回同步对象、配置 DC/Sync0 并执行回退 | SOEM、`emaster_session`、`emaster_protocol`、`emaster_catalog` | JSON、文件、SAFE-OP/OP、控制字、过程数据交换、动态默认参数 |
-| `emaster_soem_cia_preflight` | 按已批准会话计划建立一次 SAFE-OP/OP 首帧安全过程数据会话，使用 PDO 编解码验证 `6061` 并执行回退 | SOEM、`emaster_soem_common`、`emaster_session`、`emaster_protocol`、`emaster_pdo_codec`、`emaster_catalog` | CiA 402 控制字状态转换、电机使能、运动、动态默认参数 |
+| `emaster_soem_control_session` | 按运行计划核对实际 PDO，配置 DC 和过程映像，建立 SAFE-OP/OP 周期会话并执行 CiA 402 生命周期控制 | SOEM、`emaster_soem_common`、`emaster_session`、`emaster_protocol`、`emaster_pdo_codec`、`emaster_catalog`、`emaster_cia402`、`emaster_multiaxis` | 文件、JSON、控制台、动态默认参数、变化运动目标 |
 | `emaster_cia402` | 独立于总线的 CiA 402 状态字解析、生命周期目标和控制字规划 | 公共类型 | SOEM、PDO 位偏移、时钟、线程、设备参数、自动故障复位 |
 | `emaster_multiaxis` | 按配置轴集合执行完整帧、序号、截止时间和全帧失败门 | `emaster_cia402` | SOEM、PDO 位偏移、单位换算、动态分配、部分帧发布 |
 | `emaster_cyclic` | 通过受控传输回调执行完整原始过程数据交换并核对 WKC、序号和截止时间 | 公共类型 | SDO、状态扫描、动态分配、休眠、日志、PDO 语义 |
@@ -50,7 +50,7 @@
 | `emaster_fingerprint_format` | SDO 读取计划和指纹 JSON 序列化 | 设备目录、探测结果类型 | SOEM 调用、AL 状态切换、硬件访问 |
 | `emaster-fingerprint` | 操作者确认、流程编排和记录原子发布 | 总线适配、配置、目录、格式和消息 target | 控制或运动行为 |
 | `emaster-dc-prepare` | 操作者确认、会话计划构建和一次性 PRE-OP DC 准备结果展示 | DC 准备、会话、配置、消息 | SAFE-OP/OP、控制字、运动、参数命令行覆盖 |
-| `emaster-cia-preflight` | 操作者确认、会话计划构建和一次性 SAFE-OP/OP 首帧过程数据验证 | CiA 402 前置会话、会话、配置、消息 | CiA 402 状态转换、控制字写入、使能、运动、参数命令行覆盖 |
+| `emaster-master` | 选择当前主机部署、构建会话计划、处理停止信号并输出控制会话结果 | 控制会话、会话、配置、消息 | 参数命令行覆盖、PDO 解释、CiA 402 状态机实现 |
 
 DC 前置流程使用 SOEM 官方 DC 接口配置 Sync0，并从连续的 `DCCUC+DCSYNCACT` 寄存器读回完整
 `assign_activate`；读回值与每个轴的批准运行方案不一致时立即失败，不把 SOEM 的默认激活值当作
@@ -126,6 +126,6 @@ PDO 数量、索引或条目数量。
 ## 模块交付原则
 
 模块只有在具备独立契约、单向依赖、明确的错误模型和对应风险证据时才建立。当前阶段按设备
-目录、PRE-OP 发现与指纹、拓扑验证、批准方案和过程数据前置会话的顺序推进；后续周期、CiA 402、
-安全和 API 模块可以先按通用契约逐个实现，设备相关行为必须在真机证据门后才允许启用。删除低价值
+目录、PRE-OP 发现与指纹、拓扑验证、运行方案和周期控制会话的顺序推进；后续运动命令、安全监督和
+API 模块按通用契约逐个接入，设备相关行为必须以真机证据验证。删除低价值
 的离线测试代码不等于降低硬件验收要求。
