@@ -179,6 +179,13 @@ static bool timespec_add_ns(struct timespec *value, uint32_t nanoseconds)
     return true;
 }
 
+static uint64_t absolute_position_difference(int32_t left, int32_t right)
+{
+    int64_t difference = (int64_t)left - (int64_t)right;
+
+    return (uint64_t)(difference < 0 ? -difference : difference);
+}
+
 static bool wait_for_cycle(struct timespec *deadline)
 {
     int result;
@@ -973,7 +980,7 @@ emaster_control_session_status_t emaster_soem_control_session(
                         axis_result->motion_actual_delta_counts =
                             (int64_t)axis_result->motion_completion_actual_position -
                             (int64_t)axis_result->initial_actual_position;
-                        axis_result->motion_final_error_counts = absolute_difference_i32(
+                        axis_result->motion_final_error_counts = absolute_position_difference(
                             axis_result->motion_completion_actual_position,
                             axis_result->motion_final_position);
                         axis_result->motion_direction_match =
