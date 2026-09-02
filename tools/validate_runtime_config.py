@@ -452,6 +452,7 @@ def validate_motion_profiles(
                 axis_id = axis_id_value if non_empty_string(axis_id_value) else ""
                 relative_angle = axis.get("relative_angle_millidegrees")
                 following_error = axis.get("max_following_error_millidegrees")
+                expected_scale = axis.get("expected_position_scale")
                 check.require(bool(axis_id), f"运动方案 {profile_id} 的轴 ID 不能为空")
                 check.require(
                     not axis_id or axis_id not in axis_ids,
@@ -470,6 +471,25 @@ def validate_motion_profiles(
                     and 0 < following_error <= 0xFFFFFFFF,
                     f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数",
                 )
+                check.require(
+                    isinstance(expected_scale, dict),
+                    f"运动方案 {profile_id} 的轴 {axis_id} 缺少 expected_position_scale",
+                )
+                if isinstance(expected_scale, dict):
+                    for field in (
+                        "encoder_increments",
+                        "encoder_motor_revolutions",
+                        "gear_motor_revolutions",
+                        "gear_shaft_revolutions",
+                    ):
+                        value = expected_scale.get(field)
+                        check.require(
+                            isinstance(value, int)
+                            and not isinstance(value, bool)
+                            and 0 < value <= 0xFFFFFFFF,
+                            f"运动方案 {profile_id} 的轴 {axis_id} 换算前提 "
+                            f"{field} 必须是正整数",
+                        )
                 if axis_id:
                     axis_ids.add(axis_id)
         if profile_id and profile_id not in by_id:

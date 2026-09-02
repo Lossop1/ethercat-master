@@ -53,6 +53,11 @@ typedef struct
     bool initialized;
 } emaster_relative_motion_t;
 
+/* 比较已批准方案的换算前提与当前物理从站读回，供运动前门控和报告共同使用。 */
+bool emaster_position_scale_matches(
+    const emaster_motion_axis_config_t *axis_config,
+    const emaster_position_scale_t *scale);
+
 /*
  * 把配置角度换算为每轴有符号计数，并锁定启动位置和终点。axis_configs 已由会话计划按
  * 拓扑顺序解析；函数拒绝缺失比例、整数溢出、零误差边界和不完整轴集合。

@@ -90,6 +90,20 @@ static uint64_t absolute_difference_i32(int32_t left, int32_t right)
     return (uint64_t)(difference < 0 ? -difference : difference);
 }
 
+bool emaster_position_scale_matches(
+    const emaster_motion_axis_config_t *axis_config,
+    const emaster_position_scale_t *scale)
+{
+    return axis_config != NULL && scale != NULL && scale->read_succeeded &&
+           scale->encoder_increments == axis_config->expected_encoder_increments &&
+           scale->encoder_motor_revolutions ==
+               axis_config->expected_encoder_motor_revolutions &&
+           scale->gear_motor_revolutions ==
+               axis_config->expected_gear_motor_revolutions &&
+           scale->gear_shaft_revolutions ==
+               axis_config->expected_gear_shaft_revolutions;
+}
+
 emaster_relative_motion_status_t emaster_relative_motion_init(
     const emaster_motion_profile_t *profile,
     const emaster_motion_axis_config_t *const *axis_configs,
@@ -137,6 +151,10 @@ emaster_relative_motion_status_t emaster_relative_motion_init(
             config->max_following_error_millidegrees == 0U)
         {
             return EMASTER_RELATIVE_MOTION_INVALID_ARGUMENT;
+        }
+        if (!emaster_position_scale_matches(config, &scales[axis_index]))
+        {
+            return EMASTER_RELATIVE_MOTION_INVALID_SCALE;
         }
         angle = (uint32_t)(config->relative_angle_millidegrees < 0
                                ? -(int64_t)config->relative_angle_millidegrees

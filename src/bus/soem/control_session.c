@@ -528,6 +528,14 @@ emaster_control_session_status_t emaster_soem_control_session(
                 status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
                 goto cleanup;
             }
+            axis_storage[axis_index].position_scale_match =
+                emaster_position_scale_matches(
+                    axis->motion_axis, &axis_storage[axis_index].position_scale);
+            if (!axis_storage[axis_index].position_scale_match)
+            {
+                status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
+                goto cleanup;
+            }
             motion_scales[axis_index] = axis_storage[axis_index].position_scale;
             motion_axis_configs[axis_index] = axis->motion_axis;
         }
@@ -951,6 +959,37 @@ emaster_control_session_status_t emaster_soem_control_session(
                 }
                 report->motion_completed =
                     motion_status == EMASTER_RELATIVE_MOTION_COMPLETE;
+                if (report->motion_completed)
+                {
+                    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+                    {
+                        emaster_control_session_axis_result_t *axis_result =
+                            &axis_storage[axis_index];
+                        const int32_t planned_angle =
+                            motion_axis_configs[axis_index]->relative_angle_millidegrees;
+
+                        axis_result->motion_completion_actual_position =
+                            axis_result->actual_position;
+                        axis_result->motion_actual_delta_counts =
+                            (int64_t)axis_result->motion_completion_actual_position -
+                            (int64_t)axis_result->initial_actual_position;
+                        axis_result->motion_final_error_counts = absolute_difference_i32(
+                            axis_result->motion_completion_actual_position,
+                            axis_result->motion_final_position);
+                        axis_result->motion_direction_match =
+                            (planned_angle > 0 &&
+                             axis_result->motion_actual_delta_counts > 0) ||
+                            (planned_angle < 0 &&
+                             axis_result->motion_actual_delta_counts < 0);
+                        if (!axis_result->motion_direction_match ||
+                            axis_result->motion_final_error_counts >
+                                axis_result->max_following_error_counts)
+                        {
+                            status = EMASTER_CONTROL_SESSION_FOLLOWING_ERROR;
+                            goto cleanup;
+                        }
+                    }
+                }
             }
             for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
             {

@@ -100,6 +100,11 @@ typedef struct
     const char *axis_id;
     int32_t relative_angle_millidegrees;
     uint32_t max_following_error_millidegrees;
+    /* 执行前必须与当前物理从站的 608F/6091 读回完全一致。 */
+    uint32_t expected_encoder_increments;
+    uint32_t expected_encoder_motor_revolutions;
+    uint32_t expected_gear_motor_revolutions;
+    uint32_t expected_gear_shaft_revolutions;
 } emaster_motion_axis_config_t;
 
 /* 一份运动方案描述一次全轴原子发布的轨迹，不能只覆盖部署中的部分轴。 */

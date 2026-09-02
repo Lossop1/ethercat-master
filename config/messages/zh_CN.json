@@ -68,7 +68,7 @@
     "control_session_pdo_assignment_line": "从站位置 %u：PDO 方案切换失败对象=0x%04X:%02X，SDO 中止码=%s/0x%08lX\n",
     "control_session_diagnostic_line": "从站位置 %u：驱动诊断读取=%s，603F=0x%04X，1001=0x%02X，203E=0x%08lX，203F=0x%08lX；SM2诊断读取=%s，丢失事件=%u，周期过短=%u，偏移过短=%u，同步正常=%s；SM3诊断读取=%s，丢失事件=%u，周期过短=%u，偏移过短=%u，同步正常=%s\n",
     "control_session_scale_line": "从站位置 %u：位置换算读取=%s，608F=%lu/%lu，6091=%lu/%lu\n",
-    "control_session_motion_line": "从站位置 %u：运动终点=%d，最后目标=%d，跟随误差限制=%llu counts，最大观测误差=%llu counts\n",
+    "control_session_motion_line": "从站位置 %u：换算前提=%s，计划终点=%d，完成时实际=%d，实际相对位移=%lld counts，终点误差=%llu counts，方向一致=%s，最后目标=%d，跟随误差限制=%llu counts，最大观测误差=%llu counts\n",
     "control_session_summary_line": "总线状态：SAFE-OP=%s，OP=%s，全部运行使能到达=%s，运动开始=%s，运动完成=%s，WKC=期望 %u/实际 %d，周期数=%llu，停止请求=%s，安全输出=%s，停用确认=%s，Sync0关闭=%s，恢复INIT=%s\n",
     "control_session_match": "通过",
     "control_session_mismatch": "失败",

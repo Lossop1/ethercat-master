@@ -452,6 +452,7 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             axis_id = required_string(axis, "axis_id", f"运动方案 {profile_id} 的轴")
             relative_angle = axis.get("relative_angle_millidegrees")
             following_error = axis.get("max_following_error_millidegrees")
+            expected_scale = axis.get("expected_position_scale")
             if axis_id in axis_ids:
                 raise ValueError(f"运动方案 {profile_id} 的轴 ID 重复：{axis_id}")
             if (
@@ -471,12 +472,35 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数"
                 )
+            if not isinstance(expected_scale, dict):
+                raise ValueError(
+                    f"运动方案 {profile_id} 的轴 {axis_id} 缺少 expected_position_scale"
+                )
+            scale_values: dict[str, int] = {}
+            for field in (
+                "encoder_increments",
+                "encoder_motor_revolutions",
+                "gear_motor_revolutions",
+                "gear_shaft_revolutions",
+            ):
+                value = expected_scale.get(field)
+                if (
+                    not isinstance(value, int)
+                    or isinstance(value, bool)
+                    or not 0 < value <= 0xFFFFFFFF
+                ):
+                    raise ValueError(
+                        f"运动方案 {profile_id} 的轴 {axis_id} 换算前提 {field} "
+                        "必须是正整数"
+                    )
+                scale_values[field] = value
             axis_ids.add(axis_id)
             axis_values.append(
                 {
                     "axis_id": axis_id,
                     "relative_angle_millidegrees": relative_angle,
                     "max_following_error_millidegrees": following_error,
+                    "expected_position_scale": scale_values,
                 }
             )
         values.append(

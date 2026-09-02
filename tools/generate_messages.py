@@ -127,7 +127,7 @@ MESSAGE_FORMATS = {
     "control_session_pdo_assignment_line": ("u", "X", "X", "s", "X"),
     "control_session_diagnostic_line": ("u", "s", "X", "X", "X", "X", "s", "u", "u", "u", "s", "s", "u", "u", "u", "s"),
     "control_session_scale_line": ("u", "s", "u", "u", "u", "u"),
-    "control_session_motion_line": ("u", "d", "d", "u", "u"),
+    "control_session_motion_line": ("u", "s", "d", "d", "d", "u", "s", "d", "u", "u"),
     "control_session_summary_line": ("s", "s", "s", "s", "s", "u", "d", "u", "s", "s", "s", "s", "s"),
 }
 

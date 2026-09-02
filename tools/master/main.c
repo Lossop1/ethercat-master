@@ -239,7 +239,12 @@ int main(int argc, char **argv)
         {
             fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_LINE),
                     (unsigned int)axis->position,
+                    result_text(axis->position_scale_match),
                     (int)axis->motion_final_position,
+                    (int)axis->motion_completion_actual_position,
+                    (long long)axis->motion_actual_delta_counts,
+                    (unsigned long long)axis->motion_final_error_counts,
+                    result_text(axis->motion_direction_match),
                     (int)axis->target_position,
                     (unsigned long long)axis->max_following_error_counts,
                     (unsigned long long)axis->max_observed_following_error_counts);

@@ -6,5 +6,5 @@
   "ethercat_interface": "enp49s0",
   "management_interface": "enp97s0",
   "operation_profile_ids": ["cyberbeast.fixed-dc-csp-1ms"],
-  "motion_profile_id": null
+  "motion_profile_id": "orangepi-bench.output-positive-36deg"
 }

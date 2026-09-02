@@ -93,8 +93,13 @@ typedef struct
     int32_t actual_position;
     int32_t target_position;
     int32_t motion_final_position;
+    int32_t motion_completion_actual_position;
+    int64_t motion_actual_delta_counts;
+    uint64_t motion_final_error_counts;
     uint64_t max_following_error_counts;
     uint64_t max_observed_following_error_counts;
+    bool position_scale_match;
+    bool motion_direction_match;
     emaster_cia402_state_t cia402_state;
     bool switch_on_disabled_seen;
     bool ready_to_switch_on_seen;
