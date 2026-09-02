@@ -624,11 +624,6 @@ emaster_cia_preflight_status_t emaster_soem_cia_preflight(
         axis_storage[axis_index].status_word = status_word;
         axis_storage[axis_index].mode_display_match =
             mode_display == plan->axes[axis_index].operation_mode->value;
-        if (!axis_storage[axis_index].mode_display_match)
-        {
-            status = EMASTER_CIA_PREFLIGHT_FEEDBACK_INVALID;
-            goto cleanup;
-        }
     }
 
 cleanup:
