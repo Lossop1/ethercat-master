@@ -54,6 +54,9 @@ typedef struct
     bool supports_pdo_configuration;
     /* 这是 ESI 声明的能力，不表示所有运行方案都必须启用 DC。 */
     bool supports_distributed_clocks;
+    /* 供应商状态字定义中的停用确认条件：(6041 & mask) == value。 */
+    uint16_t safe_stop_status_mask;
+    uint16_t safe_stop_status_value;
 } emaster_slave_profile_t;
 
 /* 精确比较身份三元组；空指针和任何字段不一致均返回 false。 */
