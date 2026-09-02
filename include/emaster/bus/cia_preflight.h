@@ -44,6 +44,7 @@ typedef struct
     bool output_initialized;
     bool input_decoded;
     bool mode_display_match;
+    int8_t requested_mode;
     int8_t mode_display;
     uint16_t status_word;
 } emaster_cia_preflight_axis_result_t;

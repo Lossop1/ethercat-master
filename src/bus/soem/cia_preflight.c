@@ -426,6 +426,7 @@ emaster_cia_preflight_status_t emaster_soem_cia_preflight(
         int8_t mode_value;
 
         axis_storage[axis_index].position = (uint16_t)(axis_index + 1U);
+        axis_storage[axis_index].requested_mode = axis->operation_mode->value;
         axis_storage[axis_index].identity_match = emaster_slave_identity_matches(
             axis->device_profile,
             &(emaster_slave_identity_t){slave->eep_man, slave->eep_id, slave->eep_rev});

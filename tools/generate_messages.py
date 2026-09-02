@@ -76,6 +76,7 @@ MESSAGE_KEYS = [
     "cia_preflight_success",
     "cia_preflight_failed",
     "cia_preflight_axis_line",
+    "cia_preflight_session_line",
     "cia_preflight_match",
     "cia_preflight_mismatch",
     "cia_preflight_sdo_write_failed",
@@ -113,7 +114,8 @@ MESSAGE_FORMATS = {
     "cia_preflight_usage": ("s", "s"),
     "cia_preflight_confirm_prompt": ("s", "s", "s", "u", "s"),
     "cia_preflight_failed": ("s",),
-    "cia_preflight_axis_line": ("u", "s", "s", "s", "s", "s", "s"),
+    "cia_preflight_axis_line": ("u", "s", "s", "s", "s", "s", "s", "d", "d", "X"),
+    "cia_preflight_session_line": ("s", "s", "u", "d", "s", "s"),
 }
 
 PRINTF_CONVERSION = re.compile(

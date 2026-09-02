@@ -170,8 +170,13 @@ int main(int argc, char **argv)
                 (unsigned int)axis->position, result_text(axis->identity_match),
                 result_text(axis->pdo_match), result_text(axis->process_map_match),
                 result_text(axis->output_initialized), result_text(axis->input_decoded),
-                result_text(axis->mode_display_match));
+                result_text(axis->mode_display_match), (int)axis->requested_mode,
+                (int)axis->mode_display, (unsigned int)axis->status_word);
     }
+    fprintf(stdout, emaster_text(EMASTER_TEXT_CIA_PREFLIGHT_SESSION_LINE),
+            result_text(report.safe_op_reached), result_text(report.op_reached),
+            (unsigned int)report.expected_wkc, report.actual_wkc,
+            result_text(report.sync0_disabled), result_text(report.restore_init_succeeded));
     if (preflight_status == EMASTER_CIA_PREFLIGHT_OK)
     {
         fputs(emaster_text(EMASTER_TEXT_CIA_PREFLIGHT_SUCCESS), stdout);
