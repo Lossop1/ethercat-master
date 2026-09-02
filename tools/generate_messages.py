@@ -73,6 +73,8 @@ MESSAGE_KEYS = [
     "control_session_success",
     "control_session_failed",
     "control_session_axis_line",
+    "control_session_diagnostic_line",
+    "control_session_scale_line",
     "control_session_summary_line",
     "control_session_match",
     "control_session_mismatch",
@@ -116,7 +118,9 @@ MESSAGE_FORMATS = {
     "control_session_usage": ("s",),
     "control_session_start": ("s", "s", "s", "u"),
     "control_session_failed": ("s",),
-    "control_session_axis_line": ("u", "s", "s", "s", "s", "s", "s", "d", "d", "X", "X", "d", "d", "s", "s", "d", "s", "d", "s", "s", "s"),
+    "control_session_axis_line": ("u", "s", "s", "s", "s", "s", "s", "d", "d", "X", "X", "d", "d", "d", "s", "s", "d", "s", "d", "s", "s", "s"),
+    "control_session_diagnostic_line": ("u", "s", "X", "X", "X", "X", "s", "u", "u", "u", "s", "s", "u", "u", "u", "s"),
+    "control_session_scale_line": ("u", "s", "u", "u", "u", "u"),
     "control_session_summary_line": ("s", "s", "s", "u", "d", "u", "s", "s", "s", "s", "s"),
 }
 
