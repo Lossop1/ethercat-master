@@ -167,6 +167,41 @@ def validate_sync_config(
     )
     check.require(cycle_valid, f"运行方案 {operation_id} 的 cycle_ns 必须是正整数或 null")
 
+    process_data_phase_ns = sync.get("process_data_phase_ns")
+    phase_valid = (
+        process_data_phase_ns is None
+        or (
+            isinstance(process_data_phase_ns, int)
+            and not isinstance(process_data_phase_ns, bool)
+            and 0 <= process_data_phase_ns <= 0xFFFFFFFF
+        )
+    )
+    check.require(
+        phase_valid,
+        f"运行方案 {operation_id} 的 process_data_phase_ns 必须是非负整数或 null",
+    )
+    if (
+        cycle_valid
+        and isinstance(cycle_ns, int)
+        and isinstance(process_data_phase_ns, int)
+        and not isinstance(process_data_phase_ns, bool)
+    ):
+        check.require(
+            process_data_phase_ns < cycle_ns,
+            f"运行方案 {operation_id} 的 process_data_phase_ns 必须小于 cycle_ns",
+        )
+
+    dc_startup_cycles = sync.get("dc_startup_cycles")
+    check.require(
+        dc_startup_cycles is None
+        or (
+            isinstance(dc_startup_cycles, int)
+            and not isinstance(dc_startup_cycles, bool)
+            and 0 < dc_startup_cycles <= 0xFFFFFFFF
+        ),
+        f"运行方案 {operation_id} 的 dc_startup_cycles 必须是正整数或 null",
+    )
+
     shift = sync.get("sync0_shift_ns")
     check.require(
         shift is None
@@ -184,10 +219,15 @@ def validate_sync_config(
                 f"已批准运行方案 {operation_id} 缺少同步参数 {field}",
             )
         if strategy == "dc":
-            check.require(
-                sync.get("sync0_shift_ns") is not None,
-                f"已批准 DC 运行方案 {operation_id} 缺少 sync0_shift_ns",
-            )
+            for field in (
+                "sync0_shift_ns",
+                "process_data_phase_ns",
+                "dc_startup_cycles",
+            ):
+                check.require(
+                    sync.get(field) is not None,
+                    f"已批准 DC 运行方案 {operation_id} 缺少 {field}",
+                )
 
 
 def validate_modes(

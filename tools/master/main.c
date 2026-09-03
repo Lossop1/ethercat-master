@@ -101,6 +101,8 @@ static const char *session_status_text(emaster_control_session_status_t status)
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_FOLLOWING_ERROR);
         case EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED:
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_CYCLE_WAIT_FAILED);
+        case EMASTER_CONTROL_SESSION_DC_SYNC_FAILED:
+            return emaster_text(EMASTER_TEXT_CONTROL_SESSION_DC_SYNC_FAILED);
         case EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED:
             return emaster_text(EMASTER_TEXT_CONTROL_SESSION_SAFE_STOP_FAILED);
         case EMASTER_CONTROL_SESSION_AUDIT_FAILED:

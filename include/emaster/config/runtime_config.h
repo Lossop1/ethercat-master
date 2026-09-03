@@ -98,6 +98,12 @@ typedef struct
     uint32_t assign_activate;
     bool has_cycle_ns;
     uint32_t cycle_ns;
+    /* 主站过程帧在 DC 周期内的目标相位，由运行方案显式给出。 */
+    bool has_process_data_phase_ns;
+    uint32_t process_data_phase_ns;
+    /* 请求 OP 前在 SAFE-OP 连续交换过程数据的周期数。 */
+    bool has_dc_startup_cycles;
+    uint32_t dc_startup_cycles;
     bool has_sync0_shift_ns;
     int32_t sync0_shift_ns;
     bool has_sm2_sync_type;

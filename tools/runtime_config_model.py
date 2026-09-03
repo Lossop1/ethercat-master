@@ -176,6 +176,16 @@ def operation_values(
             f"运行方案 {operation_id} 的 cycle_ns",
             0xFFFFFFFF,
         )
+        phase_present, process_data_phase_ns = optional_positive_integer(
+            sync.get("process_data_phase_ns"),
+            f"运行方案 {operation_id} 的 process_data_phase_ns",
+            0xFFFFFFFF,
+        )
+        startup_present, dc_startup_cycles = optional_positive_integer(
+            sync.get("dc_startup_cycles"),
+            f"运行方案 {operation_id} 的 dc_startup_cycles",
+            0xFFFFFFFF,
+        )
         shift_present, shift_ns = optional_signed(
             sync.get("sync0_shift_ns"),
             f"运行方案 {operation_id} 的 sync0_shift_ns",
@@ -204,13 +214,27 @@ def operation_values(
                 for field, present in required_sync_parameters.items()
                 if not present
             ]
-            if strategy == "dc" and not shift_present:
-                missing_parameters.append("sync0_shift_ns")
+            if strategy == "dc":
+                if not shift_present:
+                    missing_parameters.append("sync0_shift_ns")
+                if not phase_present:
+                    missing_parameters.append("process_data_phase_ns")
+                if not startup_present:
+                    missing_parameters.append("dc_startup_cycles")
             if missing_parameters:
                 raise ValueError(
                     f"已批准运行方案 {operation_id} 缺少同步参数："
                     f"{', '.join(missing_parameters)}"
                 )
+        if (
+            strategy == "dc"
+            and cycle_present
+            and phase_present
+            and process_data_phase_ns >= cycle_ns
+        ):
+            raise ValueError(
+                f"运行方案 {operation_id} 的 process_data_phase_ns 必须小于 cycle_ns"
+            )
 
         modes = document.get("modes", [])
         if not isinstance(modes, list):
@@ -446,6 +470,10 @@ def operation_values(
                 "assign_activate": assign_activate,
                 "cycle_present": cycle_present,
                 "cycle_ns": cycle_ns,
+                "phase_present": phase_present,
+                "process_data_phase_ns": process_data_phase_ns,
+                "startup_present": startup_present,
+                "dc_startup_cycles": dc_startup_cycles,
                 "shift_present": shift_present,
                 "shift_ns": shift_ns,
                 "sm2_present": sm2_present,
@@ -657,6 +685,15 @@ def deployment_values(
             if len(cycle_values) != 1:
                 raise ValueError(
                     f"部署 {deployment_id} 启用的运行方案必须使用相同周期"
+                )
+            dc_phase_values = {
+                operation_by_id[operation_id]["process_data_phase_ns"]
+                for operation_id in operation_profile_ids
+                if operation_by_id[operation_id]["strategy"] == "dc"
+            }
+            if len(dc_phase_values) > 1:
+                raise ValueError(
+                    f"部署 {deployment_id} 启用的 DC 运行方案必须使用相同过程帧相位"
                 )
 
         motion_profile_id = document.get("motion_profile_id")

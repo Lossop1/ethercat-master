@@ -176,8 +176,16 @@ bool emaster_session_observer_prepare_audit(
          (uint64_t)plan->motion_profile->settle_ms) * UINT64_C(1000000);
     motion_cycles =
         (motion_time_ns + plan->cycle_ns - UINT64_C(1)) / plan->cycle_ns;
+    if (transition_cycles > UINT64_MAX / UINT64_C(3) ||
+        motion_cycles > UINT64_MAX - transition_cycles * UINT64_C(3) ||
+        plan->dc_startup_cycles >
+            UINT64_MAX - motion_cycles - transition_cycles * UINT64_C(3) -
+                EMASTER_AUDIT_EXCHANGE_MARGIN)
+    {
+        return false;
+    }
     max_exchanges = motion_cycles + transition_cycles * UINT64_C(3) +
-                    EMASTER_AUDIT_EXCHANGE_MARGIN;
+                    plan->dc_startup_cycles + EMASTER_AUDIT_EXCHANGE_MARGIN;
     for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
     {
         size_t axis_fields = runtime[axis_index].rx_field_count +

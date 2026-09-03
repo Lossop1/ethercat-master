@@ -88,6 +88,7 @@
     "control_session_motion_invalid": "运动方案、位置换算或目标范围无效",
     "control_session_following_error": "实际位置与周期目标的偏差超过运行方案边界",
     "control_session_cycle_wait_failed": "周期时钟等待失败",
+    "control_session_dc_sync_failed": "DC 周期反馈无效，无法完成进入 OP 前的时钟同步",
     "control_session_safe_stop_failed": "驱动器未在状态切换超时内确认停用",
     "control_session_signal_failed": "无法安装进程停止信号处理器\n",
     "control_session_report_saved": "运行配置与通信审计报告已保存：%s\n",

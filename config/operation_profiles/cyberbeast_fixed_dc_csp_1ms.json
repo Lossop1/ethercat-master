@@ -9,6 +9,8 @@
     "strategy": "dc",
     "assign_activate": "0x00000300",
     "cycle_ns": 1000000,
+    "process_data_phase_ns": 50000,
+    "dc_startup_cycles": 1000,
     "sync0_shift_ns": 250000,
     "sm2_sync_type": "0x0001",
     "sm3_sync_type": "0x0022"
@@ -20,7 +22,17 @@
       "required_rx_fields": ["control_word", "target_position"],
       "required_tx_fields": ["status_word", "actual_position"],
       "mode_display_policy": "diagnostic",
+      "safeop_to_op_sdo_writes": [
+        {
+          "index": "0x2002",
+          "subindex": 1,
+          "type": "u16",
+          "value": "0x0003"
+        }
+      ],
       "final_sdo_reads": [
+        {"name": "configured_module", "index": "0xF030", "subindex": 1, "type": "u32"},
+        {"name": "detected_module", "index": "0xF050", "subindex": 1, "type": "u32"},
         {"name": "target_position", "index": "0x607A", "subindex": 0, "type": "i32"},
         {"name": "position_demand_value", "index": "0x6062", "subindex": 0, "type": "i32"},
         {"name": "position_actual_value", "index": "0x6064", "subindex": 0, "type": "i32"},

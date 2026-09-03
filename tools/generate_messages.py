@@ -96,6 +96,7 @@ MESSAGE_KEYS = [
     "control_session_motion_invalid",
     "control_session_following_error",
     "control_session_cycle_wait_failed",
+    "control_session_dc_sync_failed",
     "control_session_safe_stop_failed",
     "control_session_signal_failed",
     "control_session_report_saved",

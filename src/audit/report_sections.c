@@ -440,11 +440,19 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(fprintf(
         stream,
         "\"dc\":{\"required\":%s,\"configured\":%s,"
-        "\"reference_slave_position\":%u,\"last_dc_time_ns\":%" PRId64 "},"
+        "\"reference_slave_position\":%u,\"process_data_phase_ns\":%" PRIu32
+        ",\"startup_cycles_requested\":%" PRIu32
+        ",\"startup_cycles_completed\":%" PRIu32
+        ",\"startup_phase_error_ns\":%" PRId64
+        ",\"last_dc_time_ns\":%" PRId64 "},"
         "\"motion\":",
         report->dc_required ? "true" : "false",
         report->dc_configured ? "true" : "false",
         (unsigned int)report->dc_reference_slave,
+        report->process_data_phase_ns,
+        report->dc_startup_cycles_requested,
+        report->dc_startup_cycles_completed,
+        report->dc_startup_phase_error_ns,
         report->last_dc_time_ns) >= 0);
     REQUIRE_WRITE(write_motion(stream, plan->motion_profile));
     REQUIRE_WRITE(fputs(",\"axes\":[", stream) != EOF);

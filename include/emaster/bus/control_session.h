@@ -37,6 +37,7 @@ typedef enum
     EMASTER_CONTROL_SESSION_MOTION_INVALID,
     EMASTER_CONTROL_SESSION_FOLLOWING_ERROR,
     EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED,
+    EMASTER_CONTROL_SESSION_DC_SYNC_FAILED,
     EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED,
     EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED,
     EMASTER_CONTROL_SESSION_AUDIT_FAILED
@@ -155,6 +156,10 @@ typedef struct
     bool dc_required;
     bool dc_configured;
     uint16_t dc_reference_slave;
+    uint32_t process_data_phase_ns;
+    uint32_t dc_startup_cycles_requested;
+    uint32_t dc_startup_cycles_completed;
+    int64_t dc_startup_phase_error_ns;
     int64_t last_dc_time_ns;
     bool safe_op_reached;
     bool op_reached;

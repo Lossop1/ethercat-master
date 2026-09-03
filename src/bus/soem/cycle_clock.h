@@ -1,0 +1,41 @@
+#ifndef EMASTER_BUS_SOEM_CYCLE_CLOCK_H
+#define EMASTER_BUS_SOEM_CYCLE_CLOCK_H
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+
+/*
+ * 周期时钟只负责主机唤醒节拍和 DC 相位校正，不访问 EtherCAT 总线，也不解释设备状态。
+ * 所有状态属于一次控制会话，重新建立会话时不会继承上次运行的积分误差。
+ */
+typedef struct
+{
+    struct timespec deadline;
+    uint32_t cycle_ns;
+    uint32_t target_phase_ns;
+    int64_t integral_error_ns;
+    int64_t correction_ns;
+    int64_t phase_error_ns;
+    bool initialized;
+    bool dc_feedback_valid;
+} emaster_cycle_clock_t;
+
+/* 以当前单调时钟为起点建立周期；首次等待发生在一个完整周期之后。 */
+bool emaster_cycle_clock_init(emaster_cycle_clock_t *clock, uint32_t cycle_ns,
+                              uint32_t target_phase_ns);
+
+/* 按绝对期限等待下一周期，避免每次相对休眠累积主机执行时间。 */
+bool emaster_cycle_clock_wait(emaster_cycle_clock_t *clock);
+
+/*
+ * 使用 SOEM 最近一次过程数据接收得到的 DC 系统时间修正下一周期。
+ * 返回 false 表示样本无效，调用者可以继续使用未校正的标称周期。
+ */
+bool emaster_cycle_clock_observe_dc(emaster_cycle_clock_t *clock,
+                                    int64_t dc_time_ns);
+
+/* 返回最近一次有效 DC 样本相对目标相位的有符号误差。 */
+int64_t emaster_cycle_clock_phase_error_ns(const emaster_cycle_clock_t *clock);
+
+#endif

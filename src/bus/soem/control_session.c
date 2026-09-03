@@ -3,6 +3,7 @@
 #include "emaster/bus/control_session.h"
 
 #include "cia_process_image.h"
+#include "cycle_clock.h"
 #include "emaster/catalog/slave_profile.h"
 #include "emaster/multiaxis/coordinator.h"
 #include "session_observer.h"
@@ -10,12 +11,10 @@
 
 #include "soem/soem.h"
 
-#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 static void disable_sync0(ecx_contextt *context, emaster_cia_process_image_t *runtime, size_t count)
 {
@@ -34,20 +33,6 @@ static void disable_sync0(ecx_contextt *context, emaster_cia_process_image_t *ru
     }
 }
 
-static bool timespec_add_ns(struct timespec *value, uint32_t nanoseconds)
-{
-    uint64_t total_nanoseconds;
-
-    if (value == NULL)
-    {
-        return false;
-    }
-    total_nanoseconds = (uint64_t)value->tv_nsec + (uint64_t)nanoseconds;
-    value->tv_sec += (time_t)(total_nanoseconds / UINT64_C(1000000000));
-    value->tv_nsec = (long)(total_nanoseconds % UINT64_C(1000000000));
-    return true;
-}
-
 static uint64_t absolute_position_difference(int32_t left, int32_t right)
 {
     int64_t difference = (int64_t)left - (int64_t)right;
@@ -55,19 +40,66 @@ static uint64_t absolute_position_difference(int32_t left, int32_t right)
     return (uint64_t)(difference < 0 ? -difference : difference);
 }
 
-static bool wait_for_cycle(struct timespec *deadline)
+static bool any_slave_state_error(const ecx_contextt *context)
 {
-    int result;
+    int slave;
 
-    if (deadline == NULL)
+    if (context == NULL)
     {
-        return false;
+        return true;
     }
-    do
+    for (slave = 1; slave <= context->slavecount; ++slave)
     {
-        result = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, deadline, NULL);
-    } while (result == EINTR);
-    return result == 0;
+        if ((context->slavelist[slave].state & EC_STATE_ERROR) != 0U)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static emaster_control_session_status_t exchange_process_data(
+    const emaster_session_plan_t *plan,
+    const emaster_cia_process_image_t *runtime,
+    ecx_contextt *context,
+    emaster_control_session_report_t *report,
+    emaster_cycle_clock_t *cycle_clock,
+    emaster_audit_phase_t phase,
+    uint64_t *process_exchange)
+{
+    size_t axis_index;
+
+    if (plan == NULL || runtime == NULL || context == NULL || report == NULL ||
+        cycle_clock == NULL || process_exchange == NULL)
+    {
+        return EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
+    }
+    if (!emaster_cycle_clock_wait(cycle_clock))
+    {
+        return EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
+    }
+    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    {
+        if (!emaster_cia_process_image_audit_output(
+                &runtime[axis_index], &report->audit, phase,
+                (uint16_t)(axis_index + 1U), *process_exchange + UINT64_C(1)))
+        {
+            return EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+        }
+    }
+    ++(*process_exchange);
+    (void)ecx_send_processdata(context);
+    report->actual_wkc = ecx_receive_processdata(context, EC_TIMEOUTRET);
+    ++report->cycle_count;
+    if (report->actual_wkc != (int)report->expected_wkc)
+    {
+        return EMASTER_CONTROL_SESSION_INITIAL_WKC_FAILED;
+    }
+    if (report->dc_required)
+    {
+        (void)emaster_cycle_clock_observe_dc(cycle_clock, context->DCtime);
+    }
+    return EMASTER_CONTROL_SESSION_OK;
 }
 
 /*
@@ -83,10 +115,10 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
                               emaster_multiaxis_coordinator_t *coordinator,
                               ecx_contextt *context,
                               emaster_control_session_report_t *report,
+                              emaster_cycle_clock_t *cycle_clock,
                               bool *safe_output_sent,
                               uint64_t *process_exchange)
 {
-    struct timespec deadline;
     uint64_t timeout_ns;
     uint64_t max_cycles;
     uint64_t cycle_index;
@@ -94,10 +126,8 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
 
     if (plan == NULL || runtime == NULL || axes == NULL || controllers == NULL ||
         controller_outputs == NULL || status_words == NULL || coordinator == NULL ||
-        context == NULL || report == NULL || safe_output_sent == NULL || plan->cycle_ns == 0U ||
-        process_exchange == NULL ||
-        clock_gettime(CLOCK_MONOTONIC, &deadline) != 0 ||
-        !timespec_add_ns(&deadline, plan->cycle_ns))
+        context == NULL || report == NULL || cycle_clock == NULL ||
+        safe_output_sent == NULL || plan->cycle_ns == 0U || process_exchange == NULL)
     {
         return false;
     }
@@ -145,18 +175,10 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
                 return false;
             }
         }
-        for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
-        {
-            (void)emaster_cia_process_image_audit_output(
-                &runtime[axis_index], &report->audit,
-                EMASTER_AUDIT_PHASE_SAFE_STOP, (uint16_t)(axis_index + 1U),
-                *process_exchange + UINT64_C(1));
-        }
-        ++(*process_exchange);
-        (void)ecx_send_processdata(context);
-        report->actual_wkc = ecx_receive_processdata(context, EC_TIMEOUTRET);
-        ++report->cycle_count;
-        if (report->actual_wkc != (int)report->expected_wkc)
+        if (exchange_process_data(
+                plan, runtime, context, report, cycle_clock,
+                EMASTER_AUDIT_PHASE_SAFE_STOP, process_exchange) !=
+            EMASTER_CONTROL_SESSION_OK)
         {
             return false;
         }
@@ -197,11 +219,6 @@ static bool stop_process_data(const emaster_session_plan_t *plan,
         {
             return true;
         }
-        if (cycle_index + UINT64_C(1) < max_cycles &&
-            (!wait_for_cycle(&deadline) || !timespec_add_ns(&deadline, plan->cycle_ns)))
-        {
-            return false;
-        }
     }
     return false;
 }
@@ -226,6 +243,7 @@ emaster_control_session_status_t emaster_soem_control_session(
     emaster_relative_motion_axis_t *motion_axes = NULL;
     emaster_relative_motion_t motion;
     emaster_multiaxis_coordinator_t coordinator;
+    emaster_cycle_clock_t cycle_clock;
     uint8_t *io_map = NULL;
     emaster_control_session_status_t status = EMASTER_CONTROL_SESSION_OK;
     size_t io_map_capacity;
@@ -242,21 +260,25 @@ emaster_control_session_status_t emaster_soem_control_session(
     bool mode_confirmation_started = false;
     uint64_t mode_confirmation_deadline_cycle = 0U;
     uint64_t mode_confirmation_cycles;
+    uint64_t operation_transition_cycles;
     uint64_t enable_deadline_cycle;
     uint64_t process_exchange = 0U;
 
     if (plan == NULL || plan->status != EMASTER_SESSION_PLAN_READY || plan->deployment == NULL ||
         plan->deployment->ethercat_interface == NULL || axis_storage == NULL ||
-        axis_capacity < plan->axis_count || report == NULL || plan->axis_count == 0U)
+        axis_capacity < plan->axis_count || report == NULL || plan->axis_count == 0U ||
+        plan->cycle_ns == 0U)
     {
         return EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     }
     mode_confirmation_cycles =
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
         plan->cycle_ns;
+    operation_transition_cycles = mode_confirmation_cycles * UINT64_C(4);
     memset(report, 0, sizeof(*report));
     emaster_run_audit_init(&report->audit);
     memset(&motion, 0, sizeof(motion));
+    memset(&cycle_clock, 0, sizeof(cycle_clock));
     report->status = EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     report->axes = axis_storage;
     report->axis_count = plan->axis_count;
@@ -460,6 +482,8 @@ emaster_control_session_status_t emaster_soem_control_session(
         status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
         goto cleanup;
     }
+    /* 禁止映射函数隐式请求 SAFE-OP，状态切换由本会话在 DC 配置后显式执行。 */
+    context.manualstatechange = 1;
     io_map_size = ecx_config_map_group(&context, io_map, 0U);
     if (io_map_size <= 0 || (size_t)io_map_size > io_map_capacity)
     {
@@ -579,9 +603,12 @@ emaster_control_session_status_t emaster_soem_control_session(
         }
     }
 
-    if (ecx_statecheck(&context, 0U, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4) !=
+    context.slavelist[0].state = EC_STATE_SAFE_OP;
+    if (ecx_writestate(&context, 0U) <= 0 ||
+        ecx_statecheck(&context, 0U, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4) !=
         EC_STATE_SAFE_OP)
     {
+        ecx_readstate(&context);
         status = EMASTER_CONTROL_SESSION_SAFE_OP_NOT_REACHED;
         goto cleanup;
     }
@@ -670,24 +697,22 @@ emaster_control_session_status_t emaster_soem_control_session(
     }
     report->expected_wkc = (uint16_t)(context.grouplist[0].outputsWKC * 2U +
                                       context.grouplist[0].inputsWKC);
-    /* SAFE-OP 首次反馈用于锁定 CSP 当前实际位置，控制字仍保持为零。 */
-    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    if (!emaster_cycle_clock_init(&cycle_clock, plan->cycle_ns,
+                                  plan->process_data_phase_ns))
     {
-        if (!emaster_cia_process_image_audit_output(
-                &runtime[axis_index], &report->audit,
-                EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION,
-                (uint16_t)(axis_index + 1U), process_exchange + UINT64_C(1)))
-        {
-            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
-            goto cleanup;
-        }
+        status = EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
+        goto cleanup;
     }
-    ++process_exchange;
-    (void)ecx_send_processdata(&context);
-    report->actual_wkc = ecx_receive_processdata(&context, EC_TIMEOUTRET);
-    if (report->actual_wkc != (int)report->expected_wkc)
+    cycle_output_active = true;
+    report->process_data_phase_ns = plan->process_data_phase_ns;
+    report->dc_startup_cycles_requested = plan->dc_startup_cycles;
+
+    /* SAFE-OP 首次周期反馈用于锁定 CSP 当前实际位置，控制字仍保持为零。 */
+    status = exchange_process_data(
+        plan, runtime, &context, report, &cycle_clock,
+        EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION, &process_exchange);
+    if (status != EMASTER_CONTROL_SESSION_OK)
     {
-        status = EMASTER_CONTROL_SESSION_INITIAL_WKC_FAILED;
         goto cleanup;
     }
     for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
@@ -734,30 +759,78 @@ emaster_control_session_status_t emaster_soem_control_session(
             goto cleanup;
         }
     }
-    cycle_output_active = true;
-    context.slavelist[0].state = EC_STATE_OPERATIONAL;
-    ecx_writestate(&context, 0U);
-    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    if (dc_required)
     {
-        if (!emaster_cia_process_image_audit_output(
-                &runtime[axis_index], &report->audit,
-                EMASTER_AUDIT_PHASE_OPERATION_REQUEST,
-                (uint16_t)(axis_index + 1U), process_exchange + UINT64_C(1)))
+        uint32_t startup_cycle;
+
+        report->dc_startup_cycles_completed = 1U;
+        for (startup_cycle = 1U; startup_cycle < plan->dc_startup_cycles;
+             ++startup_cycle)
         {
-            status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+            status = exchange_process_data(
+                plan, runtime, &context, report, &cycle_clock,
+                EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION, &process_exchange);
+            if (status != EMASTER_CONTROL_SESSION_OK)
+            {
+                goto cleanup;
+            }
+            report->dc_startup_cycles_completed = startup_cycle + 1U;
+            if (stop_requested != NULL && stop_requested(stop_user_data))
+            {
+                report->stop_requested = true;
+                goto cleanup;
+            }
+        }
+        if (!cycle_clock.dc_feedback_valid)
+        {
+            status = EMASTER_CONTROL_SESSION_DC_SYNC_FAILED;
             goto cleanup;
         }
+        report->dc_startup_phase_error_ns =
+            emaster_cycle_clock_phase_error_ns(&cycle_clock);
     }
-    ++process_exchange;
-    (void)ecx_send_processdata(&context);
-    report->actual_wkc = ecx_receive_processdata(&context, EC_TIMEOUTRET);
-    if (ecx_statecheck(&context, 0U, EC_STATE_OPERATIONAL, EC_TIMEOUTSTATE * 4) !=
-        EC_STATE_OPERATIONAL)
+
+    /*
+     * OP 请求期间继续使用同一个绝对周期发送已锁定目标的 PDO。这样状态轮询不会
+     * 中断 SM2 事件，也不会在进入 OP 的瞬间把零位置作为有效目标送入驱动器。
+     */
+    context.slavelist[0].state = EC_STATE_OPERATIONAL;
+    if (ecx_writestate(&context, 0U) <= 0)
     {
         status = EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
         goto cleanup;
     }
-    report->op_reached = true;
+    for (uint64_t transition_cycle = 0U;
+         transition_cycle < operation_transition_cycles;
+         ++transition_cycle)
+    {
+        int bus_state;
+
+        status = exchange_process_data(
+            plan, runtime, &context, report, &cycle_clock,
+            EMASTER_AUDIT_PHASE_OPERATION_REQUEST, &process_exchange);
+        if (status != EMASTER_CONTROL_SESSION_OK)
+        {
+            goto cleanup;
+        }
+        bus_state = ecx_readstate(&context);
+        if (bus_state == EC_STATE_OPERATIONAL &&
+            !any_slave_state_error(&context))
+        {
+            report->op_reached = true;
+            break;
+        }
+        if (any_slave_state_error(&context))
+        {
+            break;
+        }
+    }
+    if (!report->op_reached)
+    {
+        ecx_readstate(&context);
+        status = EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
+        goto cleanup;
+    }
     enable_deadline_cycle = report->cycle_count + mode_confirmation_cycles;
     for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
     {
@@ -788,44 +861,17 @@ emaster_control_session_status_t emaster_soem_control_session(
         }
     }
     {
-        struct timespec deadline;
-
-        if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0 ||
-            !timespec_add_ns(&deadline, plan->cycle_ns))
-        {
-            status = EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
-            goto cleanup;
-        }
         while (true)
         {
             emaster_multiaxis_frame_t frame;
             bool all_axes_enabled = true;
             bool all_modes_confirmed = true;
 
-            if (!wait_for_cycle(&deadline) || !timespec_add_ns(&deadline, plan->cycle_ns))
+            status = exchange_process_data(
+                plan, runtime, &context, report, &cycle_clock,
+                EMASTER_AUDIT_PHASE_CYCLIC_OPERATION, &process_exchange);
+            if (status != EMASTER_CONTROL_SESSION_OK)
             {
-                status = EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
-                goto cleanup;
-            }
-            for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
-            {
-                if (!emaster_cia_process_image_audit_output(
-                        &runtime[axis_index], &report->audit,
-                        EMASTER_AUDIT_PHASE_CYCLIC_OPERATION,
-                        (uint16_t)(axis_index + 1U),
-                        process_exchange + UINT64_C(1)))
-                {
-                    status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
-                    goto cleanup;
-                }
-            }
-            ++process_exchange;
-            (void)ecx_send_processdata(&context);
-            report->actual_wkc = ecx_receive_processdata(&context, EC_TIMEOUTRET);
-            ++report->cycle_count;
-            if (report->actual_wkc != (int)report->expected_wkc)
-            {
-                status = EMASTER_CONTROL_SESSION_INITIAL_WKC_FAILED;
                 goto cleanup;
             }
             for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
@@ -1075,7 +1121,7 @@ cleanup:
         {
             report->safe_state_reached = stop_process_data(
                 plan, runtime, axis_storage, controllers, controller_outputs, status_words,
-                &coordinator, &context, report, &safe_output_sent,
+                &coordinator, &context, report, &cycle_clock, &safe_output_sent,
                 &process_exchange);
             if (!report->safe_state_reached && status == EMASTER_CONTROL_SESSION_OK)
             {

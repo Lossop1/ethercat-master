@@ -80,7 +80,11 @@ static bool operation_profile_is_complete(
     }
     if (operation->sync_strategy == EMASTER_SYNC_STRATEGY_DC)
     {
-        return operation->has_sync0_shift_ns;
+        return operation->has_sync0_shift_ns &&
+               operation->has_process_data_phase_ns &&
+               operation->process_data_phase_ns < operation->cycle_ns &&
+               operation->has_dc_startup_cycles &&
+               operation->dc_startup_cycles > 0U;
     }
     return operation->sync_strategy == EMASTER_SYNC_STRATEGY_SM;
 }
@@ -134,6 +138,9 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
 {
     const emaster_topology_config_t *topology;
     uint32_t cycle_ns = 0U;
+    uint32_t process_data_phase_ns = 0U;
+    uint32_t dc_startup_cycles = 0U;
+    bool dc_timing_initialized = false;
     size_t axis_index;
 
     if (result == NULL)
@@ -275,6 +282,23 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_CYCLE_TIME_MISMATCH);
         }
+        if (operation->sync_strategy == EMASTER_SYNC_STRATEGY_DC)
+        {
+            if (!dc_timing_initialized)
+            {
+                process_data_phase_ns = operation->process_data_phase_ns;
+                dc_timing_initialized = true;
+            }
+            else if (process_data_phase_ns != operation->process_data_phase_ns)
+            {
+                return fail_plan(result, axis_storage, topology->slave_count,
+                                 EMASTER_SESSION_PLAN_DC_PHASE_MISMATCH);
+            }
+            if (dc_startup_cycles < operation->dc_startup_cycles)
+            {
+                dc_startup_cycles = operation->dc_startup_cycles;
+            }
+        }
 
         axis_storage[axis_index].topology_slave = topology_slave;
         axis_storage[axis_index].device_profile = device;
@@ -289,6 +313,8 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
     result->axes = axis_storage;
     result->axis_count = topology->slave_count;
     result->cycle_ns = cycle_ns;
+    result->process_data_phase_ns = process_data_phase_ns;
+    result->dc_startup_cycles = dc_startup_cycles;
     result->motion_profile = deployment->motion_profile;
     return result->status;
 }
