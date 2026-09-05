@@ -32,6 +32,13 @@ def c_int32(value: int) -> str:
     return f"INT32_C({value})"
 
 
+def c_int64(value: int) -> str:
+    """生成可移植的 64 位有符号整数常量。"""
+    if value < 0:
+        return f"(-INT64_C({-value}))"
+    return f"INT64_C({value})"
+
+
 def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
     """生成各运行模式使用的 PDO 字段名数组和模式数组。"""
     declarations: list[str] = []
@@ -77,8 +84,9 @@ def operation_declarations(operations: list[dict[str, Any]]) -> list[str]:
                     + ",\n".join(
                         "    {"
                         f"UINT16_C(0x{command['index']:04X}), "
-                        f"UINT8_C({command['subindex']}), EMASTER_CONFIG_SDO_VALUE_U16, "
-                        f"UINT16_C(0x{command['value']:04X})"
+                        f"UINT8_C({command['subindex']}), "
+                        f"EMASTER_CONFIG_SDO_VALUE_{command['type'].upper()}, "
+                        f"{c_int64(command['value'])}"
                         "}"
                         for command in mode["safeop_to_op_sdo_writes"]
                     )

@@ -63,6 +63,9 @@ bool emaster_run_audit_reserve(emaster_run_audit_t *audit, size_t capacity)
         audit->allocation_failed = true;
         return false;
     }
+    /* 预触及新增页，避免周期开始后首次写入大段审计内存时才分配物理页。 */
+    memset(resized + audit->access_capacity, 0,
+           (capacity - audit->access_capacity) * sizeof(*resized));
     audit->accesses = resized;
     audit->access_capacity = capacity;
     return true;
@@ -81,6 +84,14 @@ void emaster_run_audit_init(emaster_run_audit_t *audit)
     if (audit != NULL)
     {
         memset(audit, 0, sizeof(*audit));
+    }
+}
+
+void emaster_run_audit_end_cyclic(emaster_run_audit_t *audit)
+{
+    if (audit != NULL)
+    {
+        audit->capacity_sealed = false;
     }
 }
 
@@ -168,6 +179,7 @@ static bool same_pdo_field(const emaster_audit_access_t *access,
 
 bool emaster_run_audit_record_pdo(
     emaster_run_audit_t *audit,
+    size_t *last_record,
     emaster_audit_phase_t phase,
     emaster_audit_direction_t direction,
     emaster_audit_value_kind_t value_kind,
@@ -177,32 +189,41 @@ bool emaster_run_audit_record_pdo(
     uint8_t bit_length,
     uint32_t bit_offset,
     uint64_t exchange,
+    bool succeeded,
     uint64_t unsigned_value,
     int64_t signed_value)
 {
-    size_t cursor;
     emaster_audit_access_t *access;
 
-    if (audit == NULL)
+    if (audit == NULL || last_record == NULL)
     {
         return false;
     }
-    cursor = audit->access_count;
-    while (cursor > 0U)
+    if (*last_record < audit->access_count)
     {
-        access = &audit->accesses[--cursor];
+        access = &audit->accesses[*last_record];
         if (same_pdo_field(access, phase, direction, value_kind, slave_position,
                            index, subindex, bit_length, bit_offset))
         {
             if (access->unsigned_value == unsigned_value &&
-                access->signed_value == signed_value && access->succeeded)
+                access->signed_value == signed_value &&
+                access->succeeded == succeeded &&
+                exchange > access->last_exchange &&
+                exchange - access->last_exchange == UINT64_C(1))
             {
                 access->last_exchange = exchange;
                 ++access->sample_count;
                 return true;
             }
-            break;
         }
+    }
+    if (audit->capacity_sealed && audit->access_count == audit->access_capacity)
+    {
+        if (audit->omitted_pdo_samples != UINT64_MAX)
+        {
+            ++audit->omitted_pdo_samples;
+        }
+        return true;
     }
     access = append_access(audit);
     if (access == NULL)
@@ -210,6 +231,7 @@ bool emaster_run_audit_record_pdo(
         return false;
     }
     access->order = audit->next_order++;
+    *last_record = audit->access_count - 1U;
     access->first_exchange = exchange;
     access->last_exchange = exchange;
     access->sample_count = 1U;
@@ -222,7 +244,7 @@ bool emaster_run_audit_record_pdo(
     access->subindex = subindex;
     access->bit_length = bit_length;
     access->bit_offset = bit_offset;
-    access->succeeded = true;
+    access->succeeded = succeeded;
     access->unsigned_value = unsigned_value;
     access->signed_value = signed_value;
     return true;

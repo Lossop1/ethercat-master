@@ -19,6 +19,7 @@ typedef struct
     int64_t phase_error_ns;
     bool initialized;
     bool dc_feedback_valid;
+    bool deadline_missed;
 } emaster_cycle_clock_t;
 
 /* 以当前单调时钟为起点建立周期；首次等待发生在一个完整周期之后。 */
@@ -27,6 +28,10 @@ bool emaster_cycle_clock_init(emaster_cycle_clock_t *clock, uint32_t cycle_ns,
 
 /* 按绝对期限等待下一周期，避免每次相对休眠累积主机执行时间。 */
 bool emaster_cycle_clock_wait(emaster_cycle_clock_t *clock);
+
+/* 当前帧必须在下一发送时刻前完成；超时锁存到重新初始化，禁止追赶旧帧。 */
+bool emaster_cycle_clock_sample(emaster_cycle_clock_t *clock,
+                                uint64_t *now_ns, uint64_t *deadline_ns);
 
 /*
  * 使用 SOEM 最近一次过程数据接收得到的 DC 系统时间修正下一周期。

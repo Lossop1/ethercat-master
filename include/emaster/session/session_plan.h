@@ -68,6 +68,10 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
                            emaster_session_axis_plan_t *axis_storage,
                            size_t axis_capacity, emaster_session_plan_t *result);
 
+/* 诊断策略只能放行保持位置；配置了运动的轴始终要求有效模式匹配。 */
+bool emaster_session_axis_mode_allows_control(const emaster_session_axis_plan_t *axis,
+                                              bool mode_matches);
+
 typedef enum
 {
     EMASTER_SESSION_LAYOUT_MATCH = 0,

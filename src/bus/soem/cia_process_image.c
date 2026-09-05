@@ -224,13 +224,24 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     image->tx_fields = calloc(tx_count, sizeof(*image->tx_fields));
     image->rx_values = calloc(rx_count, sizeof(*image->rx_values));
     image->tx_values = calloc(tx_count, sizeof(*image->tx_values));
+    image->rx_audit_records = calloc(rx_count, sizeof(*image->rx_audit_records));
+    image->tx_audit_records = calloc(tx_count, sizeof(*image->tx_audit_records));
     if (image->rx_fields == NULL || image->tx_fields == NULL ||
-        image->rx_values == NULL || image->tx_values == NULL)
+        image->rx_values == NULL || image->tx_values == NULL ||
+        image->rx_audit_records == NULL || image->tx_audit_records == NULL)
     {
         return false;
     }
     image->rx_field_count = rx_count;
     image->tx_field_count = tx_count;
+    for (size_t field = 0U; field < rx_count; ++field)
+    {
+        image->rx_audit_records[field] = SIZE_MAX;
+    }
+    for (size_t field = 0U; field < tx_count; ++field)
+    {
+        image->tx_audit_records[field] = SIZE_MAX;
+    }
     image->rx_target_position_ordinal = SIZE_MAX;
     image->tx_actual_position_ordinal = SIZE_MAX;
     image->rx_mode_available = false;
@@ -384,11 +395,13 @@ static bool audit_direction_values(
     const emaster_pdo_direction_layout_t *layout,
     const emaster_pdo_codec_value_t *values,
     size_t value_count,
+    size_t *last_records,
     emaster_run_audit_t *audit,
     emaster_audit_phase_t phase,
     emaster_audit_direction_t direction,
     uint16_t slave_position,
-    uint64_t exchange)
+    uint64_t exchange,
+    bool succeeded)
 {
     size_t mapping_ordinal;
     size_t value_ordinal = 0U;
@@ -427,9 +440,9 @@ static bool audit_direction_values(
                 unsigned_value = values[value_ordinal].value.unsigned_value;
             }
             if (!emaster_run_audit_record_pdo(
-                    audit, phase, direction, kind, slave_position,
+                    audit, &last_records[value_ordinal], phase, direction, kind, slave_position,
                     entry->object_index, entry->object_subindex,
-                    entry->bit_length, entry->bit_offset, exchange,
+                    entry->bit_length, entry->bit_offset, exchange, succeeded,
                     unsigned_value, signed_value))
             {
                 return false;
@@ -445,13 +458,14 @@ bool emaster_cia_process_image_audit_output(
     emaster_run_audit_t *audit,
     emaster_audit_phase_t phase,
     uint16_t slave_position,
-    uint64_t exchange)
+    uint64_t exchange,
+    bool succeeded)
 {
     return image != NULL &&
            audit_direction_values(&image->layout.rx, image->rx_values,
-                                  image->rx_field_count, audit, phase,
+                                  image->rx_field_count, image->rx_audit_records, audit, phase,
                                   EMASTER_AUDIT_DIRECTION_WRITE, slave_position,
-                                  exchange);
+                                  exchange, succeeded);
 }
 
 bool emaster_cia_process_image_audit_input(
@@ -463,9 +477,9 @@ bool emaster_cia_process_image_audit_input(
 {
     return image != NULL &&
            audit_direction_values(&image->layout.tx, image->tx_values,
-                                  image->tx_field_count, audit, phase,
+                                  image->tx_field_count, image->tx_audit_records, audit, phase,
                                   EMASTER_AUDIT_DIRECTION_READ, slave_position,
-                                  exchange);
+                                  exchange, true);
 }
 
 void emaster_cia_process_image_destroy(emaster_cia_process_image_t *images,
@@ -484,6 +498,8 @@ void emaster_cia_process_image_destroy(emaster_cia_process_image_t *images,
         free(images[axis_index].tx_fields);
         free(images[axis_index].rx_values);
         free(images[axis_index].tx_values);
+        free(images[axis_index].rx_audit_records);
+        free(images[axis_index].tx_audit_records);
     }
     free(images);
 }

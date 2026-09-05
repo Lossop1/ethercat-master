@@ -1,4 +1,4 @@
-add_executable(emaster-master main.c)
+add_executable(emaster-master main.c console.c)
 
 target_link_libraries(
     emaster-master

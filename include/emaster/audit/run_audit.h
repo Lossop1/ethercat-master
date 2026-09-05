@@ -69,6 +69,8 @@ typedef struct
     uint64_t next_order;
     bool capacity_sealed;
     bool allocation_failed;
+    /* 周期记录容量耗尽后只计数，不分配内存，也不阻断控制；报告显式标注截断。 */
+    uint64_t omitted_pdo_samples;
 } emaster_run_audit_t;
 
 /* 初始化和析构只管理审计记录，不访问总线或文件系统。 */
@@ -78,6 +80,8 @@ void emaster_run_audit_destroy(emaster_run_audit_t *audit);
 /* 周期开始前预留容量并封存；封存后记录模块绝不在周期线程中重新分配内存。 */
 bool emaster_run_audit_reserve(emaster_run_audit_t *audit, size_t capacity);
 void emaster_run_audit_seal_capacity(emaster_run_audit_t *audit);
+/* 仅在周期已停止后调用，允许后续 SDO 诊断继续保存完整记录。 */
+void emaster_run_audit_end_cyclic(emaster_run_audit_t *audit);
 
 /* 记录一次真实邮箱或 ESC 寄存器访问；raw 必须是总线上实际使用的字节序。 */
 bool emaster_run_audit_record_access(
@@ -98,9 +102,14 @@ bool emaster_run_audit_record_access(
     uint64_t unsigned_value,
     int64_t signed_value);
 
-/* 记录一次已经成功编码或解码的 PDO 字段样本，并按字段连续值自动压缩。 */
+/*
+ * last_record 由每个过程映像字段独立持有，初值为 SIZE_MAX。记录器按数组下标直接
+ * 查找上次样本，不扫描历史；下标在审计数组扩容后仍有效。只有连续交换、同阶段、
+ * 同值且成功标志相同的样本才能合并。succeeded 表示该次过程数据交换的确认结果。
+ */
 bool emaster_run_audit_record_pdo(
     emaster_run_audit_t *audit,
+    size_t *last_record,
     emaster_audit_phase_t phase,
     emaster_audit_direction_t direction,
     emaster_audit_value_kind_t value_kind,
@@ -110,6 +119,7 @@ bool emaster_run_audit_record_pdo(
     uint8_t bit_length,
     uint32_t bit_offset,
     uint64_t exchange,
+    bool succeeded,
     uint64_t unsigned_value,
     int64_t signed_value);
 

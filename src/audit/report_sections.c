@@ -15,7 +15,7 @@ static const char *phase_name(emaster_audit_phase_t phase)
         case EMASTER_AUDIT_PHASE_OPERATION_REQUEST: return "operation_request";
         case EMASTER_AUDIT_PHASE_CYCLIC_OPERATION: return "cyclic_operation";
         case EMASTER_AUDIT_PHASE_SAFE_STOP: return "safe_stop";
-        case EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC: return "final_diagnostic";
+        case EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC: return "post_cycle_diagnostic";
     }
     return "unknown";
 }
@@ -245,9 +245,16 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->dc.observed_assign_activate) >= 0);
     REQUIRE_WRITE(fputs("\"position_scale\":", stream) != EOF);
     REQUIRE_WRITE(write_position_scale(stream, &axis->position_scale));
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"shutdown_al\":{\"state\":%u,\"status_code\":%u}",
+        (unsigned int)axis->shutdown_al_state, (unsigned int)axis->shutdown_al_status_code) >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
-        ",\"runtime\":{\"status_word\":\"0x%04X\","
+        ",\"safeop_mode_readback\":{\"read_succeeded\":%s,\"mode_display\":%d,"
+        "\"diagnostic_read_succeeded\":%s,\"cia402_error_code\":\"0x%04X\","
+        "\"error_register\":\"0x%02X\","
+        "\"extended_servo_error_code\":\"0x%08lX\",\"servo_error_code\":\"0x%08lX\"},"
+        "\"runtime\":{\"status_word\":\"0x%04X\","
         "\"control_word\":\"0x%04X\",\"requested_mode\":%d,"
         "\"mode_display\":%d,\"initial_actual_position\":%" PRId32
         ",\"actual_position\":%" PRId32 ",\"target_position\":%" PRId32
@@ -256,6 +263,13 @@ static bool write_axis(FILE *stream,
         ",\"max_observed_following_error_counts\":%" PRIu64
         ",\"final_diagnostic_reads\":%zu,"
         "\"final_diagnostic_successes\":%zu}}",
+        axis->safeop_mode_display_sdo_read ? "true" : "false",
+        (int)axis->safeop_mode_display_sdo,
+        axis->safeop_drive_diagnostic.read_succeeded ? "true" : "false",
+        (unsigned int)axis->safeop_drive_diagnostic.cia402_error_code,
+        (unsigned int)axis->safeop_drive_diagnostic.error_register,
+        (unsigned long)axis->safeop_drive_diagnostic.extended_servo_error_code,
+        (unsigned long)axis->safeop_drive_diagnostic.servo_error_code,
         (unsigned int)axis->status_word, (unsigned int)axis->control_word,
         (int)axis->requested_mode, (int)axis->mode_display,
         axis->initial_actual_position, axis->actual_position,
@@ -392,6 +406,28 @@ static bool write_access(FILE *stream,
     return true;
 }
 
+static bool write_cycle_failure(FILE *stream, const emaster_cycle_failure_t *failure)
+{
+    if (!failure->present)
+    {
+        return fputs("null", stream) != EOF;
+    }
+    REQUIRE_WRITE(fprintf(stream,
+        "{\"status_code\":%u,\"phase\":\"%s\",\"exchange\":%" PRIu64
+        ",\"last_dc_time_ns\":%" PRId64 ",\"wkc\":",
+        (unsigned int)failure->status, phase_name(failure->phase),
+        failure->exchange, failure->dc_time_ns) >= 0);
+    if (failure->wkc_available)
+    {
+        REQUIRE_WRITE(fprintf(stream, "%d", failure->wkc) >= 0);
+    }
+    else
+    {
+        REQUIRE_WRITE(fputs("null", stream) != EOF);
+    }
+    return fputs("}", stream) != EOF;
+}
+
 bool emaster_run_report_write(FILE *stream,
                               const emaster_session_plan_t *plan,
                               const emaster_control_session_report_t *report,
@@ -405,7 +441,7 @@ bool emaster_run_report_write(FILE *stream,
     {
         return false;
     }
-    REQUIRE_WRITE(fputs("{\"schema_version\":1,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":2,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -420,6 +456,7 @@ bool emaster_run_report_write(FILE *stream,
         "},\"result\":{\"status_code\":%u,\"io_map_size\":%zu,"
         "\"expected_wkc\":%u,\"actual_wkc\":%d,\"cycle_count\":%" PRIu64
         ",\"process_data_exchange_count\":%" PRIu64
+        ",\"cycle_deadline_missed\":%s"
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
@@ -428,6 +465,7 @@ bool emaster_run_report_write(FILE *stream,
         (unsigned int)report->status, report->io_map_size,
         (unsigned int)report->expected_wkc, report->actual_wkc,
         report->cycle_count, report->process_data_exchange_count,
+        report->cycle_deadline_missed ? "true" : "false",
         report->safe_op_reached ? "true" : "false",
         report->op_reached ? "true" : "false",
         report->all_axes_enabled_reached ? "true" : "false",
@@ -437,6 +475,13 @@ bool emaster_run_report_write(FILE *stream,
         report->safe_state_reached ? "true" : "false",
         report->sync0_disabled ? "true" : "false",
         report->restore_init_succeeded ? "true" : "false") >= 0);
+    REQUIRE_WRITE(fputs("\"first_cycle_failure\":", stream) != EOF);
+    REQUIRE_WRITE(write_cycle_failure(stream, &report->first_cycle_failure));
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64 "},"
+        "\"diagnostic_preop_reached\":%s,",
+        report->audit.omitted_pdo_samples,
+        report->diagnostic_preop_reached ? "true" : "false") >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
         "\"dc\":{\"required\":%s,\"configured\":%s,"

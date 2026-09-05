@@ -166,12 +166,12 @@ bool emaster_session_observer_prepare_audit(
     size_t capacity;
     size_t axis_index;
 
-    if (plan == NULL || runtime == NULL || audit == NULL ||
-        plan->motion_profile == NULL || plan->cycle_ns == 0U)
+    if (plan == NULL || runtime == NULL || audit == NULL || plan->cycle_ns == 0U)
     {
-        return plan != NULL && plan->motion_profile == NULL;
+        return false;
     }
-    motion_time_ns =
+    /* 保持位置会话没有结束时刻，预留启动和状态转换容量；耗尽后只标注截断。 */
+    motion_time_ns = plan->motion_profile == NULL ? UINT64_C(0) :
         ((uint64_t)plan->motion_profile->duration_ms +
          (uint64_t)plan->motion_profile->settle_ms) * UINT64_C(1000000);
     motion_cycles =

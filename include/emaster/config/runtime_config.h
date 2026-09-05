@@ -56,7 +56,8 @@ typedef struct
     uint16_t index;
     uint8_t subindex;
     emaster_config_sdo_value_type_t type;
-    uint16_t value_u16;
+    /* 统一保存配置整数；具体字节宽度和符号由 type 决定。 */
+    int64_t value;
 } emaster_sdo_write_config_t;
 
 typedef struct

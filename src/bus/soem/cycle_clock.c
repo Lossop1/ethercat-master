@@ -77,13 +77,17 @@ bool emaster_cycle_clock_wait(emaster_cycle_clock_t *clock)
 {
     int64_t interval_ns;
     int result;
+    uint64_t now_ns;
+    uint64_t deadline_ns;
 
-    if (clock == NULL || !clock->initialized)
+    if (clock == NULL || !clock->initialized || clock->deadline_missed)
     {
         return false;
     }
     interval_ns = (int64_t)clock->cycle_ns + clock->correction_ns;
-    if (interval_ns <= 0 || !timespec_add_ns(&clock->deadline, interval_ns))
+    if (interval_ns <= 0 ||
+        !emaster_cycle_clock_sample(clock, &now_ns, &deadline_ns) ||
+        !timespec_add_ns(&clock->deadline, interval_ns))
     {
         return false;
     }
@@ -92,7 +96,50 @@ bool emaster_cycle_clock_wait(emaster_cycle_clock_t *clock)
         result = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
                                  &clock->deadline, NULL);
     } while (result == EINTR);
-    return result == 0;
+    return result == 0 &&
+           emaster_cycle_clock_sample(clock, &now_ns, &deadline_ns);
+}
+
+static bool timespec_to_ns(const struct timespec *value, uint64_t *nanoseconds)
+{
+    if (value->tv_sec < 0 || value->tv_nsec < 0 ||
+        value->tv_nsec >= EMASTER_NANOSECONDS_PER_SECOND ||
+        (uint64_t)value->tv_sec >
+            (UINT64_MAX - (uint64_t)value->tv_nsec) / UINT64_C(1000000000))
+    {
+        return false;
+    }
+    *nanoseconds = (uint64_t)value->tv_sec * UINT64_C(1000000000) +
+                   (uint64_t)value->tv_nsec;
+    return true;
+}
+
+bool emaster_cycle_clock_sample(emaster_cycle_clock_t *clock,
+                                uint64_t *now_ns, uint64_t *deadline_ns)
+{
+    struct timespec now;
+    struct timespec next;
+    int64_t interval_ns;
+
+    if (clock == NULL || !clock->initialized || clock->deadline_missed ||
+        now_ns == NULL || deadline_ns == NULL)
+    {
+        return false;
+    }
+    next = clock->deadline;
+    interval_ns = (int64_t)clock->cycle_ns + clock->correction_ns;
+    if (interval_ns <= 0 || !timespec_add_ns(&next, interval_ns) ||
+        clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
+        !timespec_to_ns(&now, now_ns) || !timespec_to_ns(&next, deadline_ns))
+    {
+        return false;
+    }
+    if (*now_ns >= *deadline_ns)
+    {
+        clock->deadline_missed = true;
+        return false;
+    }
+    return true;
 }
 
 bool emaster_cycle_clock_observe_dc(emaster_cycle_clock_t *clock,

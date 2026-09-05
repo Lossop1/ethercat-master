@@ -90,6 +90,30 @@ bool emaster_soem_write_i8(emaster_soem_sdo_reader_context_t *reader,
                          EMASTER_AUDIT_VALUE_SIGNED, (uint8_t)value, value);
 }
 
+bool emaster_soem_write_i16(emaster_soem_sdo_reader_context_t *reader,
+                            uint16_t index, uint8_t subindex, int16_t value)
+{
+    uint16_t host_value;
+    uint16_t raw;
+
+    memcpy(&host_value, &value, sizeof(host_value));
+    raw = htoes(host_value);
+    return write_integer(reader, index, subindex, &raw, (uint8_t)sizeof(raw),
+                         EMASTER_AUDIT_VALUE_SIGNED, host_value, value);
+}
+
+bool emaster_soem_write_i32(emaster_soem_sdo_reader_context_t *reader,
+                            uint16_t index, uint8_t subindex, int32_t value)
+{
+    uint32_t host_value;
+    uint32_t raw;
+
+    memcpy(&host_value, &value, sizeof(host_value));
+    raw = htoel(host_value);
+    return write_integer(reader, index, subindex, &raw, (uint8_t)sizeof(raw),
+                         EMASTER_AUDIT_VALUE_SIGNED, host_value, value);
+}
+
 static bool assignment_failed(emaster_soem_sdo_reader_context_t *reader,
                                emaster_soem_pdo_assignment_result_t *result,
                                uint16_t index, uint8_t subindex)

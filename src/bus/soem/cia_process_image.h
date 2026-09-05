@@ -17,6 +17,9 @@ typedef struct
     emaster_pdo_codec_field_t *tx_fields;
     emaster_pdo_codec_value_t *rx_values;
     emaster_pdo_codec_value_t *tx_values;
+    /* 与字段一一对应的审计游标，使每周期审计工作量仅取决于当前 PDO 字段数。 */
+    size_t *rx_audit_records;
+    size_t *tx_audit_records;
     size_t rx_field_count;
     size_t tx_field_count;
     size_t rx_mode_ordinal;
@@ -28,6 +31,7 @@ typedef struct
     /* 动态模块通过 PDO 提供模式字段；固定模块没有该字段。 */
     bool rx_mode_available;
     bool tx_mode_available;
+    bool mode_read_pending;
     bool sync0_configured;
 } emaster_cia_process_image_t;
 
@@ -60,13 +64,14 @@ bool emaster_cia_process_image_decode_input(
     uint16_t *status_word,
     int32_t *actual_position);
 
-/* 在实际发送前记录完整 RxPDO 字段，在成功解码后记录完整 TxPDO 字段。 */
+/* 交换结束后记录 RxPDO 及其 WKC 确认结果，成功解码后记录 TxPDO。 */
 bool emaster_cia_process_image_audit_output(
     const emaster_cia_process_image_t *image,
     emaster_run_audit_t *audit,
     emaster_audit_phase_t phase,
     uint16_t slave_position,
-    uint64_t exchange);
+    uint64_t exchange,
+    bool succeeded);
 bool emaster_cia_process_image_audit_input(
     const emaster_cia_process_image_t *image,
     emaster_run_audit_t *audit,

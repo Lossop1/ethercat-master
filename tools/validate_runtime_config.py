@@ -328,13 +328,33 @@ def validate_modes(
                     subindex_valid,
                     f"运行方案 {operation_id} 的模式 {mode_label} SDO subindex 超出范围",
                 )
+                value_type = command.get("type")
+                limits = {
+                    "u8": (0, (1 << 8) - 1),
+                    "i8": (-(1 << 7), (1 << 7) - 1),
+                    "u16": (0, (1 << 16) - 1),
+                    "i16": (-(1 << 15), (1 << 15) - 1),
+                    "u32": (0, (1 << 32) - 1),
+                    "i32": (-(1 << 31), (1 << 31) - 1),
+                }
                 check.require(
-                    command.get("type") == "u16",
-                    f"运行方案 {operation_id} 的模式 {mode_label} SDO 类型当前必须为 u16",
+                    value_type in limits,
+                    f"运行方案 {operation_id} 的模式 {mode_label} SDO 类型无效",
                 )
-                validate_hex_value(
-                    check, command.get("value"),
-                    f"运行方案 {operation_id} 的模式 {mode_label} SDO value", 0xFFFF,
+                configured_value = command.get("value")
+                try:
+                    if isinstance(configured_value, str) and configured_value.startswith("0x"):
+                        parsed_value = hex_value(configured_value)
+                    elif isinstance(configured_value, int) and not isinstance(configured_value, bool):
+                        parsed_value = configured_value
+                    else:
+                        raise ValueError
+                    value_valid = value_type in limits and limits[value_type][0] <= parsed_value <= limits[value_type][1]
+                except ValueError:
+                    value_valid = False
+                check.require(
+                    value_valid,
+                    f"运行方案 {operation_id} 的模式 {mode_label} SDO value 与类型不匹配",
                 )
                 if index_valid and subindex_valid:
                     address = (hex_value(command["index"]), subindex)

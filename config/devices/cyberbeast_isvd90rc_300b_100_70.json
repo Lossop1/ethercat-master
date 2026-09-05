@@ -29,6 +29,12 @@
       "id": "dynamic_csp_csv_cst",
       "module_ident": "0x00119800",
       "module_slot": 1,
+      "mode_initialization": {
+        "transition": "safeop_to_op",
+        "index": "0x6060",
+        "subindex": 0,
+        "value": 8
+      },
       "rx": {
         "bytes": 14,
         "mappings": [

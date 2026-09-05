@@ -328,15 +328,33 @@ def operation_values(
                     raise ValueError(
                         f"运行方案 {operation_id} 的模式 {mode_id} SDO subindex 超出范围"
                     )
-                if command.get("type") != "u16":
+                value_type = command.get("type")
+                limits = {
+                    "u8": (0, (1 << 8) - 1),
+                    "i8": (-(1 << 7), (1 << 7) - 1),
+                    "u16": (0, (1 << 16) - 1),
+                    "i16": (-(1 << 15), (1 << 15) - 1),
+                    "u32": (0, (1 << 32) - 1),
+                    "i32": (-(1 << 31), (1 << 31) - 1),
+                }
+                if value_type not in limits:
                     raise ValueError(
-                        f"运行方案 {operation_id} 的模式 {mode_id} SDO 类型当前必须为 u16"
+                        f"运行方案 {operation_id} 的模式 {mode_id} SDO 类型无效"
                     )
-                value = parse_unsigned(
-                    command.get("value"),
-                    f"运行方案 {operation_id} 的模式 {mode_id} SDO value",
-                    0xFFFF,
-                )
+                configured_value = command.get("value")
+                if isinstance(configured_value, str) and configured_value.startswith("0x"):
+                    value = int(configured_value, 16)
+                elif isinstance(configured_value, int) and not isinstance(configured_value, bool):
+                    value = configured_value
+                else:
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} SDO value 必须是整数或十六进制字符串"
+                    )
+                minimum, maximum = limits[value_type]
+                if not minimum <= value <= maximum:
+                    raise ValueError(
+                        f"运行方案 {operation_id} 的模式 {mode_id} SDO value 超出 {value_type} 范围"
+                    )
                 address = (index, subindex)
                 if address in sdo_addresses:
                     raise ValueError(
@@ -344,7 +362,7 @@ def operation_values(
                     )
                 sdo_addresses.add(address)
                 sdo_writes.append(
-                    {"index": index, "subindex": subindex, "type": "u16", "value": value}
+                    {"index": index, "subindex": subindex, "type": value_type, "value": value}
                 )
 
             final_reads_value = mode.get("final_sdo_reads", [])

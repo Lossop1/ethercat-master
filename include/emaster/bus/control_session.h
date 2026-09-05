@@ -29,7 +29,7 @@ typedef enum
     EMASTER_CONTROL_SESSION_OUT_OF_MEMORY,
     EMASTER_CONTROL_SESSION_DC_CONFIG_FAILED,
     EMASTER_CONTROL_SESSION_SYNC0_CONFIG_FAILED,
-    EMASTER_CONTROL_SESSION_INITIAL_WKC_FAILED,
+    EMASTER_CONTROL_SESSION_WKC_MISMATCH,
     EMASTER_CONTROL_SESSION_OP_NOT_REACHED,
     EMASTER_CONTROL_SESSION_FEEDBACK_INVALID,
     EMASTER_CONTROL_SESSION_CONTROLLER_FAILED,
@@ -40,7 +40,8 @@ typedef enum
     EMASTER_CONTROL_SESSION_DC_SYNC_FAILED,
     EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED,
     EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED,
-    EMASTER_CONTROL_SESSION_AUDIT_FAILED
+    EMASTER_CONTROL_SESSION_AUDIT_FAILED,
+    EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED
 } emaster_control_session_status_t;
 
 /* 每轴 DC 结果同时保存方案请求值、SOEM 生效状态和 ESC 寄存器读回值。 */
@@ -73,8 +74,8 @@ typedef struct
 } emaster_drive_diagnostic_t;
 
 /*
- * 对应 EtherCAT 同步管理器参数对象 1C32/1C33。计数器在同一次控制会话末尾读取，
- * 用于区分链路正常但主站周期不满足设备要求的情况。
+ * 对应 EtherCAT 同步管理器参数对象 1C32/1C33。计数器在周期退出后读取，可能包含
+ * 退出期间的事件，不能单独据此推断首次故障原因。
  */
 typedef struct
 {
@@ -107,8 +108,11 @@ typedef struct
     int8_t mode_command_sdo;
     bool mode_display_sdo_read;
     int8_t mode_display_sdo;
-    bool input_mode_sdo_read;
-    uint16_t input_mode_sdo;
+    /* SAFE-OP 模式初始化后的即时 SDO 读回，用于区分 OP 前后的模式变化。 */
+    bool safeop_mode_display_sdo_read;
+    int8_t safeop_mode_display_sdo;
+    /* SAFE-OP 模式读回同时保留当时的驱动诊断，不与结束时诊断混淆。 */
+    emaster_drive_diagnostic_t safeop_drive_diagnostic;
     size_t final_diagnostic_read_count;
     size_t final_diagnostic_success_count;
     uint16_t status_word;
@@ -140,7 +144,22 @@ typedef struct
     emaster_sync_diagnostic_t sm3_diagnostic;
     emaster_position_scale_t position_scale;
     emaster_dc_axis_result_t dc;
+    /* 退出周期后、切换诊断状态前的 AL 快照，不冒充故障发生瞬间的状态。 */
+    uint16_t shutdown_al_state;
+    uint16_t shutdown_al_status_code;
 } emaster_control_session_axis_result_t;
+
+/* 首次周期失败只写一次，后续停机交换不能改变其 WKC、阶段和交换号。 */
+typedef struct
+{
+    bool present;
+    emaster_control_session_status_t status;
+    emaster_audit_phase_t phase;
+    uint64_t exchange;
+    bool wkc_available;
+    int wkc;
+    int64_t dc_time_ns;
+} emaster_cycle_failure_t;
 
 typedef struct
 {
@@ -153,6 +172,7 @@ typedef struct
     int actual_wkc;
     uint64_t cycle_count;
     uint64_t process_data_exchange_count;
+    bool cycle_deadline_missed;
     bool dc_required;
     bool dc_configured;
     uint16_t dc_reference_slave;
@@ -171,6 +191,8 @@ typedef struct
     bool safe_state_reached;
     bool sync0_disabled;
     bool restore_init_succeeded;
+    bool diagnostic_preop_reached;
+    emaster_cycle_failure_t first_cycle_failure;
     emaster_run_audit_t audit;
 } emaster_control_session_report_t;
 
@@ -184,7 +206,7 @@ typedef bool (*emaster_control_session_stop_requested_t)(void *user_data);
  * 按部署计划建立 EtherCAT 过程数据会话。SAFE-OP 首帧会先从 6064 初始化 607A，防止 CSP
  * 使能时追逐零位置；进入 OP 后，每周期根据 6041 计算并发送 6040。部署未引用运动方案时持续
  * 保持启动位置；引用已批准方案时由独立轨迹模块生成全轴目标，完成后自动执行安全停止。
- * 任意失败和正常停止路径都会发送安全输出、关闭 Sync0 并请求所有从站恢复 INIT。
+ * 任意失败和正常停止路径都会尝试安全停用、关闭 Sync0 并请求恢复 INIT，结果分别记录。
  */
 emaster_control_session_status_t emaster_soem_control_session(
     const emaster_session_plan_t *plan,

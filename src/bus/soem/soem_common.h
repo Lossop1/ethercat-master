@@ -59,6 +59,10 @@ bool emaster_soem_write_u32(emaster_soem_sdo_reader_context_t *reader,
                             uint16_t index, uint8_t subindex, uint32_t value);
 bool emaster_soem_write_i8(emaster_soem_sdo_reader_context_t *reader,
                            uint16_t index, uint8_t subindex, int8_t value);
+bool emaster_soem_write_i16(emaster_soem_sdo_reader_context_t *reader,
+                            uint16_t index, uint8_t subindex, int16_t value);
+bool emaster_soem_write_i32(emaster_soem_sdo_reader_context_t *reader,
+                            uint16_t index, uint8_t subindex, int32_t value);
 
 /* 发现指定从站当前生效的完整 PDO 布局；调用者负责析构结果。 */
 bool emaster_soem_discover_pdo_layout(ecx_contextt *context, uint16_t slave,

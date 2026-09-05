@@ -319,6 +319,20 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
     return result->status;
 }
 
+bool emaster_session_axis_mode_allows_control(const emaster_session_axis_plan_t *axis,
+                                              bool mode_matches)
+{
+    if (axis == NULL || axis->operation_mode == NULL ||
+        (axis->operation_mode->mode_display_policy != EMASTER_MODE_DISPLAY_REQUIRED &&
+         axis->operation_mode->mode_display_policy != EMASTER_MODE_DISPLAY_DIAGNOSTIC))
+    {
+        return false;
+    }
+    return mode_matches ||
+           (axis->motion_axis == NULL &&
+            axis->operation_mode->mode_display_policy == EMASTER_MODE_DISPLAY_DIAGNOSTIC);
+}
+
 emaster_session_layout_status_t
 emaster_session_axis_validate_layout(const emaster_session_axis_plan_t *axis,
                                      const emaster_pdo_layout_t *actual)
