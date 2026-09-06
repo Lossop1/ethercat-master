@@ -1,36 +1,12 @@
 #include "session_internal.h"
 
 #include <limits.h>
-#include <stdlib.h>
 #include <string.h>
 
 static uint64_t absolute_position_difference(int32_t left, int32_t right) {
     int64_t difference = (int64_t)left - (int64_t)right;
 
     return (uint64_t)(difference < 0 ? -difference : difference);
-}
-
-/* 异步结果只由周期所有者写入报告，避免后台 SDO 与 PDO 审计并发修改数组。 */
-static bool collect_mode_readback(emaster_soem_session_t *session) {
-    uint16_t slave;
-    uint16_t index;
-    uint8_t subindex;
-    int8_t value;
-    bool succeeded;
-
-    if (emaster_session_mailbox_take_i8(&session->mailbox, &slave, &index, &subindex, &value,
-                                        &succeeded)) {
-        emaster_control_session_axis_result_t *axis = &session->axes[slave - 1U];
-        session->images[slave - 1U].mode_read_pending = false;
-        axis->mode_display_sdo_read = succeeded;
-        axis->mode_display_sdo = value;
-        return emaster_run_audit_record_access(
-            &session->report->audit, EMASTER_AUDIT_PHASE_CYCLIC_OPERATION,
-            EMASTER_AUDIT_TRANSPORT_SDO, EMASTER_AUDIT_DIRECTION_READ, EMASTER_AUDIT_VALUE_SIGNED,
-            slave, index, subindex, UINT8_C(8), 0U, session->exchange, &value,
-            succeeded ? UINT8_C(1) : UINT8_C(0), succeeded, 0U, value);
-    }
-    return true;
 }
 
 emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t *session) {
@@ -107,9 +83,6 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 }
             }
 
-            if (!collect_mode_readback(session)) {
-                return EMASTER_CONTROL_SESSION_AUDIT_FAILED;
-            }
             if (!emaster_cycle_clock_sample(&session->clock, &now_ns, &deadline_ns)) {
                 return session->clock.deadline_missed
                            ? EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED
@@ -129,6 +102,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
                 bool operation_enabled = session->controller_outputs[axis_index].observed_state ==
                                          EMASTER_CIA402_STATE_OPERATION_ENABLED;
+                bool mode_control_ready;
 
                 axis_result->control_word = session->controller_outputs[axis_index].control_word;
                 axis_result->cia402_state = session->controller_outputs[axis_index].observed_state;
@@ -142,15 +116,6 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 axis_result->switched_on_seen |=
                     session->controller_outputs[axis_index].observed_state ==
                     EMASTER_CIA402_STATE_SWITCHED_ON;
-                if (!session->images[axis_index].tx_mode_available && operation_enabled &&
-                    (!axis_result->mode_display_sdo_read || !axis_result->mode_display_match)) {
-                    if (!session->images[axis_index].mode_read_pending) {
-                        session->images[axis_index].mode_read_pending =
-                            emaster_session_mailbox_request_i8(&session->mailbox,
-                                                               (uint16_t)(axis_index + 1U),
-                                                               UINT16_C(0x6061), UINT8_C(0));
-                    }
-                }
                 if (!session->images[axis_index].tx_mode_available &&
                     axis_result->mode_display_sdo_read) {
                     axis_result->mode_display = axis_result->mode_display_sdo;
@@ -162,8 +127,15 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         : axis_result->mode_display_sdo_read &&
                               axis_result->mode_display ==
                                   session->plan->axes[axis_index].operation_mode->value;
+                mode_control_ready = axis_result->mode_display_match;
+                if (!session->images[axis_index].tx_mode_available)
+                {
+                    mode_control_ready = axis_result->mode_command_sdo_read &&
+                        axis_result->mode_command_sdo ==
+                            session->plan->axes[axis_index].operation_mode->value;
+                }
                 if (!emaster_session_axis_mode_allows_control(&session->plan->axes[axis_index],
-                                                              axis_result->mode_display_match)) {
+                                                              mode_control_ready)) {
                     all_modes_confirmed = false;
                 }
                 if (session->controller_outputs[axis_index].fault_present) {
@@ -256,8 +228,12 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             axis_result->motion_completion_actual_position,
                             axis_result->motion_final_position);
                         axis_result->motion_direction_match =
-                            (planned_angle > 0 && axis_result->motion_actual_delta_counts > 0) ||
-                            (planned_angle < 0 && axis_result->motion_actual_delta_counts < 0);
+                            planned_angle == 0
+                                ? axis_result->motion_actual_delta_counts == 0
+                                : (planned_angle > 0 &&
+                                   axis_result->motion_actual_delta_counts > 0) ||
+                                      (planned_angle < 0 &&
+                                       axis_result->motion_actual_delta_counts < 0);
                         if (!axis_result->motion_direction_match ||
                             axis_result->motion_final_error_counts >
                                 axis_result->max_following_error_counts) {

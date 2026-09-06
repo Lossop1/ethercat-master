@@ -169,6 +169,11 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
             return status;
         }
+        if (!axis->pdo_set->mode_init_on_safeop_to_op)
+        {
+            session->axes[axis_index].mode_command_sdo_read = true;
+            session->axes[axis_index].mode_command_sdo = mode_value;
+        }
         emaster_session_observer_read_position_scale(&sdo,
                                                      &session->axes[axis_index].position_scale);
         if (session->plan->motion_profile != NULL) {
@@ -346,6 +351,8 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
                 status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
                 return status;
             }
+            session->axes[axis_index].mode_command_sdo_read = true;
+            session->axes[axis_index].mode_command_sdo = mode_value;
         }
         for (command_index = 0U; command_index < operation_mode->safeop_to_op_sdo_write_count;
              ++command_index) {

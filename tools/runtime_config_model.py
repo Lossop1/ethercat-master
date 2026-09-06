@@ -561,11 +561,10 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if (
                 not isinstance(relative_angle, int)
                 or isinstance(relative_angle, bool)
-                or relative_angle == 0
                 or not -(1 << 31) <= relative_angle < (1 << 31)
             ):
                 raise ValueError(
-                    f"运动方案 {profile_id} 的轴 {axis_id} 相对角度必须是非零 32 位整数"
+                    f"运动方案 {profile_id} 的轴 {axis_id} 相对角度必须是 32 位整数"
                 )
             if (
                 not isinstance(following_error, int)

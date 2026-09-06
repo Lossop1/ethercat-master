@@ -262,7 +262,11 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     }
     image->rx_mode_available = image->rx_mode_ordinal != SIZE_MAX;
     image->tx_mode_available = image->tx_mode_ordinal != SIZE_MAX;
-    if (axis->operation_mode->value == INT8_C(8))
+    if (axis->operation_mode->value != INT8_C(8))
+    {
+        /* 当前控制数据模型只定义 CSP；不得把 CSV/CST 误接入位置字段。 */
+        return false;
+    }
     {
         image->rx_target_position_ordinal = field_ordinal_for(
             &image->layout.rx, EMASTER_CIA402_TARGET_POSITION_INDEX, UINT8_C(0));
@@ -360,6 +364,14 @@ bool emaster_cia_process_image_decode_input(
             EMASTER_PDO_CODEC_VALUE_UNSIGNED)
     {
         return false;
+    }
+    for (size_t field = 0U; field < image->tx_field_count; ++field)
+    {
+        if (image->tx_values[field].kind == EMASTER_PDO_CODEC_VALUE_PADDING &&
+            image->tx_values[field].value.unsigned_value != 0U)
+        {
+            return false;
+        }
     }
     *mode_display = 0;
     if (image->tx_mode_available)

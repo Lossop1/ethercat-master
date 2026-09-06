@@ -5,13 +5,12 @@
 #include "cycle_clock.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/multiaxis/coordinator.h"
-#include "session_mailbox.h"
 #include "session_observer.h"
 
 /*
  * 单次会话拥有全部总线资源和周期存储。入口负责分配和释放，配置、交换、控制、
  * 退出各阶段只借用这里的资源；这些内部类型不得传入 CiA 402 或轨迹模块。
- * PDO 由调用线程串行交换，固定 PDO 模式反馈通过独立的 SOEM 邮箱工作线程读取。
+ * 所有 SOEM 访问均由会话线程串行执行，周期期间不进行邮箱访问。
  */
 typedef struct {
     const emaster_session_plan_t *plan;
@@ -30,7 +29,6 @@ typedef struct {
     emaster_relative_motion_t motion;
     emaster_multiaxis_coordinator_t coordinator;
     emaster_cycle_clock_t clock;
-    emaster_session_mailbox_t mailbox;
     uint8_t *io_map;
     uint64_t exchange;
     uint64_t transition_cycles;

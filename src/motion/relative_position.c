@@ -38,7 +38,7 @@ static bool angle_to_counts(uint32_t angle_millidegrees,
     size_t denominator_index;
 
     if (scale == NULL || counts == NULL || !scale->read_succeeded ||
-        angle_millidegrees == 0U || scale->encoder_increments == 0U ||
+        scale->encoder_increments == 0U ||
         scale->encoder_motor_revolutions == 0U ||
         (coordinate != EMASTER_MOTION_COORDINATE_MOTOR_ROTOR &&
          coordinate != EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT) ||
@@ -81,7 +81,7 @@ static bool angle_to_counts(uint32_t angle_millidegrees,
         return false;
     }
     *counts = (numerator + denominator / UINT64_C(2)) / denominator;
-    return *counts != 0U;
+    return true;
 }
 
 static uint64_t absolute_difference_i32(int32_t left, int32_t right)
@@ -147,8 +147,7 @@ emaster_relative_motion_status_t emaster_relative_motion_init(
         uint64_t following_error_counts;
         int64_t final_position;
 
-        if (config == NULL || config->relative_angle_millidegrees == 0 ||
-            config->max_following_error_millidegrees == 0U)
+        if (config == NULL || config->max_following_error_millidegrees == 0U)
         {
             return EMASTER_RELATIVE_MOTION_INVALID_ARGUMENT;
         }

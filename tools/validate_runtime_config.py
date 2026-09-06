@@ -567,9 +567,8 @@ def validate_motion_profiles(
                 check.require(
                     isinstance(relative_angle, int)
                     and not isinstance(relative_angle, bool)
-                    and relative_angle != 0
                     and -(1 << 31) <= relative_angle < (1 << 31),
-                    f"运动方案 {profile_id} 的轴 {axis_id} 相对角度必须是非零 32 位整数",
+                    f"运动方案 {profile_id} 的轴 {axis_id} 相对角度必须是 32 位整数",
                 )
                 check.require(
                     isinstance(following_error, int)

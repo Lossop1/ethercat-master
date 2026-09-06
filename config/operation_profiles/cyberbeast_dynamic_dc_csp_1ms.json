@@ -21,7 +21,7 @@
       "value": 8,
       "required_rx_fields": ["control_word", "target_position", "mode_of_operation"],
       "required_tx_fields": ["status_word", "actual_position", "mode_display"],
-      "mode_display_policy": "diagnostic",
+      "mode_display_policy": "required",
       "safeop_to_op_sdo_writes": [
         {"index": "0x6072", "subindex": 0, "type": "u16", "value": "0x03E8"},
         {"index": "0x607F", "subindex": 0, "type": "u32", "value": "0x00004000"}

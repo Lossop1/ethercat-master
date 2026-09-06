@@ -20,7 +20,6 @@ static bool any_slave_state_error(const ecx_contextt *context) {
 
 emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session_t *session) {
     size_t axis_index;
-    bool needs_mailbox = false;
     emaster_control_session_status_t status;
 
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
@@ -41,18 +40,6 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
     }
     session->report->expected_wkc = (uint16_t)(session->context.grouplist[0].outputsWKC * 2U +
                                                session->context.grouplist[0].inputsWKC);
-    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-        if (!session->images[axis_index].tx_mode_available) {
-            if (ecx_slavembxcyclic(&session->context, (uint16_t)(axis_index + 1U)) <= 0) {
-                return EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
-            }
-            needs_mailbox = true;
-        }
-    }
-    if (needs_mailbox && !emaster_session_mailbox_start(&session->mailbox, &session->context,
-                                                        session->plan->cycle_ns)) {
-        return EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
-    }
     if (!emaster_cycle_clock_init(&session->clock, session->plan->cycle_ns,
                                   session->plan->process_data_phase_ns)) {
         status = EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
@@ -89,7 +76,20 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         }
         session->axes[axis_index].requested_mode =
             session->plan->axes[axis_index].operation_mode->value;
-        session->axes[axis_index].mode_display = mode_display;
+        if (!session->images[axis_index].tx_mode_available)
+        {
+            /* 固定 PDO 没有 6061 字段，复用 SAFE-OP SDO 读回，避免 OP 中再次访问邮箱。 */
+            session->axes[axis_index].mode_display_sdo_read =
+                session->axes[axis_index].safeop_mode_display_sdo_read;
+            session->axes[axis_index].mode_display_sdo =
+                session->axes[axis_index].safeop_mode_display_sdo;
+            session->axes[axis_index].mode_display =
+                session->axes[axis_index].mode_display_sdo;
+        }
+        if (session->images[axis_index].tx_mode_available)
+        {
+            session->axes[axis_index].mode_display = mode_display;
+        }
         session->axes[axis_index].status_word = status_word;
         session->axes[axis_index].initial_actual_position = actual_position;
         session->axes[axis_index].actual_position = actual_position;

@@ -115,7 +115,6 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         !emaster_cycle_clock_observe_dc(&session->clock, session->context.DCtime)) {
         return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_DC_SYNC_FAILED, true);
     }
-    emaster_session_mailbox_service(&session->mailbox);
     if (!emaster_cycle_clock_sample(&session->clock, &now_ns, &next_deadline_ns)) {
         session->report->cycle_deadline_missed |= session->clock.deadline_missed;
         if (session->clock.deadline_missed)

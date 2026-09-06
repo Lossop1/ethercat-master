@@ -31,7 +31,6 @@ typedef struct
     /* 动态模块通过 PDO 提供模式字段；固定模块没有该字段。 */
     bool rx_mode_available;
     bool tx_mode_available;
-    bool mode_read_pending;
     bool sync0_configured;
 } emaster_cia_process_image_t;
 
@@ -46,7 +45,7 @@ bool emaster_cia_process_image_prepare_output(
     uint8_t *output,
     size_t output_capacity);
 
-/* 更新控制字和 CSP 保持目标，并重新编码完整 RxPDO。 */
+/* 更新控制字和当前模式的目标原始值，并重新编码完整 RxPDO。 */
 bool emaster_cia_process_image_update_output(
     const emaster_session_axis_plan_t *axis,
     emaster_cia_process_image_t *image,
@@ -55,7 +54,7 @@ bool emaster_cia_process_image_update_output(
     uint8_t *output,
     size_t output_capacity);
 
-/* 解码状态字、模式显示和 CSP 实际位置；未使用 CSP 时位置返回零。 */
+/* 解码状态字、模式显示和当前模式的反馈原始值；调用者按模式解释该值。 */
 bool emaster_cia_process_image_decode_input(
     emaster_cia_process_image_t *image,
     const uint8_t *input,

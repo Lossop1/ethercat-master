@@ -93,9 +93,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                 continue;
             }
             axis->cia402_state = state;
-            if ((axis->status_word &
-                 session->plan->axes[axis_index].device_profile->safe_stop_status_mask) !=
-                session->plan->axes[axis_index].device_profile->safe_stop_status_value) {
+            if (state != EMASTER_CIA402_STATE_SWITCH_ON_DISABLED &&
+                state != EMASTER_CIA402_STATE_NOT_READY_TO_SWITCH_ON) {
                 all_axes_safe = false;
             }
         }
@@ -139,7 +138,6 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         disable_sync0(&session->context, session->images, session->plan->axis_count);
         session->report->sync0_disabled = true;
     }
-    emaster_session_mailbox_stop(&session->mailbox);
     emaster_run_audit_end_cyclic(&session->report->audit);
     if (session->report->diagnostic_preop_reached) {
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {

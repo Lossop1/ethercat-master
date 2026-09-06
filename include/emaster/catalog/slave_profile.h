@@ -62,7 +62,7 @@ typedef struct
     bool supports_pdo_configuration;
     /* 这是 ESI 声明的能力，不表示所有运行方案都必须启用 DC。 */
     bool supports_distributed_clocks;
-    /* 供应商状态字定义中的停用确认条件：(6041 & mask) == value。 */
+    /* 供应商状态字位条件仅作设备诊断，停用完成由完整 CiA 402 状态确认。 */
     uint16_t safe_stop_status_mask;
     uint16_t safe_stop_status_value;
 } emaster_slave_profile_t;
