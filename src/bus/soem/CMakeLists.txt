@@ -42,7 +42,8 @@ target_link_libraries(emaster_soem_control_session PRIVATE emaster::soem_common 
                                                          emaster::session emaster::catalog
                                                          emaster::protocol emaster::pdo_codec
                                                          emaster::multiaxis emaster::motion
-                                                         emaster::run_audit Threads::Threads)
+                                                         emaster::run_audit emaster::cyclic
+                                                         Threads::Threads)
 target_compile_features(emaster_soem_control_session PUBLIC c_std_11)
 target_include_directories(
     emaster_soem_control_session

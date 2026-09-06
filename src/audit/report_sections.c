@@ -169,6 +169,46 @@ static bool write_position_scale(FILE *stream,
                scale->gear_motor_revolutions, scale->gear_shaft_revolutions) >= 0;
 }
 
+static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timing)
+{
+    REQUIRE_WRITE(fprintf(
+        stream,
+        "{\"samples\":%" PRIu64 ",\"host_time_samples\":%" PRIu64
+        ",\"dc_time_samples\":%" PRIu64 ",\"wkc_mismatch_count\":%" PRIu64
+        ",\"deadline_missed_count\":%" PRIu64 ",\"first_exchange\":%" PRIu64
+        ",\"last_exchange\":%" PRIu64 ",\"last_scheduled_send_ns\":%" PRIu64
+        ",\"last_host_send_start_ns\":%" PRIu64
+        ",\"last_host_send_end_ns\":%" PRIu64
+        ",\"last_host_receive_end_ns\":%" PRIu64
+        ",\"last_dc_time_ns\":%" PRId64,
+        timing->sample_count, timing->host_time_sample_count, timing->dc_time_sample_count,
+        timing->wkc_mismatch_count, timing->deadline_missed_count,
+        timing->first_exchange, timing->last_exchange, timing->last_scheduled_send_ns,
+        timing->last_host_send_start_ns, timing->last_host_send_end_ns,
+        timing->last_host_receive_end_ns, timing->last_dc_time_ns) >= 0);
+    REQUIRE_WRITE(fputs(",\"ranges\":{", stream) != EOF);
+    REQUIRE_WRITE(fprintf(
+        stream,
+        "\"send_duration_ns\":{\"present\":%s,\"min\":%" PRIu64 ",\"max\":%" PRIu64 "},"
+        "\"round_trip_ns\":{\"present\":%s,\"min\":%" PRIu64 ",\"max\":%" PRIu64 "},"
+        "\"send_lateness_ns\":{\"present\":%s,\"min\":%" PRId64 ",\"max\":%" PRId64 "},"
+        "\"dc_arrival_phase_ns\":{\"present\":%s,\"min\":%" PRId64 ",\"max\":%" PRId64 "},"
+        "\"phase_error_ns\":{\"present\":%s,\"min\":%" PRId64 ",\"max\":%" PRId64 "},"
+        "\"sync0_margin_ns\":{\"present\":%s,\"min\":%" PRId64 ",\"max\":%" PRId64 "}},"
+        "\"sync0_late_count\":%" PRIu64 "}",
+        timing->has_send_duration ? "true" : "false", timing->min_send_duration_ns,
+        timing->max_send_duration_ns, timing->has_round_trip ? "true" : "false",
+        timing->min_round_trip_ns, timing->max_round_trip_ns,
+        timing->has_send_lateness ? "true" : "false", timing->min_send_lateness_ns,
+        timing->max_send_lateness_ns, timing->has_dc_phase ? "true" : "false",
+        timing->min_dc_arrival_phase_ns, timing->max_dc_arrival_phase_ns,
+        timing->has_phase_error ? "true" : "false", timing->min_phase_error_ns,
+        timing->max_phase_error_ns, timing->has_sync0_margin ? "true" : "false",
+        timing->min_sync0_margin_ns, timing->max_sync0_margin_ns,
+        timing->sync0_late_count) >= 0);
+    return true;
+}
+
 static bool write_axis(FILE *stream,
                        const emaster_session_axis_plan_t *axis_plan,
                        const emaster_control_session_axis_result_t *axis)
@@ -245,6 +285,8 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->dc.observed_assign_activate) >= 0);
     REQUIRE_WRITE(fputs("\"position_scale\":", stream) != EOF);
     REQUIRE_WRITE(write_position_scale(stream, &axis->position_scale));
+    REQUIRE_WRITE(fputs(",\"timing\":", stream) != EOF);
+    REQUIRE_WRITE(write_timing(stream, &axis->timing));
     REQUIRE_WRITE(fprintf(stream,
         ",\"shutdown_al\":{\"state\":%u,\"status_code\":%u}",
         (unsigned int)axis->shutdown_al_state, (unsigned int)axis->shutdown_al_status_code) >= 0);

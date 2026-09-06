@@ -114,6 +114,16 @@ static bool timespec_to_ns(const struct timespec *value, uint64_t *nanoseconds)
     return true;
 }
 
+bool emaster_cycle_clock_deadline_ns(const emaster_cycle_clock_t *clock,
+                                     uint64_t *deadline_ns)
+{
+    if (clock == NULL || !clock->initialized || deadline_ns == NULL)
+    {
+        return false;
+    }
+    return timespec_to_ns(&clock->deadline, deadline_ns);
+}
+
 bool emaster_cycle_clock_sample(emaster_cycle_clock_t *clock,
                                 uint64_t *now_ns, uint64_t *deadline_ns)
 {

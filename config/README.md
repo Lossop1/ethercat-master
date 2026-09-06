@@ -115,4 +115,6 @@ DC 方案的过程帧目标相位必须早于 Sync0，并通过 `dc_startup_cycl
 日常报告由 `run_report_path` 指定，建议放入已忽略的 `runtime/reports/`。报告版本 2 删除了不再
 执行的 OP 即时 SDO 字段，新增 `first_cycle_failure`、`shutdown_al` 和审计截断计数。
 `actual_wkc` 是最后一次交换结果，首次异常的 WKC 单独保留；最终 SDO 属于退出周期后的快照。
+每个轴的 `timing` 记录主机时间、参考 DC 时间和由传播延迟推导的 Sync0 裕量；它不表示从站内部
+SM2 完成时间戳。
 标准诊断工具和主程序具有不同职责，诊断工具不充当主程序必须经过的启动阶段。

@@ -100,6 +100,7 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
                                       &session->report->audit,
                                       EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, session->exchange);
         session->axes[axis_index].position = (uint16_t)(axis_index + 1U);
+        emaster_cyclic_timing_stats_init(&session->axes[axis_index].timing);
         session->axes[axis_index].requested_mode = axis->operation_mode->value;
         session->axes[axis_index].actual_vendor_id = slave->eep_man;
         session->axes[axis_index].actual_product_code = slave->eep_id;

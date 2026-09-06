@@ -1,0 +1,185 @@
+#include "emaster/cyclic/timing.h"
+
+#include <limits.h>
+#include <string.h>
+
+static int64_t positive_mod(int64_t value, uint32_t modulus)
+{
+    int64_t result = value % (int64_t)modulus;
+
+    return result < 0 ? result + (int64_t)modulus : result;
+}
+
+static int64_t centered_difference(int64_t value, int64_t reference, uint32_t cycle_ns)
+{
+    int64_t difference = value - reference;
+    int64_t half_cycle = (int64_t)cycle_ns / INT64_C(2);
+
+    difference %= (int64_t)cycle_ns;
+    if (difference > half_cycle)
+    {
+        difference -= (int64_t)cycle_ns;
+    }
+    else if (difference < -half_cycle)
+    {
+        difference += (int64_t)cycle_ns;
+    }
+    return difference;
+}
+
+static void update_unsigned_range(bool *present, uint64_t *minimum,
+                                  uint64_t *maximum, uint64_t value)
+{
+    if (!*present)
+    {
+        *minimum = value;
+        *maximum = value;
+        *present = true;
+    }
+    else
+    {
+        if (value < *minimum)
+        {
+            *minimum = value;
+        }
+        if (value > *maximum)
+        {
+            *maximum = value;
+        }
+    }
+}
+
+static void update_signed_range(bool *present, int64_t *minimum,
+                                int64_t *maximum, int64_t value)
+{
+    if (!*present)
+    {
+        *minimum = value;
+        *maximum = value;
+        *present = true;
+    }
+    else
+    {
+        if (value < *minimum)
+        {
+            *minimum = value;
+        }
+        if (value > *maximum)
+        {
+            *maximum = value;
+        }
+    }
+}
+
+void emaster_cyclic_timing_stats_init(emaster_cyclic_timing_stats_t *stats)
+{
+    if (stats != NULL)
+    {
+        memset(stats, 0, sizeof(*stats));
+    }
+}
+
+bool emaster_cyclic_timing_stats_record(
+    emaster_cyclic_timing_stats_t *stats,
+    const emaster_cyclic_timing_observation_t *observation,
+    uint32_t cycle_ns,
+    uint32_t target_phase_ns,
+    int32_t sync0_shift_ns,
+    int32_t propagation_delay_ns)
+{
+    int64_t arrival_time_ns;
+    int64_t arrival_phase_ns;
+    int64_t sync0_phase_ns;
+
+    if (stats == NULL || observation == NULL || cycle_ns == 0U ||
+        target_phase_ns >= cycle_ns || observation->exchange == 0U)
+    {
+        return false;
+    }
+    if (stats->sample_count == 0U)
+    {
+        stats->first_exchange = observation->exchange;
+    }
+    stats->last_exchange = observation->exchange;
+    ++stats->sample_count;
+    if (!observation->wkc_match && stats->wkc_mismatch_count != UINT64_MAX)
+    {
+        ++stats->wkc_mismatch_count;
+    }
+    if (observation->host_time_valid)
+    {
+        uint64_t send_duration;
+        uint64_t round_trip;
+        int64_t send_lateness;
+
+        if (observation->host_send_end_ns < observation->host_send_start_ns ||
+            observation->host_receive_end_ns < observation->host_send_start_ns)
+        {
+            return false;
+        }
+        send_duration = observation->host_send_end_ns - observation->host_send_start_ns;
+        round_trip = observation->host_receive_end_ns - observation->host_send_start_ns;
+        if (observation->host_send_start_ns >= observation->scheduled_send_ns)
+        {
+            uint64_t difference = observation->host_send_start_ns -
+                                  observation->scheduled_send_ns;
+            send_lateness = difference > (uint64_t)INT64_MAX
+                                ? INT64_MAX
+                                : (int64_t)difference;
+        }
+        else
+        {
+            uint64_t difference = observation->scheduled_send_ns -
+                                  observation->host_send_start_ns;
+            send_lateness = difference > (uint64_t)INT64_MAX
+                                ? INT64_MIN
+                                : -(int64_t)difference;
+        }
+        ++stats->host_time_sample_count;
+        stats->last_scheduled_send_ns = observation->scheduled_send_ns;
+        stats->last_host_send_start_ns = observation->host_send_start_ns;
+        stats->last_host_send_end_ns = observation->host_send_end_ns;
+        stats->last_host_receive_end_ns = observation->host_receive_end_ns;
+        update_unsigned_range(&stats->has_send_duration, &stats->min_send_duration_ns,
+                              &stats->max_send_duration_ns, send_duration);
+        update_unsigned_range(&stats->has_round_trip, &stats->min_round_trip_ns,
+                              &stats->max_round_trip_ns, round_trip);
+        update_signed_range(&stats->has_send_lateness, &stats->min_send_lateness_ns,
+                            &stats->max_send_lateness_ns, send_lateness);
+    }
+    if (!observation->dc_time_valid)
+    {
+        return true;
+    }
+    if ((propagation_delay_ns > 0 && observation->dc_time_ns > INT64_MAX - propagation_delay_ns) ||
+        (propagation_delay_ns < 0 && observation->dc_time_ns < INT64_MIN - propagation_delay_ns))
+    {
+        return false;
+    }
+    ++stats->dc_time_sample_count;
+    stats->last_dc_time_ns = observation->dc_time_ns;
+    arrival_time_ns = observation->dc_time_ns + propagation_delay_ns;
+    arrival_phase_ns = positive_mod(arrival_time_ns, cycle_ns);
+    sync0_phase_ns = positive_mod(sync0_shift_ns, cycle_ns);
+    update_signed_range(&stats->has_dc_phase, &stats->min_dc_arrival_phase_ns,
+                        &stats->max_dc_arrival_phase_ns, arrival_phase_ns);
+    update_signed_range(&stats->has_phase_error, &stats->min_phase_error_ns,
+                        &stats->max_phase_error_ns,
+                        centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns));
+    update_signed_range(&stats->has_sync0_margin, &stats->min_sync0_margin_ns,
+                        &stats->max_sync0_margin_ns, sync0_phase_ns - arrival_phase_ns);
+    if (sync0_phase_ns - arrival_phase_ns < 0 && stats->sync0_late_count != UINT64_MAX)
+    {
+        ++stats->sync0_late_count;
+    }
+    return true;
+}
+
+void emaster_cyclic_timing_stats_note_deadline_missed(
+    emaster_cyclic_timing_stats_t *stats)
+{
+    if (stats != NULL && stats->deadline_missed_count != UINT64_MAX)
+    {
+        ++stats->deadline_missed_count;
+    }
+}

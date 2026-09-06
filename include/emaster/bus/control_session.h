@@ -3,6 +3,7 @@
 
 #include "emaster/audit/run_audit.h"
 #include "emaster/cia402/controller.h"
+#include "emaster/cyclic/timing.h"
 #include "emaster/motion/relative_position.h"
 #include "emaster/session/session_plan.h"
 
@@ -144,6 +145,8 @@ typedef struct
     emaster_sync_diagnostic_t sm3_diagnostic;
     emaster_position_scale_t position_scale;
     emaster_dc_axis_result_t dc;
+    /* 每个物理从站单独保存周期时序统计，传播延迟不能在多轴间混合。 */
+    emaster_cyclic_timing_stats_t timing;
     /* 退出周期后、切换诊断状态前的 AL 快照，不冒充故障发生瞬间的状态。 */
     uint16_t shutdown_al_state;
     uint16_t shutdown_al_status_code;

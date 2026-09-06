@@ -1,4 +1,4 @@
-add_library(emaster_cyclic STATIC exchange.c)
+add_library(emaster_cyclic STATIC exchange.c timing.c)
 add_library(emaster::cyclic ALIAS emaster_cyclic)
 
 target_compile_features(emaster_cyclic PUBLIC c_std_11)
