@@ -57,14 +57,83 @@ static void release_session(emaster_soem_session_t *session) {
     emaster_cia_process_image_destroy(session->images, session->plan->axis_count);
 }
 
+void emaster_soem_session_set_state(
+    emaster_soem_session_t *session,
+    emaster_control_state_t state,
+    emaster_control_session_status_t status)
+{
+    if (session == NULL || session->report == NULL || session->report->state == state)
+    {
+        return;
+    }
+    session->report->state = state;
+    if (session->state_changed != NULL)
+    {
+        session->state_changed(state, status, session->state_user_data);
+    }
+}
+
+void emaster_soem_session_latch_failure(
+    emaster_soem_session_t *session,
+    emaster_control_session_status_t status)
+{
+    uint32_t reasons = EMASTER_SAFETY_REASON_FAULT_LATCHED;
+
+    if (session == NULL || session->report == NULL ||
+        status == EMASTER_CONTROL_SESSION_OK)
+    {
+        return;
+    }
+    switch (status)
+    {
+        case EMASTER_CONTROL_SESSION_TOPOLOGY_MISMATCH:
+        case EMASTER_CONTROL_SESSION_IDENTITY_MISMATCH:
+            reasons |= EMASTER_SAFETY_REASON_TOPOLOGY_UNVERIFIED;
+            break;
+        case EMASTER_CONTROL_SESSION_PDO_MISMATCH:
+        case EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED:
+            reasons |= EMASTER_SAFETY_REASON_PDO_UNVERIFIED;
+            break;
+        case EMASTER_CONTROL_SESSION_WKC_MISMATCH:
+        case EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED:
+        case EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED:
+        case EMASTER_CONTROL_SESSION_OP_NOT_REACHED:
+            reasons |= EMASTER_SAFETY_REASON_COMMUNICATION_INVALID;
+            break;
+        case EMASTER_CONTROL_SESSION_DC_CONFIG_FAILED:
+        case EMASTER_CONTROL_SESSION_SYNC0_CONFIG_FAILED:
+        case EMASTER_CONTROL_SESSION_DC_SYNC_FAILED:
+            reasons |= EMASTER_SAFETY_REASON_SYNCHRONIZATION_INVALID;
+            break;
+        case EMASTER_CONTROL_SESSION_FEEDBACK_INVALID:
+        case EMASTER_CONTROL_SESSION_CONTROLLER_FAILED:
+        case EMASTER_CONTROL_SESSION_DRIVE_FAULT:
+            reasons |= EMASTER_SAFETY_REASON_FEEDBACK_INVALID;
+            break;
+        case EMASTER_CONTROL_SESSION_MOTION_INVALID:
+        case EMASTER_CONTROL_SESSION_FOLLOWING_ERROR:
+            reasons |= EMASTER_SAFETY_REASON_TARGET_INVALID;
+            break;
+        case EMASTER_CONTROL_SESSION_INTERNAL_LIMIT_ACTIVE:
+            reasons |= EMASTER_SAFETY_REASON_DRIVE_LIMIT_ACTIVE;
+            break;
+        default:
+            break;
+    }
+    session->fault_latched = true;
+    session->report->fault_latched = true;
+    session->report->safety_control_permitted = false;
+    session->report->safety_blocking_reasons |= reasons;
+}
+
 /*
  * 入口只装配资源并依次调用生命周期阶段，不直接实现 PDO 字段处理、轨迹算法或
  * 故障诊断。业务参数均来自 plan；失败后始终先关闭会话，再释放内存。
  */
 emaster_control_session_status_t emaster_soem_control_session(
     const emaster_session_plan_t *plan, emaster_control_session_axis_result_t *axis_storage,
-    size_t axis_capacity, emaster_control_session_stop_requested_t stop_requested,
-    void *stop_user_data, emaster_control_session_report_t *report) {
+    size_t axis_capacity, const emaster_control_session_callbacks_t *callbacks,
+    emaster_control_session_report_t *report) {
     emaster_soem_session_t storage;
     emaster_soem_session_t *session = &storage;
     emaster_control_session_status_t status;
@@ -81,8 +150,14 @@ emaster_control_session_status_t emaster_soem_control_session(
     session->plan = plan;
     session->axes = axis_storage;
     session->report = report;
-    session->stop_requested = stop_requested;
-    session->stop_user_data = stop_user_data;
+    if (callbacks != NULL) {
+        session->stop_requested = callbacks->stop_requested;
+        session->stop_user_data = callbacks->stop_user_data;
+        session->state_changed = callbacks->state_changed;
+        session->state_user_data = callbacks->state_user_data;
+        session->feedback_updated = callbacks->feedback_updated;
+        session->feedback_user_data = callbacks->feedback_user_data;
+    }
     session->transition_cycles =
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
         plan->cycle_ns;
@@ -92,6 +167,11 @@ emaster_control_session_status_t emaster_soem_control_session(
     (void)snprintf(report->interface_name, sizeof(report->interface_name), "%s",
                    plan->deployment->ethercat_interface);
     emaster_run_audit_init(&report->audit);
+    report->state = EMASTER_CONTROL_STATE_INITIALIZING;
+    if (session->state_changed != NULL) {
+        session->state_changed(report->state, EMASTER_CONTROL_SESSION_OK,
+                               session->state_user_data);
+    }
 
     status = allocate_session(session);
     if (status == EMASTER_CONTROL_SESSION_OK) {
@@ -104,12 +184,24 @@ emaster_control_session_status_t emaster_soem_control_session(
         status = emaster_soem_session_run(session);
     }
     report->status = status;
+    if (status != EMASTER_CONTROL_SESSION_OK) {
+        emaster_soem_session_latch_failure(session, status);
+        emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_FAULTED,
+                                       status);
+    }
     report->cycle_deadline_missed |= session->clock.deadline_missed;
     emaster_soem_session_shutdown(session);
+    if (report->safe_state_reached && report->status == EMASTER_CONTROL_SESSION_OK) {
+        emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_STOPPED,
+                                       EMASTER_CONTROL_SESSION_OK);
+    }
     report->cycle_deadline_missed |= session->clock.deadline_missed;
     report->process_data_exchange_count = session->exchange;
     if (report->audit.allocation_failed && report->status == EMASTER_CONTROL_SESSION_OK) {
         report->status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+        emaster_soem_session_latch_failure(session, report->status);
+        emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_FAULTED,
+                                       report->status);
     }
     release_session(session);
     return report->status;

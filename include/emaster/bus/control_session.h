@@ -35,6 +35,7 @@ typedef enum
     EMASTER_CONTROL_SESSION_FEEDBACK_INVALID,
     EMASTER_CONTROL_SESSION_CONTROLLER_FAILED,
     EMASTER_CONTROL_SESSION_DRIVE_FAULT,
+    EMASTER_CONTROL_SESSION_INTERNAL_LIMIT_ACTIVE,
     EMASTER_CONTROL_SESSION_MOTION_INVALID,
     EMASTER_CONTROL_SESSION_FOLLOWING_ERROR,
     EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED,
@@ -44,6 +45,19 @@ typedef enum
     EMASTER_CONTROL_SESSION_AUDIT_FAILED,
     EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED
 } emaster_control_session_status_t;
+
+/* 对外暴露稳定的产品生命周期，不要求调用者解析 SOEM 或 CiA 402 内部状态 */
+typedef enum
+{
+    EMASTER_CONTROL_STATE_INITIALIZING = 0,
+    EMASTER_CONTROL_STATE_SAFE_OP,
+    EMASTER_CONTROL_STATE_OPERATIONAL,
+    EMASTER_CONTROL_STATE_ENABLING,
+    EMASTER_CONTROL_STATE_RUNNING,
+    EMASTER_CONTROL_STATE_STOPPING,
+    EMASTER_CONTROL_STATE_STOPPED,
+    EMASTER_CONTROL_STATE_FAULTED
+} emaster_control_state_t;
 
 /* 每轴 DC 结果同时保存方案请求值、SOEM 生效状态和 ESC 寄存器读回值。 */
 typedef struct
@@ -109,6 +123,21 @@ typedef struct
     int8_t mode_command_sdo;
     bool mode_display_sdo_read;
     int8_t mode_display_sdo;
+    bool software_position_limits_read;
+    int32_t software_position_limit_min;
+    int32_t software_position_limit_max;
+    bool following_error_read;
+    int32_t following_error_actual;
+    bool polarity_read;
+    uint8_t polarity;
+    /* 6041 的模式相关反馈位只做统一记录，具体语义由所选模式解释 */
+    bool status_warning;
+    bool voltage_enabled;
+    bool remote;
+    bool target_reached;
+    bool internal_limit_active;
+    uint8_t mode_specific_status;
+    uint8_t manufacturer_specific_status;
     /* SAFE-OP 模式初始化后的即时 SDO 读回，用于区分 OP 前后的模式变化。 */
     bool safeop_mode_display_sdo_read;
     int8_t safeop_mode_display_sdo;
@@ -167,6 +196,7 @@ typedef struct
 typedef struct
 {
     emaster_control_session_status_t status;
+    emaster_control_state_t state;
     char interface_name[128];
     emaster_control_session_axis_result_t *axes;
     size_t axis_count;
@@ -176,12 +206,18 @@ typedef struct
     uint64_t cycle_count;
     uint64_t process_data_exchange_count;
     bool cycle_deadline_missed;
+    /* 安全门的最后一次判定，供上层明确知道为何禁止输出 */
+    uint32_t safety_blocking_reasons;
+    bool safety_control_permitted;
+    bool fault_latched;
     bool dc_required;
     bool dc_configured;
+    bool dc_startup_stable;
     uint16_t dc_reference_slave;
     uint32_t process_data_phase_ns;
     uint32_t dc_startup_cycles_requested;
     uint32_t dc_startup_cycles_completed;
+    uint64_t dc_startup_exchanges;
     int64_t dc_startup_phase_error_ns;
     int64_t last_dc_time_ns;
     bool safe_op_reached;
@@ -205,6 +241,40 @@ typedef struct
  */
 typedef bool (*emaster_control_session_stop_requested_t)(void *user_data);
 
+/* 生命周期通知与命令来源无关，回调必须无阻塞且不得访问 SOEM */
+typedef void (*emaster_control_session_state_changed_t)(
+    emaster_control_state_t state,
+    emaster_control_session_status_t status,
+    void *user_data);
+
+/* 周期反馈只在回调执行期间有效，调用者如需跨线程使用必须自行复制 */
+typedef struct
+{
+    uint64_t cycle;
+    emaster_control_state_t state;
+    emaster_control_session_status_t status;
+    bool fault_latched;
+    bool control_permitted;
+    uint32_t blocking_reasons;
+    const emaster_control_session_axis_result_t *axes;
+    size_t axis_count;
+} emaster_control_feedback_frame_t;
+
+typedef void (*emaster_control_session_feedback_updated_t)(
+    const emaster_control_feedback_frame_t *feedback,
+    void *user_data);
+
+/* 应用层回调集中管理，新增观察接口时不改变主会话函数签名 */
+typedef struct
+{
+    emaster_control_session_stop_requested_t stop_requested;
+    void *stop_user_data;
+    emaster_control_session_state_changed_t state_changed;
+    void *state_user_data;
+    emaster_control_session_feedback_updated_t feedback_updated;
+    void *feedback_user_data;
+} emaster_control_session_callbacks_t;
+
 /*
  * 按部署计划建立 EtherCAT 过程数据会话。SAFE-OP 首帧会先从 6064 初始化 607A，防止 CSP
  * 使能时追逐零位置；进入 OP 后，每周期根据 6041 计算并发送 6040。部署未引用运动方案时持续
@@ -215,8 +285,7 @@ emaster_control_session_status_t emaster_soem_control_session(
     const emaster_session_plan_t *plan,
     emaster_control_session_axis_result_t *axis_storage,
     size_t axis_capacity,
-    emaster_control_session_stop_requested_t stop_requested,
-    void *stop_user_data,
+    const emaster_control_session_callbacks_t *callbacks,
     emaster_control_session_report_t *report);
 
 /* 调用者完成报告输出后必须释放会话内部自动采集的审计记录。 */

@@ -29,6 +29,8 @@ static const char *session_status_text(emaster_control_session_status_t status) 
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_CONTROLLER_FAILED);
     case EMASTER_CONTROL_SESSION_DRIVE_FAULT:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_DRIVE_FAULT);
+    case EMASTER_CONTROL_SESSION_INTERNAL_LIMIT_ACTIVE:
+        return emaster_text(EMASTER_TEXT_CONTROL_SESSION_INTERNAL_LIMIT_ACTIVE);
     case EMASTER_CONTROL_SESSION_MOTION_INVALID:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_INVALID);
     case EMASTER_CONTROL_SESSION_FOLLOWING_ERROR:

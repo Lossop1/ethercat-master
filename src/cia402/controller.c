@@ -70,6 +70,26 @@ bool emaster_cia402_decode_status_word(uint16_t status_word,
     return true;
 }
 
+bool emaster_cia402_decode_status(uint16_t status_word,
+                                 emaster_cia402_status_t *status)
+{
+    if (status == NULL)
+    {
+        return false;
+    }
+    memset(status, 0, sizeof(*status));
+    status->state_known = emaster_cia402_decode_status_word(status_word, &status->state);
+    status->voltage_enabled = (status_word & UINT16_C(0x0010)) != 0U;
+    status->warning = (status_word & UINT16_C(0x0080)) != 0U;
+    status->remote = (status_word & UINT16_C(0x0200)) != 0U;
+    status->target_reached = (status_word & UINT16_C(0x0400)) != 0U;
+    status->internal_limit_active = (status_word & UINT16_C(0x0800)) != 0U;
+    status->mode_specific_bits = (uint8_t)((status_word >> 12U) & UINT16_C(0x0003));
+    status->manufacturer_specific_bits =
+        (uint8_t)((status_word >> 14U) & UINT16_C(0x0003));
+    return status->state_known;
+}
+
 static bool goal_reached(emaster_cia402_goal_t goal, emaster_cia402_state_t state)
 {
     switch (goal)

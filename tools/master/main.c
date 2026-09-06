@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
     emaster_session_plan_t plan;
     emaster_control_session_axis_result_t *results;
     emaster_control_session_report_t report;
+    emaster_control_session_callbacks_t callbacks;
     emaster_session_plan_status_t plan_status;
     emaster_control_session_status_t session_status;
     bool report_published;
@@ -103,8 +104,10 @@ int main(int argc, char **argv) {
     (void)fflush(stdout);
 
     memset(&report, 0, sizeof(report));
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.stop_requested = application_stop_requested;
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
-                                                  application_stop_requested, NULL, &report);
+                                                  &callbacks, &report);
     report_published = emaster_run_report_publish(&plan, &report, deployment->run_report_path);
     emaster_master_console_result(&plan, &report, report_published);
     emaster_control_session_report_destroy(&report);

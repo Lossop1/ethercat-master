@@ -45,6 +45,20 @@ typedef struct
     bool fault_reset_pulse;
 } emaster_cia402_output_t;
 
+/* 6041 中不属于 PDS FSA 掩码的通用状态，单独解析供运行监督使用 */
+typedef struct
+{
+    emaster_cia402_state_t state;
+    bool state_known;
+    bool voltage_enabled;
+    bool warning;
+    bool remote;
+    bool target_reached;
+    bool internal_limit_active;
+    uint8_t mode_specific_bits;
+    uint8_t manufacturer_specific_bits;
+} emaster_cia402_status_t;
+
 /* 初始化为安全停止目标；不会产生任何总线访问。 */
 void emaster_cia402_controller_init(emaster_cia402_controller_t *controller);
 
@@ -67,5 +81,9 @@ bool emaster_cia402_controller_step(emaster_cia402_controller_t *controller,
 /* 只解析标准状态字掩码，不访问总线或解释设备厂商扩展位。 */
 bool emaster_cia402_decode_status_word(uint16_t status_word,
                                        emaster_cia402_state_t *state);
+
+/* 一次解析完整的 6041 通用语义，模式专用位保持为原始两位值 */
+bool emaster_cia402_decode_status(uint16_t status_word,
+                                 emaster_cia402_status_t *status);
 
 #endif

@@ -172,20 +172,24 @@ bool emaster_session_observer_prepare_audit(
     }
     /* 保持位置会话没有结束时刻，预留启动和状态转换容量；耗尽后只标注截断。 */
     motion_time_ns = plan->motion_profile == NULL ? UINT64_C(0) :
-        ((uint64_t)plan->motion_profile->duration_ms +
-         (uint64_t)plan->motion_profile->settle_ms) * UINT64_C(1000000);
+        (((uint64_t)plan->motion_profile->duration_ms +
+          (uint64_t)plan->motion_profile->settle_ms) > UINT64_MAX / UINT64_C(1000000)
+             ? UINT64_MAX
+             : ((uint64_t)plan->motion_profile->duration_ms +
+                (uint64_t)plan->motion_profile->settle_ms) * UINT64_C(1000000));
     motion_cycles =
         (motion_time_ns + plan->cycle_ns - UINT64_C(1)) / plan->cycle_ns;
-    if (transition_cycles > UINT64_MAX / UINT64_C(3) ||
-        motion_cycles > UINT64_MAX - transition_cycles * UINT64_C(3) ||
-        plan->dc_startup_cycles >
-            UINT64_MAX - motion_cycles - transition_cycles * UINT64_C(3) -
+    if (transition_cycles > UINT64_MAX / UINT64_C(4) ||
+        motion_cycles > UINT64_MAX - transition_cycles * UINT64_C(4) ||
+        (uint64_t)plan->dc_startup_cycles * UINT64_C(2) >
+            UINT64_MAX - motion_cycles - transition_cycles * UINT64_C(4) -
                 EMASTER_AUDIT_EXCHANGE_MARGIN)
     {
         return false;
     }
-    max_exchanges = motion_cycles + transition_cycles * UINT64_C(3) +
-                    plan->dc_startup_cycles + EMASTER_AUDIT_EXCHANGE_MARGIN;
+    max_exchanges = motion_cycles + transition_cycles * UINT64_C(4) +
+                    (uint64_t)plan->dc_startup_cycles * UINT64_C(2) +
+                    EMASTER_AUDIT_EXCHANGE_MARGIN;
     for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
     {
         size_t axis_fields = runtime[axis_index].rx_field_count +

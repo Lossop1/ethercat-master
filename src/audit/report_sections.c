@@ -195,6 +195,9 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         "\"dc_arrival_phase_ns\":{\"present\":%s,\"min\":%" PRId64 ",\"max\":%" PRId64 "},"
         "\"phase_error_ns\":{\"present\":%s,\"min\":%" PRId64 ",\"max\":%" PRId64 "},"
         "\"sync0_margin_ns\":{\"present\":%s,\"min\":%" PRId64 ",\"max\":%" PRId64 "}},"
+        "\"last_phase_error_ns\":%" PRId64
+        ",\"last_sync0_margin_ns\":%" PRId64
+        ",\"last_dc_sample_valid\":%s,"
         "\"sync0_late_count\":%" PRIu64 "}",
         timing->has_send_duration ? "true" : "false", timing->min_send_duration_ns,
         timing->max_send_duration_ns, timing->has_round_trip ? "true" : "false",
@@ -205,6 +208,8 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         timing->has_phase_error ? "true" : "false", timing->min_phase_error_ns,
         timing->max_phase_error_ns, timing->has_sync0_margin ? "true" : "false",
         timing->min_sync0_margin_ns, timing->max_sync0_margin_ns,
+        timing->last_phase_error_ns, timing->last_sync0_margin_ns,
+        timing->last_dc_sample_valid ? "true" : "false",
         timing->sync0_late_count) >= 0);
     return true;
 }
@@ -298,7 +303,15 @@ static bool write_axis(FILE *stream,
         "\"extended_servo_error_code\":\"0x%08lX\",\"servo_error_code\":\"0x%08lX\"},"
         "\"runtime\":{\"status_word\":\"0x%04X\","
         "\"control_word\":\"0x%04X\",\"requested_mode\":%d,"
-        "\"mode_display\":%d,\"initial_actual_position\":%" PRId32
+        "\"mode_display\":%d,\"warning\":%s,\"voltage_enabled\":%s,"
+        "\"remote\":%s,\"target_reached\":%s,\"internal_limit_active\":%s,"
+        "\"mode_specific_bits\":%u,\"manufacturer_specific_bits\":%u,"
+        "\"software_position_limits_read\":%s,"
+        "\"software_position_limit_min\":%" PRId32 ","
+        "\"software_position_limit_max\":%" PRId32 ","
+        "\"following_error_read\":%s,\"following_error_actual\":%" PRId32 ","
+        "\"polarity_read\":%s,\"polarity\":%u,"
+        "\"initial_actual_position\":%" PRId32
         ",\"actual_position\":%" PRId32 ",\"target_position\":%" PRId32
         ",\"operation_enabled_seen\":%s,\"motion_final_position\":%" PRId32
         ",\"max_following_error_counts\":%" PRIu64
@@ -314,6 +327,20 @@ static bool write_axis(FILE *stream,
         (unsigned long)axis->safeop_drive_diagnostic.servo_error_code,
         (unsigned int)axis->status_word, (unsigned int)axis->control_word,
         (int)axis->requested_mode, (int)axis->mode_display,
+        axis->status_warning ? "true" : "false",
+        axis->voltage_enabled ? "true" : "false",
+        axis->remote ? "true" : "false",
+        axis->target_reached ? "true" : "false",
+        axis->internal_limit_active ? "true" : "false",
+        (unsigned int)axis->mode_specific_status,
+        (unsigned int)axis->manufacturer_specific_status,
+        axis->software_position_limits_read ? "true" : "false",
+        axis->software_position_limit_min,
+        axis->software_position_limit_max,
+        axis->following_error_read ? "true" : "false",
+        axis->following_error_actual,
+        axis->polarity_read ? "true" : "false",
+        (unsigned int)axis->polarity,
         axis->initial_actual_position, axis->actual_position,
         axis->target_position,
         axis->operation_enabled_seen ? "true" : "false",
@@ -483,7 +510,7 @@ bool emaster_run_report_write(FILE *stream,
     {
         return false;
     }
-    REQUIRE_WRITE(fputs("{\"schema_version\":2,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":3,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -495,19 +522,23 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->topology->topology_id));
     REQUIRE_WRITE(fprintf(
         stream,
-        "},\"result\":{\"status_code\":%u,\"io_map_size\":%zu,"
+        "},\"result\":{\"status_code\":%u,\"control_state\":%u,\"io_map_size\":%zu,"
         "\"expected_wkc\":%u,\"actual_wkc\":%d,\"cycle_count\":%" PRIu64
         ",\"process_data_exchange_count\":%" PRIu64
-        ",\"cycle_deadline_missed\":%s"
+        ",\"cycle_deadline_missed\":%s,\"fault_latched\":%s,"
+        "\"safety_control_permitted\":%s,\"safety_blocking_reasons\":%" PRIu32
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
         "\"safe_state_reached\":%s,\"sync0_disabled\":%s,"
         "\"restore_init_succeeded\":%s},",
-        (unsigned int)report->status, report->io_map_size,
+        (unsigned int)report->status, (unsigned int)report->state, report->io_map_size,
         (unsigned int)report->expected_wkc, report->actual_wkc,
         report->cycle_count, report->process_data_exchange_count,
         report->cycle_deadline_missed ? "true" : "false",
+        report->fault_latched ? "true" : "false",
+        report->safety_control_permitted ? "true" : "false",
+        report->safety_blocking_reasons,
         report->safe_op_reached ? "true" : "false",
         report->op_reached ? "true" : "false",
         report->all_axes_enabled_reached ? "true" : "false",
@@ -526,19 +557,22 @@ bool emaster_run_report_write(FILE *stream,
         report->diagnostic_preop_reached ? "true" : "false") >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
-        "\"dc\":{\"required\":%s,\"configured\":%s,"
+        "\"dc\":{\"required\":%s,\"configured\":%s,\"startup_stable\":%s,"
         "\"reference_slave_position\":%u,\"process_data_phase_ns\":%" PRIu32
         ",\"startup_cycles_requested\":%" PRIu32
         ",\"startup_cycles_completed\":%" PRIu32
+        ",\"startup_exchanges\":%" PRIu64
         ",\"startup_phase_error_ns\":%" PRId64
         ",\"last_dc_time_ns\":%" PRId64 "},"
         "\"motion\":",
         report->dc_required ? "true" : "false",
         report->dc_configured ? "true" : "false",
+        report->dc_startup_stable ? "true" : "false",
         (unsigned int)report->dc_reference_slave,
         report->process_data_phase_ns,
         report->dc_startup_cycles_requested,
         report->dc_startup_cycles_completed,
+        report->dc_startup_exchanges,
         report->dc_startup_phase_error_ns,
         report->last_dc_time_ns) >= 0);
     REQUIRE_WRITE(write_motion(stream, plan->motion_profile));

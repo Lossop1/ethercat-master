@@ -16,7 +16,11 @@ typedef enum
     EMASTER_SAFETY_REASON_FEEDBACK_INVALID = UINT32_C(1) << 5U,
     EMASTER_SAFETY_REASON_ENABLE_NOT_AUTHORIZED = UINT32_C(1) << 6U,
     EMASTER_SAFETY_REASON_STOP_REQUESTED = UINT32_C(1) << 7U,
-    EMASTER_SAFETY_REASON_FAULT_LATCHED = UINT32_C(1) << 8U
+    EMASTER_SAFETY_REASON_FAULT_LATCHED = UINT32_C(1) << 8U,
+    EMASTER_SAFETY_REASON_MODE_UNCONFIRMED = UINT32_C(1) << 9U,
+    EMASTER_SAFETY_REASON_SYNCHRONIZATION_INVALID = UINT32_C(1) << 10U,
+    EMASTER_SAFETY_REASON_TARGET_INVALID = UINT32_C(1) << 11U,
+    EMASTER_SAFETY_REASON_DRIVE_LIMIT_ACTIVE = UINT32_C(1) << 12U
 } emaster_safety_reason_t;
 
 /*
@@ -31,6 +35,10 @@ typedef struct
     bool communication_healthy;
     bool command_valid;
     bool feedback_valid;
+    bool mode_confirmed;
+    bool synchronization_healthy;
+    bool target_valid;
+    bool drive_limit_inactive;
     bool enable_authorized;
     bool stop_requested;
     bool fault_latched;

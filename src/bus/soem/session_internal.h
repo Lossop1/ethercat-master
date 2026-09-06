@@ -5,6 +5,7 @@
 #include "cycle_clock.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/multiaxis/coordinator.h"
+#include "emaster/safety/gate.h"
 #include "session_observer.h"
 
 /*
@@ -38,9 +39,41 @@ typedef struct {
     bool sync0_started;
     bool cycle_output_active;
     bool dc_required;
+    bool fault_latched;
+    bool motion_prepared;
     emaster_control_session_stop_requested_t stop_requested;
     void *stop_user_data;
+    emaster_control_session_state_changed_t state_changed;
+    void *state_user_data;
+    emaster_control_session_feedback_updated_t feedback_updated;
+    void *feedback_user_data;
 } emaster_soem_session_t;
+
+/* 原子更新会话状态并通知应用层；通知回调不得阻塞周期线程 */
+void emaster_soem_session_set_state(
+    emaster_soem_session_t *session,
+    emaster_control_state_t state,
+    emaster_control_session_status_t status);
+
+/* 锁存会话的首个功能失败类别，并转换为统一安全门原因 */
+void emaster_soem_session_latch_failure(
+    emaster_soem_session_t *session,
+    emaster_control_session_status_t status);
+
+/* 运行监督器集中处理首错、反馈发布和整组轴安全门 */
+void emaster_soem_session_note_runtime_failure(
+    emaster_soem_session_t *session,
+    emaster_control_session_status_t status,
+    emaster_control_session_status_t *first_status);
+emaster_control_session_status_t emaster_soem_session_publish_feedback(
+    emaster_soem_session_t *session,
+    emaster_control_session_status_t status);
+emaster_control_session_status_t emaster_soem_session_apply_safety(
+    emaster_soem_session_t *session,
+    bool feedback_valid,
+    bool all_modes_confirmed,
+    emaster_control_session_status_t current_status,
+    bool *denied);
 
 /* 非周期阶段：发现、PDO 布局、SDO 初始化和 DC 配置，最终到达 SAFE-OP。 */
 emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_session_t *session);

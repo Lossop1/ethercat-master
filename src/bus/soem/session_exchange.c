@@ -45,6 +45,8 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         if (session->clock.deadline_missed)
         {
             note_deadline_missed(session);
+            emaster_soem_session_latch_failure(
+                session, EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED);
         }
         return fail_exchange(session, phase,
                              session->clock.deadline_missed
@@ -109,10 +111,14 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         }
     }
     if (!matched) {
+        emaster_soem_session_latch_failure(session,
+                                            EMASTER_CONTROL_SESSION_WKC_MISMATCH);
         return EMASTER_CONTROL_SESSION_WKC_MISMATCH;
     }
     if (session->dc_required &&
         !emaster_cycle_clock_observe_dc(&session->clock, session->context.DCtime)) {
+        emaster_soem_session_latch_failure(session,
+                                            EMASTER_CONTROL_SESSION_DC_SYNC_FAILED);
         return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_DC_SYNC_FAILED, true);
     }
     if (!emaster_cycle_clock_sample(&session->clock, &now_ns, &next_deadline_ns)) {
@@ -120,6 +126,8 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         if (session->clock.deadline_missed)
         {
             note_deadline_missed(session);
+            emaster_soem_session_latch_failure(
+                session, EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED);
         }
         return fail_exchange(session, phase,
                              session->clock.deadline_missed

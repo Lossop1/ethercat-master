@@ -49,6 +49,8 @@ typedef struct
     int64_t max_phase_error_ns;
     int64_t min_sync0_margin_ns;
     int64_t max_sync0_margin_ns;
+    int64_t last_phase_error_ns;
+    int64_t last_sync0_margin_ns;
     uint64_t sync0_late_count;
     bool has_send_duration;
     bool has_round_trip;
@@ -56,6 +58,7 @@ typedef struct
     bool has_dc_phase;
     bool has_phase_error;
     bool has_sync0_margin;
+    bool last_dc_sample_valid;
 } emaster_cyclic_timing_stats_t;
 
 void emaster_cyclic_timing_stats_init(emaster_cyclic_timing_stats_t *stats);
@@ -74,5 +77,12 @@ bool emaster_cyclic_timing_stats_record(
 
 void emaster_cyclic_timing_stats_note_deadline_missed(
     emaster_cyclic_timing_stats_t *stats);
+
+/*
+ * 判断最近一次样本是否带有 DC 时间且理论到达相位位于 Sync0 之前
+ * 调用者负责连续窗口计数，单个安全样本不等于启动已经稳定
+ */
+bool emaster_cyclic_timing_last_sample_is_safe(
+    const emaster_cyclic_timing_stats_t *stats);
 
 #endif

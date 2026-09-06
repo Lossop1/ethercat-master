@@ -89,6 +89,7 @@
     "control_session_feedback_invalid": "过程数据反馈解码失败",
     "control_session_controller_failed": "CiA 402 状态字无效或控制器计算失败",
     "control_session_drive_fault": "驱动器进入故障状态",
+    "control_session_internal_limit_active": "驱动器内部限制已生效，停止继续发布运动目标",
     "control_session_motion_invalid": "运动方案、位置换算或目标范围无效",
     "control_session_following_error": "实际位置与周期目标的偏差超过运行方案边界",
     "control_session_cycle_wait_failed": "周期时钟等待失败",

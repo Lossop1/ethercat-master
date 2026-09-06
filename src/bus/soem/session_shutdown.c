@@ -112,10 +112,30 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         return;
     }
     if (session->process_map_ready && session->cycle_output_active) {
-        session->report->safe_state_reached = stop_process_data(session);
-        if (!session->report->safe_state_reached &&
+        bool communication_usable =
+            session->report->status != EMASTER_CONTROL_SESSION_WKC_MISMATCH &&
+            session->report->status != EMASTER_CONTROL_SESSION_DC_SYNC_FAILED &&
+            session->report->status != EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED &&
+            session->report->status != EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
+
+        if (session->report->status == EMASTER_CONTROL_SESSION_OK)
+        {
+            emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_STOPPING,
+                                           EMASTER_CONTROL_SESSION_OK);
+        }
+        /*
+         * 只有通信和周期时钟仍可用时，才能把逐级停用称为已确认
+         * WKC、DC 或截止时间失效后继续发送只能算尽力而为，不能伪造安全到达结论
+         */
+        if (communication_usable) {
+            session->report->safe_state_reached = stop_process_data(session);
+        }
+        if (communication_usable && !session->report->safe_state_reached &&
             session->report->status == EMASTER_CONTROL_SESSION_OK) {
             session->report->status = EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED;
+            session->report->fault_latched = true;
+            emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_FAULTED,
+                                           session->report->status);
         }
     }
 
@@ -151,6 +171,9 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
                 &sdo, UINT16_C(0x6060), UINT8_C(0), &axis_result->mode_command_sdo);
             axis_result->mode_display_sdo_read = emaster_soem_read_i8(
                 &sdo, UINT16_C(0x6061), UINT8_C(0), &axis_result->mode_display_sdo);
+            axis_result->following_error_read = emaster_soem_read_i32(
+                &sdo, UINT16_C(0x60F4), UINT8_C(0),
+                &axis_result->following_error_actual);
             /*
              * 这里是退出 OP 后的诊断快照。计数器可能包含停机和状态转换期间的事件，
              * 不能与 first_cycle_failure 中的首次周期异常等同。
@@ -182,6 +205,20 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     if (!session->report->restore_init_succeeded &&
         session->report->status == EMASTER_CONTROL_SESSION_OK) {
         session->report->status = EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED;
+        session->report->fault_latched = true;
+        emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_FAULTED,
+                                       session->report->status);
+    }
+    if (session->report->status == EMASTER_CONTROL_SESSION_OK &&
+        session->report->safe_state_reached)
+    {
+        emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_STOPPED,
+                                       EMASTER_CONTROL_SESSION_OK);
+    }
+    else if (session->report->status != EMASTER_CONTROL_SESSION_OK)
+    {
+        emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_FAULTED,
+                                       session->report->status);
     }
     ecx_close(&session->context);
     session->context_open = false;

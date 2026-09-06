@@ -149,6 +149,7 @@ bool emaster_cyclic_timing_stats_record(
     }
     if (!observation->dc_time_valid)
     {
+        stats->last_dc_sample_valid = false;
         return true;
     }
     if ((propagation_delay_ns > 0 && observation->dc_time_ns > INT64_MAX - propagation_delay_ns) ||
@@ -168,11 +169,22 @@ bool emaster_cyclic_timing_stats_record(
                         centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns));
     update_signed_range(&stats->has_sync0_margin, &stats->min_sync0_margin_ns,
                         &stats->max_sync0_margin_ns, sync0_phase_ns - arrival_phase_ns);
+    stats->last_phase_error_ns =
+        centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns);
+    stats->last_sync0_margin_ns = sync0_phase_ns - arrival_phase_ns;
+    stats->last_dc_sample_valid = true;
     if (sync0_phase_ns - arrival_phase_ns < 0 && stats->sync0_late_count != UINT64_MAX)
     {
         ++stats->sync0_late_count;
     }
     return true;
+}
+
+bool emaster_cyclic_timing_last_sample_is_safe(
+    const emaster_cyclic_timing_stats_t *stats)
+{
+    return stats != NULL && stats->last_dc_sample_valid &&
+           stats->last_sync0_margin_ns >= 0;
 }
 
 void emaster_cyclic_timing_stats_note_deadline_missed(

@@ -177,8 +177,20 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         emaster_session_observer_read_position_scale(&sdo,
                                                      &session->axes[axis_index].position_scale);
         if (session->plan->motion_profile != NULL) {
+            session->axes[axis_index].software_position_limits_read =
+                emaster_soem_read_i32(&sdo, UINT16_C(0x607D), UINT8_C(1),
+                                      &session->axes[axis_index].software_position_limit_min) &&
+                emaster_soem_read_i32(&sdo, UINT16_C(0x607D), UINT8_C(2),
+                                      &session->axes[axis_index].software_position_limit_max);
+            session->axes[axis_index].polarity_read =
+                emaster_soem_read_u8(&sdo, UINT16_C(0x607E), UINT8_C(0),
+                                     &session->axes[axis_index].polarity);
             if (!session->axes[axis_index].position_scale.read_succeeded ||
-                axis->motion_axis == NULL) {
+                !session->axes[axis_index].software_position_limits_read ||
+                !session->axes[axis_index].polarity_read ||
+                axis->motion_axis == NULL ||
+                session->axes[axis_index].software_position_limit_min >
+                    session->axes[axis_index].software_position_limit_max) {
                 status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
                 return status;
             }
@@ -325,6 +337,8 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         return status;
     }
     session->report->safe_op_reached = true;
+    emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_SAFE_OP,
+                                   EMASTER_CONTROL_SESSION_OK);
 
     /* ESI 的 SO 初始化命令必须在从站已到 SAFE-OP、请求 OP 之前执行。 */
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {

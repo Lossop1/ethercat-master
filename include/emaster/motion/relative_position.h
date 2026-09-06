@@ -59,6 +59,15 @@ bool emaster_position_scale_matches(
     const emaster_position_scale_t *scale);
 
 /*
+ * 检查轨迹终点是否落在驱动器当前有效的软件位置范围内
+ * 最小值等于最大值时没有形成有效区间，按该设备默认配置不启用此项限制
+ */
+bool emaster_relative_motion_axis_within_software_limits(
+    const emaster_relative_motion_axis_t *axis,
+    int32_t minimum,
+    int32_t maximum);
+
+/*
  * 把配置角度换算为每轴有符号计数，并锁定启动位置和终点。axis_configs 已由会话计划按
  * 拓扑顺序解析；函数拒绝缺失比例、整数溢出、零误差边界和不完整轴集合。
  */

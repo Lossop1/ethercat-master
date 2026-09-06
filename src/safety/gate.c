@@ -36,6 +36,22 @@ bool emaster_safety_evaluate(const emaster_safety_conditions_t *conditions,
     {
         reasons |= EMASTER_SAFETY_REASON_FEEDBACK_INVALID;
     }
+    if (!conditions->mode_confirmed)
+    {
+        reasons |= EMASTER_SAFETY_REASON_MODE_UNCONFIRMED;
+    }
+    if (!conditions->synchronization_healthy)
+    {
+        reasons |= EMASTER_SAFETY_REASON_SYNCHRONIZATION_INVALID;
+    }
+    if (!conditions->target_valid)
+    {
+        reasons |= EMASTER_SAFETY_REASON_TARGET_INVALID;
+    }
+    if (!conditions->drive_limit_inactive)
+    {
+        reasons |= EMASTER_SAFETY_REASON_DRIVE_LIMIT_ACTIVE;
+    }
     if (!conditions->enable_authorized)
     {
         reasons |= EMASTER_SAFETY_REASON_ENABLE_NOT_AUTHORIZED;

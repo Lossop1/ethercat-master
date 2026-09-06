@@ -94,6 +94,59 @@ static size_t field_ordinal_for(const emaster_pdo_direction_layout_t *layout,
     return SIZE_MAX;
 }
 
+/*
+ * 运行方案中的 required_*_fields 是控制器实际依赖的字段契约
+ * 不能只由 Python 校验器检查，否则其他构建方式可能绕过校验后仍然发送错误 PDO
+ */
+static bool required_fields_present(
+    const emaster_pdo_mapping_profile_t *profiles,
+    size_t profile_count,
+    const char *const *required,
+    size_t required_count)
+{
+    size_t required_index;
+
+    if (required_count > 0U && (required == NULL || profiles == NULL))
+    {
+        return false;
+    }
+    for (required_index = 0U; required_index < required_count; ++required_index)
+    {
+        size_t mapping_index;
+        bool found = false;
+
+        if (required[required_index] == NULL || required[required_index][0] == '\0')
+        {
+            return false;
+        }
+        for (mapping_index = 0U; mapping_index < profile_count && !found; ++mapping_index)
+        {
+            const emaster_pdo_mapping_profile_t *mapping = &profiles[mapping_index];
+            size_t entry_index;
+
+            if (mapping->entries == NULL)
+            {
+                return false;
+            }
+            for (entry_index = 0U; entry_index < mapping->entry_count; ++entry_index)
+            {
+                const emaster_pdo_entry_t *entry = &mapping->entries[entry_index];
+
+                if (entry->name != NULL && strcmp(entry->name, required[required_index]) == 0)
+                {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool build_direction_codec(
     const emaster_pdo_direction_layout_t *actual,
     const emaster_pdo_mapping_profile_t *profiles,
@@ -257,6 +310,17 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
                                tx_count, EMASTER_CIA402_MODE_DISPLAY_INDEX,
                                false,
                                &image->tx_mode_ordinal, &image->tx_status_ordinal, NULL))
+    {
+        return false;
+    }
+    if (!required_fields_present(axis->pdo_set->rx_mappings,
+                                 axis->pdo_set->rx_mapping_count,
+                                 axis->operation_mode->required_rx_fields,
+                                 axis->operation_mode->required_rx_field_count) ||
+        !required_fields_present(axis->pdo_set->tx_mappings,
+                                 axis->pdo_set->tx_mapping_count,
+                                 axis->operation_mode->required_tx_fields,
+                                 axis->operation_mode->required_tx_field_count))
     {
         return false;
     }

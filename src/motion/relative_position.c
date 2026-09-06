@@ -104,6 +104,23 @@ bool emaster_position_scale_matches(
                axis_config->expected_gear_shaft_revolutions;
 }
 
+bool emaster_relative_motion_axis_within_software_limits(
+    const emaster_relative_motion_axis_t *axis,
+    int32_t minimum,
+    int32_t maximum)
+{
+    if (axis == NULL || minimum > maximum)
+    {
+        return false;
+    }
+    if (minimum == maximum)
+    {
+        return true;
+    }
+    return axis->start_position >= minimum && axis->start_position <= maximum &&
+           axis->final_position >= minimum && axis->final_position <= maximum;
+}
+
 emaster_relative_motion_status_t emaster_relative_motion_init(
     const emaster_motion_profile_t *profile,
     const emaster_motion_axis_config_t *const *axis_configs,
