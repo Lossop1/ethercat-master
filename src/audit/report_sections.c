@@ -314,6 +314,8 @@ static bool write_axis(FILE *stream,
         "\"safeop_actual_position\":%" PRId32
         ",\"initial_actual_position\":%" PRId32
         ",\"actual_position\":%" PRId32 ",\"target_position\":%" PRId32
+        ",\"actual_velocity\":%" PRId32 ",\"target_velocity\":%" PRId32
+        ",\"actual_torque\":%d,\"target_torque\":%d"
         ",\"operation_enabled_seen\":%s,\"motion_final_position\":%" PRId32
         ",\"max_following_error_counts\":%" PRIu64
         ",\"max_observed_following_error_counts\":%" PRIu64
@@ -345,6 +347,10 @@ static bool write_axis(FILE *stream,
         axis->safeop_actual_position, axis->initial_actual_position,
         axis->actual_position,
         axis->target_position,
+        axis->actual_velocity,
+        axis->target_velocity,
+        (int)axis->actual_torque,
+        (int)axis->target_torque,
         axis->operation_enabled_seen ? "true" : "false",
         axis->motion_final_position, axis->max_following_error_counts,
         axis->max_observed_following_error_counts,
@@ -380,13 +386,21 @@ static bool write_motion(FILE *stream, const emaster_motion_profile_t *motion)
         REQUIRE_WRITE(fprintf(
             stream,
             ",\"relative_angle_millidegrees\":%" PRId32
+            ",\"target_velocity_millidegrees_per_second\":%" PRId32
+            ",\"acceleration_millidegrees_per_second2\":%" PRIu32
+            ",\"deceleration_millidegrees_per_second2\":%" PRIu32
             ",\"max_following_error_millidegrees\":%" PRIu32
+            ",\"max_velocity_error_millidegrees_per_second\":%" PRIu32
             ",\"expected_position_scale\":{\"encoder_increments\":%" PRIu32
             ",\"encoder_motor_revolutions\":%" PRIu32
             ",\"gear_motor_revolutions\":%" PRIu32
             ",\"gear_shaft_revolutions\":%" PRIu32 "}}",
             axis->relative_angle_millidegrees,
+            axis->target_velocity_millidegrees_per_second,
+            axis->acceleration_millidegrees_per_second2,
+            axis->deceleration_millidegrees_per_second2,
             axis->max_following_error_millidegrees,
+            axis->max_velocity_error_millidegrees_per_second,
             axis->expected_encoder_increments,
             axis->expected_encoder_motor_revolutions,
             axis->expected_gear_motor_revolutions,

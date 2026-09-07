@@ -48,7 +48,8 @@ typedef enum
 
 typedef enum
 {
-    EMASTER_MOTION_TRAJECTORY_RELATIVE_LINEAR_POSITION = 0
+    EMASTER_MOTION_TRAJECTORY_RELATIVE_LINEAR_POSITION = 0,
+    EMASTER_MOTION_TRAJECTORY_CONSTANT_VELOCITY
 } emaster_motion_trajectory_t;
 
 typedef struct
@@ -121,8 +122,13 @@ typedef struct
 typedef struct
 {
     const char *axis_id;
+    /* CSP 使用相对位置；CSV 使用目标速度。未使用的字段必须由配置校验器拒绝或明确为零。 */
     int32_t relative_angle_millidegrees;
+    int32_t target_velocity_millidegrees_per_second;
+    uint32_t acceleration_millidegrees_per_second2;
+    uint32_t deceleration_millidegrees_per_second2;
     uint32_t max_following_error_millidegrees;
+    uint32_t max_velocity_error_millidegrees_per_second;
     /* 执行前必须与当前物理从站的 608F/6091 读回完全一致。 */
     uint32_t expected_encoder_increments;
     uint32_t expected_encoder_motor_revolutions;

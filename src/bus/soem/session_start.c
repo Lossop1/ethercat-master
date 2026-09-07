@@ -45,48 +45,66 @@ static emaster_control_session_status_t prepare_op_position(
         axis->mode_display = mode_display;
         axis->status_word = status_word;
         axis->initial_actual_position = actual_position;
-        axis->actual_position = actual_position;
-        axis->target_position = actual_position;
+        (void)emaster_soem_axis_set_feedback(&session->plan->axes[axis_index], axis,
+                                              actual_position);
+        axis->target_position = session->plan->motion_profile != NULL &&
+                                        session->plan->motion_profile->trajectory ==
+                                            EMASTER_MOTION_TRAJECTORY_CONSTANT_VELOCITY
+                                    ? 0
+                                    : actual_position;
         session->status_words[axis_index] = status_word;
         if (session->plan->motion_profile != NULL)
         {
             session->actual_positions[axis_index] = actual_position;
-            session->target_positions[axis_index] = actual_position;
+            session->target_positions[axis_index] = session->axes[axis_index].target_position;
         }
         if (!emaster_cia_process_image_update_output(
                 &session->plan->axes[axis_index], &session->images[axis_index],
-                UINT16_C(0), actual_position, slave->outputs, slave->Obytes))
+                UINT16_C(0), axis->target_position, slave->outputs, slave->Obytes))
         {
             return EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
         }
     }
     if (session->plan->motion_profile != NULL)
     {
-        emaster_relative_motion_status_t motion_status = emaster_relative_motion_init(
-            session->plan->motion_profile, session->motion_axis_configs,
-            session->motion_scales, session->target_positions,
-            session->plan->axis_count, session->plan->cycle_ns,
-            session->motion_axes, &session->motion);
-
-        if (motion_status != EMASTER_RELATIVE_MOTION_ACTIVE)
+        if (session->plan->motion_profile->trajectory ==
+            EMASTER_MOTION_TRAJECTORY_RELATIVE_LINEAR_POSITION)
         {
-            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-        }
-        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
-        {
-            if (!emaster_relative_motion_axis_within_software_limits(
-                    &session->motion_axes[axis_index],
-                    session->axes[axis_index].software_position_limit_min,
-                    session->axes[axis_index].software_position_limit_max))
-            {
+            emaster_relative_motion_status_t motion_status = emaster_relative_motion_init(
+                session->plan->motion_profile, session->motion_axis_configs,
+                session->motion_scales, session->target_positions,
+                session->plan->axis_count, session->plan->cycle_ns,
+                session->motion_axes, &session->motion);
+            if (motion_status != EMASTER_RELATIVE_MOTION_ACTIVE)
                 return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+            for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+            {
+                if (!emaster_relative_motion_axis_within_software_limits(
+                        &session->motion_axes[axis_index],
+                        session->axes[axis_index].software_position_limit_min,
+                        session->axes[axis_index].software_position_limit_max))
+                    return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+                session->axes[axis_index].motion_final_position =
+                    session->motion_axes[axis_index].final_position;
+                session->axes[axis_index].max_following_error_counts =
+                    session->motion_axes[axis_index].max_following_error_counts;
             }
-            session->axes[axis_index].motion_final_position =
-                session->motion_axes[axis_index].final_position;
-            session->axes[axis_index].max_following_error_counts =
-                session->motion_axes[axis_index].max_following_error_counts;
+            session->motion_prepared = true;
         }
-        session->motion_prepared = true;
+        else if (session->plan->motion_profile->trajectory ==
+                 EMASTER_MOTION_TRAJECTORY_CONSTANT_VELOCITY)
+        {
+            if (!emaster_velocity_motion_init(
+                    session->plan->motion_profile, session->motion_axis_configs,
+                    session->motion_scales, session->plan->axis_count,
+                    session->plan->cycle_ns, session->velocity_axes,
+                    &session->velocity_motion))
+                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+            for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+                session->axes[axis_index].max_following_error_counts =
+                    session->velocity_axes[axis_index].max_velocity_error;
+            session->velocity_motion_prepared = true;
+        }
     }
     return EMASTER_CONTROL_SESSION_OK;
 }
@@ -165,15 +183,19 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         }
         session->axes[axis_index].status_word = status_word;
         session->axes[axis_index].safeop_actual_position = actual_position;
-        session->axes[axis_index].actual_position = actual_position;
-        session->axes[axis_index].target_position = actual_position;
+        (void)emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
+                                              &session->axes[axis_index], actual_position);
+        session->axes[axis_index].target_position =
+            session->plan->axes[axis_index].operation_mode->value == INT8_C(9)
+                ? 0 : actual_position;
         if (session->plan->motion_profile != NULL) {
             session->actual_positions[axis_index] = actual_position;
-            session->target_positions[axis_index] = actual_position;
+            session->target_positions[axis_index] = session->axes[axis_index].target_position;
         }
         if (!emaster_cia_process_image_update_output(
                 &session->plan->axes[axis_index], &session->images[axis_index], UINT16_C(0),
-                actual_position, session->context.slavelist[axis_index + 1U].outputs,
+                session->axes[axis_index].target_position,
+                session->context.slavelist[axis_index + 1U].outputs,
                 session->context.slavelist[axis_index + 1U].Obytes)) {
             status = EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
             return status;

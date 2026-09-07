@@ -28,9 +28,14 @@ typedef struct
     size_t tx_status_ordinal;
     size_t rx_target_position_ordinal;
     size_t tx_actual_position_ordinal;
+    size_t rx_target_velocity_ordinal;
+    size_t tx_actual_velocity_ordinal;
+    size_t rx_target_torque_ordinal;
+    size_t tx_actual_torque_ordinal;
     /* 动态模块通过 PDO 提供模式字段；固定模块没有该字段。 */
     bool rx_mode_available;
     bool tx_mode_available;
+    int8_t configured_mode;
     bool sync0_configured;
 } emaster_cia_process_image_t;
 
@@ -45,23 +50,23 @@ bool emaster_cia_process_image_prepare_output(
     uint8_t *output,
     size_t output_capacity);
 
-/* 更新控制字和当前模式的目标原始值，并重新编码完整 RxPDO。 */
+/* 更新控制字和所选模式的目标原始值，并重新编码完整 RxPDO。 */
 bool emaster_cia_process_image_update_output(
     const emaster_session_axis_plan_t *axis,
     emaster_cia_process_image_t *image,
     uint16_t control_word,
-    int32_t target_position,
+    int32_t target_value,
     uint8_t *output,
     size_t output_capacity);
 
-/* 解码状态字、模式显示和当前模式的反馈原始值；调用者按模式解释该值。 */
+/* 解码状态字、模式显示和所选模式的反馈原始值；调用者按模式解释该值。 */
 bool emaster_cia_process_image_decode_input(
     emaster_cia_process_image_t *image,
     const uint8_t *input,
     size_t input_length,
     int8_t *mode_display,
     uint16_t *status_word,
-    int32_t *actual_position);
+    int32_t *actual_value);
 
 /* 交换结束后记录 RxPDO 及其 WKC 确认结果，成功解码后记录 TxPDO。 */
 bool emaster_cia_process_image_audit_output(

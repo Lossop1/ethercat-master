@@ -11,7 +11,11 @@
     {
       "axis_id": "bench_axis_01",
       "relative_angle_millidegrees": 36000,
+      "target_velocity_millidegrees_per_second": 0,
+      "acceleration_millidegrees_per_second2": 0,
+      "deceleration_millidegrees_per_second2": 0,
       "max_following_error_millidegrees": 1000,
+      "max_velocity_error_millidegrees_per_second": 0,
       "expected_position_scale": {
         "encoder_increments": 16384,
         "encoder_motor_revolutions": 1,

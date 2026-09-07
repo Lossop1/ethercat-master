@@ -78,7 +78,9 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 }
                 session->axes[axis_index].mode_display = mode_display;
                 session->axes[axis_index].status_word = status_word;
-                session->axes[axis_index].actual_position = actual_position;
+                if (!emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
+                                                    &session->axes[axis_index], actual_position))
+                    feedback_valid = false;
                 session->status_words[axis_index] = status_word;
                 {
                     emaster_cia402_status_t decoded_status;
@@ -217,9 +219,24 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     motion_initialized = true;
                     session->report->motion_started = true;
                 }
-                motion_status = emaster_relative_motion_step(
-                    &session->motion, session->actual_positions, session->target_positions,
-                    session->plan->axis_count);
+                if (session->plan->motion_profile->trajectory ==
+                    EMASTER_MOTION_TRAJECTORY_RELATIVE_LINEAR_POSITION)
+                {
+                    motion_status = emaster_relative_motion_step(
+                        &session->motion, session->actual_positions, session->target_positions,
+                        session->plan->axis_count);
+                }
+                else if (session->plan->motion_profile->trajectory ==
+                         EMASTER_MOTION_TRAJECTORY_CONSTANT_VELOCITY)
+                {
+                    motion_status = emaster_velocity_motion_step(
+                        &session->velocity_motion, session->actual_positions,
+                        session->target_positions, session->plan->axis_count);
+                }
+                else
+                {
+                    motion_status = EMASTER_RELATIVE_MOTION_INVALID_ARGUMENT;
+                }
                 /* 即使本周期因跟随误差退出，也要把触发值保留到会话报告。 */
                 for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
                     session->axes[axis_index].max_observed_following_error_counts =
@@ -240,13 +257,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 if (!safety_denied)
                 {
                     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-                        session->axes[axis_index].target_position =
-                            session->target_positions[axis_index];
+                        if (!emaster_soem_axis_set_target_value(
+                                &session->plan->axes[axis_index], &session->axes[axis_index],
+                                session->target_positions[axis_index]))
+                            safety_denied = true;
                     }
                     session->report->motion_completed =
                         motion_status == EMASTER_RELATIVE_MOTION_COMPLETE;
                 }
-                if (session->report->motion_completed) {
+                if (session->report->motion_completed &&
+                    session->plan->motion_profile->trajectory ==
+                        EMASTER_MOTION_TRAJECTORY_RELATIVE_LINEAR_POSITION) {
                     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
                         emaster_control_session_axis_result_t *axis_result =
                             &session->axes[axis_index];
@@ -293,7 +314,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 if (!emaster_cia_process_image_update_output(
                         &session->plan->axes[axis_index], &session->images[axis_index],
                         session->controller_outputs[axis_index].control_word,
-                        axis_result->target_position,
+                        emaster_soem_axis_target_value(&session->plan->axes[axis_index],
+                                                       axis_result),
                         session->context.slavelist[axis_index + 1U].outputs,
                         session->context.slavelist[axis_index + 1U].Obytes)) {
                     status = EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;

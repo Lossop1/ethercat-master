@@ -236,8 +236,10 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);
         }
-        /* 当前控制器和运动接口只实现 CSP；CSV/CST 不能复用位置目标字段运行。 */
-        if (operation_mode->value != INT8_C(8))
+        /* 三种 CiA 402 模式由过程映像按各自目标/反馈字段绑定；未知模式拒绝运行。 */
+        if (operation_mode->value != INT8_C(8) &&
+            operation_mode->value != INT8_C(9) &&
+            operation_mode->value != INT8_C(10))
         {
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);

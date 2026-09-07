@@ -5,6 +5,7 @@
 #include "cycle_clock.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/multiaxis/coordinator.h"
+#include "emaster/motion/velocity_profile.h"
 #include "emaster/safety/gate.h"
 #include "session_observer.h"
 
@@ -28,6 +29,9 @@ typedef struct {
     const emaster_motion_axis_config_t **motion_axis_configs;
     emaster_relative_motion_axis_t *motion_axes;
     emaster_relative_motion_t motion;
+    emaster_velocity_axis_t *velocity_axes;
+    emaster_velocity_motion_t velocity_motion;
+    bool velocity_motion_prepared;
     emaster_multiaxis_coordinator_t coordinator;
     emaster_cycle_clock_t clock;
     uint8_t *io_map;
@@ -59,6 +63,16 @@ void emaster_soem_session_set_state(
 void emaster_soem_session_latch_failure(
     emaster_soem_session_t *session,
     emaster_control_session_status_t status);
+
+/* 按运行模式读写轴目标和反馈，防止把速度或转矩冒充位置字段。 */
+bool emaster_soem_axis_set_feedback(const emaster_session_axis_plan_t *plan,
+                                    emaster_control_session_axis_result_t *axis,
+                                    int32_t value);
+int32_t emaster_soem_axis_target_value(const emaster_session_axis_plan_t *plan,
+                                       const emaster_control_session_axis_result_t *axis);
+bool emaster_soem_axis_set_target_value(const emaster_session_axis_plan_t *plan,
+                                        emaster_control_session_axis_result_t *axis,
+                                        int32_t value);
 
 /* 运行监督器集中处理首错、反馈发布和整组轴安全门 */
 void emaster_soem_session_note_runtime_failure(

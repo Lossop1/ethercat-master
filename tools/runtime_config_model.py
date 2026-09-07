@@ -521,7 +521,7 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             document, "required_mode_id", f"运动方案 {profile_id}"
         )
         trajectory = required_string(document, "trajectory", f"运动方案 {profile_id}")
-        if trajectory != "relative_linear_position":
+        if trajectory not in ("relative_linear_position", "constant_velocity"):
             raise ValueError(f"运动方案 {profile_id} 使用了不支持的轨迹：{trajectory}")
         coordinate = required_string(document, "coordinate_frame", f"运动方案 {profile_id}")
         if coordinate not in ("motor_rotor", "output_shaft"):
@@ -554,7 +554,11 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 raise ValueError(f"运动方案 {profile_id} 的轴条目必须是对象")
             axis_id = required_string(axis, "axis_id", f"运动方案 {profile_id} 的轴")
             relative_angle = axis.get("relative_angle_millidegrees")
+            target_velocity = axis.get("target_velocity_millidegrees_per_second", 0)
+            acceleration = axis.get("acceleration_millidegrees_per_second2", 0)
+            deceleration = axis.get("deceleration_millidegrees_per_second2", 0)
             following_error = axis.get("max_following_error_millidegrees")
+            velocity_error = axis.get("max_velocity_error_millidegrees_per_second", 0)
             expected_scale = axis.get("expected_position_scale")
             if axis_id in axis_ids:
                 raise ValueError(f"运动方案 {profile_id} 的轴 ID 重复：{axis_id}")
@@ -565,6 +569,27 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ):
                 raise ValueError(
                     f"运动方案 {profile_id} 的轴 {axis_id} 相对角度必须是 32 位整数"
+                )
+            if (
+                not isinstance(target_velocity, int)
+                or isinstance(target_velocity, bool)
+                or not -(1 << 31) <= target_velocity < (1 << 31)
+            ):
+                raise ValueError(
+                    f"运动方案 {profile_id} 的轴 {axis_id} 目标速度必须是 32 位整数"
+                )
+            for value, name in (
+                (acceleration, "加速度"),
+                (deceleration, "减速度"),
+                (velocity_error, "速度误差边界"),
+            ):
+                if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 0xFFFFFFFF:
+                    raise ValueError(
+                        f"运动方案 {profile_id} 的轴 {axis_id}{name}必须是非负整数"
+                    )
+            if trajectory == "constant_velocity" and target_velocity == 0:
+                raise ValueError(
+                    f"速度运动方案 {profile_id} 的轴 {axis_id} 目标速度不能为零"
                 )
             if (
                 not isinstance(following_error, int)
@@ -601,7 +626,11 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "axis_id": axis_id,
                     "relative_angle_millidegrees": relative_angle,
+                    "target_velocity_millidegrees_per_second": target_velocity,
+                    "acceleration_millidegrees_per_second2": acceleration,
+                    "deceleration_millidegrees_per_second2": deceleration,
                     "max_following_error_millidegrees": following_error,
+                    "max_velocity_error_millidegrees_per_second": velocity_error,
                     "expected_position_scale": scale_values,
                 }
             )

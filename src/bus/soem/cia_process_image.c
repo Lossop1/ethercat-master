@@ -14,7 +14,11 @@ enum
     EMASTER_CIA402_MODE_OF_OPERATION_INDEX = 0x6060,
     EMASTER_CIA402_MODE_DISPLAY_INDEX = 0x6061,
     EMASTER_CIA402_TARGET_POSITION_INDEX = 0x607A,
-    EMASTER_CIA402_ACTUAL_POSITION_INDEX = 0x6064
+    EMASTER_CIA402_ACTUAL_POSITION_INDEX = 0x6064,
+    EMASTER_CIA402_TARGET_VELOCITY_INDEX = 0x60FF,
+    EMASTER_CIA402_ACTUAL_VELOCITY_INDEX = 0x606C,
+    EMASTER_CIA402_TARGET_TORQUE_INDEX = 0x6071,
+    EMASTER_CIA402_ACTUAL_TORQUE_INDEX = 0x6077
 };
 
 static const emaster_pdo_mapping_profile_t *profile_mapping_for(
@@ -297,6 +301,10 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     }
     image->rx_target_position_ordinal = SIZE_MAX;
     image->tx_actual_position_ordinal = SIZE_MAX;
+    image->rx_target_velocity_ordinal = SIZE_MAX;
+    image->tx_actual_velocity_ordinal = SIZE_MAX;
+    image->rx_target_torque_ordinal = SIZE_MAX;
+    image->tx_actual_torque_ordinal = SIZE_MAX;
     image->rx_mode_available = false;
     image->tx_mode_available = false;
     if (!build_direction_codec(&image->layout.rx, axis->pdo_set->rx_mappings,
@@ -326,25 +334,42 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     }
     image->rx_mode_available = image->rx_mode_ordinal != SIZE_MAX;
     image->tx_mode_available = image->tx_mode_ordinal != SIZE_MAX;
-    if (axis->operation_mode->value != INT8_C(8))
+    image->configured_mode = axis->operation_mode->value;
+    image->rx_target_position_ordinal = field_ordinal_for(
+        &image->layout.rx, EMASTER_CIA402_TARGET_POSITION_INDEX, UINT8_C(0));
+    image->tx_actual_position_ordinal = field_ordinal_for(
+        &image->layout.tx, EMASTER_CIA402_ACTUAL_POSITION_INDEX, UINT8_C(0));
+    image->rx_target_velocity_ordinal = field_ordinal_for(
+        &image->layout.rx, EMASTER_CIA402_TARGET_VELOCITY_INDEX, UINT8_C(0));
+    image->tx_actual_velocity_ordinal = field_ordinal_for(
+        &image->layout.tx, EMASTER_CIA402_ACTUAL_VELOCITY_INDEX, UINT8_C(0));
+    image->rx_target_torque_ordinal = field_ordinal_for(
+        &image->layout.rx, EMASTER_CIA402_TARGET_TORQUE_INDEX, UINT8_C(0));
+    image->tx_actual_torque_ordinal = field_ordinal_for(
+        &image->layout.tx, EMASTER_CIA402_ACTUAL_TORQUE_INDEX, UINT8_C(0));
+    if (axis->operation_mode->value == INT8_C(8) &&
+        (image->rx_target_position_ordinal == SIZE_MAX || image->tx_actual_position_ordinal == SIZE_MAX))
     {
-        /* 当前控制数据模型只定义 CSP；不得把 CSV/CST 误接入位置字段。 */
         return false;
     }
+    if (axis->operation_mode->value == INT8_C(9) &&
+        (image->rx_target_velocity_ordinal == SIZE_MAX || image->tx_actual_velocity_ordinal == SIZE_MAX))
     {
-        image->rx_target_position_ordinal = field_ordinal_for(
-            &image->layout.rx, EMASTER_CIA402_TARGET_POSITION_INDEX, UINT8_C(0));
-        image->tx_actual_position_ordinal = field_ordinal_for(
-            &image->layout.tx, EMASTER_CIA402_ACTUAL_POSITION_INDEX, UINT8_C(0));
-        if (image->rx_target_position_ordinal == SIZE_MAX ||
-            image->tx_actual_position_ordinal == SIZE_MAX ||
-            image->rx_fields[image->rx_target_position_ordinal].kind !=
-                EMASTER_PDO_CODEC_VALUE_SIGNED ||
-            image->tx_fields[image->tx_actual_position_ordinal].kind !=
-                EMASTER_PDO_CODEC_VALUE_SIGNED)
-        {
-            return false;
-        }
+        return false;
+    }
+    if (axis->operation_mode->value == INT8_C(10) &&
+        (image->rx_target_torque_ordinal == SIZE_MAX || image->tx_actual_torque_ordinal == SIZE_MAX))
+    {
+        return false;
+    }
+    if ((image->rx_target_position_ordinal != SIZE_MAX && image->rx_fields[image->rx_target_position_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED) ||
+        (image->tx_actual_position_ordinal != SIZE_MAX && image->tx_fields[image->tx_actual_position_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED) ||
+        (image->rx_target_velocity_ordinal != SIZE_MAX && image->rx_fields[image->rx_target_velocity_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED) ||
+        (image->tx_actual_velocity_ordinal != SIZE_MAX && image->tx_fields[image->tx_actual_velocity_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED) ||
+        (image->rx_target_torque_ordinal != SIZE_MAX && image->rx_fields[image->rx_target_torque_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED) ||
+        (image->tx_actual_torque_ordinal != SIZE_MAX && image->tx_fields[image->tx_actual_torque_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED))
+    {
+        return false;
     }
     return true;
 }
@@ -382,7 +407,7 @@ bool emaster_cia_process_image_update_output(
     const emaster_session_axis_plan_t *axis,
     emaster_cia_process_image_t *image,
     uint16_t control_word,
-    int32_t target_position,
+    int32_t target_value,
     uint8_t *output,
     size_t output_capacity)
 {
@@ -396,11 +421,14 @@ bool emaster_cia_process_image_update_output(
         image->rx_values[image->rx_mode_ordinal].value.signed_value =
             axis->operation_mode->value;
     }
-    if (image->rx_target_position_ordinal != SIZE_MAX)
-    {
-        image->rx_values[image->rx_target_position_ordinal].value.signed_value =
-            target_position;
-    }
+    if (axis->operation_mode->value == INT8_C(8))
+        image->rx_values[image->rx_target_position_ordinal].value.signed_value = target_value;
+    else if (axis->operation_mode->value == INT8_C(9))
+        image->rx_values[image->rx_target_velocity_ordinal].value.signed_value = target_value;
+    else if (axis->operation_mode->value == INT8_C(10))
+        image->rx_values[image->rx_target_torque_ordinal].value.signed_value = target_value;
+    else
+        return false;
     return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
                                     image->rx_field_count, image->rx_values,
                                     image->rx_field_count, output, output_capacity) ==
@@ -413,10 +441,10 @@ bool emaster_cia_process_image_decode_input(
     size_t input_length,
     int8_t *mode_display,
     uint16_t *status_word,
-    int32_t *actual_position)
+    int32_t *actual_value)
 {
     if (image == NULL || input == NULL || mode_display == NULL ||
-        status_word == NULL || actual_position == NULL ||
+        status_word == NULL || actual_value == NULL ||
         emaster_pdo_codec_decode(&image->layout.tx, image->tx_fields,
                                  image->tx_field_count, input, input_length,
                                  image->tx_values, image->tx_field_count) !=
@@ -450,19 +478,27 @@ bool emaster_cia_process_image_decode_input(
     }
     *status_word =
         (uint16_t)image->tx_values[image->tx_status_ordinal].value.unsigned_value;
-    *actual_position = 0;
-    if (image->tx_actual_position_ordinal != SIZE_MAX)
+    *actual_value = 0;
     {
-        int64_t value =
-            image->tx_values[image->tx_actual_position_ordinal].value.signed_value;
-
-        if (image->tx_values[image->tx_actual_position_ordinal].kind !=
-                EMASTER_PDO_CODEC_VALUE_SIGNED ||
-            value < INT32_MIN || value > INT32_MAX)
+        size_t feedback_ordinal = image->tx_actual_position_ordinal;
+        if (image->configured_mode == INT8_C(9))
         {
-            return false;
+            feedback_ordinal = image->tx_actual_velocity_ordinal;
         }
-        *actual_position = (int32_t)value;
+        else if (image->configured_mode == INT8_C(10))
+            feedback_ordinal = image->tx_actual_torque_ordinal;
+        if (feedback_ordinal != SIZE_MAX)
+        {
+            int64_t value = image->tx_values[feedback_ordinal].value.signed_value;
+            if (image->tx_values[feedback_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED ||
+                value < INT32_MIN || value > INT32_MAX) return false;
+            *actual_value = (int32_t)value;
+        }
+    }
+    /* 固定 PDO 没有模式字段时，按运行方案的模式值选择反馈。 */
+    if (!image->tx_mode_available)
+    {
+        /* 固定方案目前仅有 CSP，CSV/CST 方案必须声明对应反馈字段并由动态 PDO 提供模式。 */
     }
     return true;
 }

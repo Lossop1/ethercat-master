@@ -62,7 +62,9 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             if (!emaster_cia_process_image_update_output(
                     &session->plan->axes[axis_index], &session->images[axis_index],
                     session->controller_outputs[axis_index].control_word,
-                    session->axes[axis_index].target_position, slave->outputs, slave->Obytes)) {
+                    emaster_soem_axis_target_value(&session->plan->axes[axis_index],
+                                                   &session->axes[axis_index]),
+                    slave->outputs, slave->Obytes)) {
                 return false;
             }
         }
@@ -80,7 +82,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             axis->input_decoded = emaster_cia_process_image_decode_input(
                 &session->images[axis_index], slave->inputs, slave->Ibytes, &axis->mode_display,
                 &axis->status_word, &actual_position);
-            axis->actual_position = actual_position;
+            (void)emaster_soem_axis_set_feedback(&session->plan->axes[axis_index], axis,
+                                                  actual_position);
             session->status_words[axis_index] = axis->status_word;
             if (axis->input_decoded) {
                 (void)emaster_cia_process_image_audit_input(

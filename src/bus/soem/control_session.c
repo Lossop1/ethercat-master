@@ -6,6 +6,42 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool emaster_soem_axis_set_feedback(const emaster_session_axis_plan_t *plan,
+                                    emaster_control_session_axis_result_t *axis,
+                                    int32_t value)
+{
+    if (plan == NULL || plan->operation_mode == NULL || axis == NULL) return false;
+    if (plan->operation_mode->value == INT8_C(8)) axis->actual_position = value;
+    else if (plan->operation_mode->value == INT8_C(9)) axis->actual_velocity = value;
+    else if (plan->operation_mode->value == INT8_C(10) && value >= INT16_MIN && value <= INT16_MAX)
+        axis->actual_torque = (int16_t)value;
+    else return false;
+    return true;
+}
+
+int32_t emaster_soem_axis_target_value(const emaster_session_axis_plan_t *plan,
+                                       const emaster_control_session_axis_result_t *axis)
+{
+    if (plan == NULL || plan->operation_mode == NULL || axis == NULL) return 0;
+    if (plan->operation_mode->value == INT8_C(8)) return axis->target_position;
+    if (plan->operation_mode->value == INT8_C(9)) return axis->target_velocity;
+    if (plan->operation_mode->value == INT8_C(10)) return axis->target_torque;
+    return 0;
+}
+
+bool emaster_soem_axis_set_target_value(const emaster_session_axis_plan_t *plan,
+                                        emaster_control_session_axis_result_t *axis,
+                                        int32_t value)
+{
+    if (plan == NULL || plan->operation_mode == NULL || axis == NULL) return false;
+    if (plan->operation_mode->value == INT8_C(8)) axis->target_position = value;
+    else if (plan->operation_mode->value == INT8_C(9)) axis->target_velocity = value;
+    else if (plan->operation_mode->value == INT8_C(10) && value >= INT16_MIN && value <= INT16_MAX)
+        axis->target_torque = (int16_t)value;
+    else return false;
+    return true;
+}
+
 /* 所有轴数组在网络周期之前建立，资源即使部分分配失败也由同一出口释放。 */
 static emaster_control_session_status_t allocate_session(emaster_soem_session_t *session) {
     emaster_control_session_status_t status;
@@ -29,9 +65,10 @@ static emaster_control_session_status_t allocate_session(emaster_soem_session_t 
         session->motion_axis_configs =
             calloc(session->plan->axis_count, sizeof(*session->motion_axis_configs));
         session->motion_axes = calloc(session->plan->axis_count, sizeof(*session->motion_axes));
+        session->velocity_axes = calloc(session->plan->axis_count, sizeof(*session->velocity_axes));
         if (session->actual_positions == NULL || session->target_positions == NULL ||
             session->motion_scales == NULL || session->motion_axis_configs == NULL ||
-            session->motion_axes == NULL) {
+            session->motion_axes == NULL || session->velocity_axes == NULL) {
             status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
             return status;
         }
@@ -47,6 +84,7 @@ static emaster_control_session_status_t allocate_session(emaster_soem_session_t 
 static void release_session(emaster_soem_session_t *session) {
     free(session->status_words);
     free(session->motion_axes);
+    free(session->velocity_axes);
     free(session->motion_axis_configs);
     free(session->motion_scales);
     free(session->target_positions);
