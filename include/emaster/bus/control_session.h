@@ -147,6 +147,7 @@ typedef struct
     size_t final_diagnostic_success_count;
     uint16_t status_word;
     uint16_t control_word;
+    int32_t safeop_actual_position;
     int32_t initial_actual_position;
     int32_t actual_position;
     int32_t target_position;

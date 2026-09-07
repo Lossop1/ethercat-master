@@ -18,6 +18,79 @@ static bool any_slave_state_error(const ecx_contextt *context) {
     return false;
 }
 
+/*
+ * 从站确认进入 OP 后，使用最后一次 OP 过程数据建立保持目标和相对运动起点
+ * SAFE-OP 位置只保留为观察值，不参与目标计算
+ */
+static emaster_control_session_status_t prepare_op_position(
+    emaster_soem_session_t *session)
+{
+    size_t axis_index;
+
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+    {
+        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
+        int8_t mode_display;
+        uint16_t status_word;
+        int32_t actual_position;
+
+        if (!emaster_cia_process_image_decode_input(
+                &session->images[axis_index], slave->inputs, slave->Ibytes,
+                &mode_display, &status_word, &actual_position))
+        {
+            return EMASTER_CONTROL_SESSION_FEEDBACK_INVALID;
+        }
+        axis->input_decoded = true;
+        axis->mode_display = mode_display;
+        axis->status_word = status_word;
+        axis->initial_actual_position = actual_position;
+        axis->actual_position = actual_position;
+        axis->target_position = actual_position;
+        session->status_words[axis_index] = status_word;
+        if (session->plan->motion_profile != NULL)
+        {
+            session->actual_positions[axis_index] = actual_position;
+            session->target_positions[axis_index] = actual_position;
+        }
+        if (!emaster_cia_process_image_update_output(
+                &session->plan->axes[axis_index], &session->images[axis_index],
+                UINT16_C(0), actual_position, slave->outputs, slave->Obytes))
+        {
+            return EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
+        }
+    }
+    if (session->plan->motion_profile != NULL)
+    {
+        emaster_relative_motion_status_t motion_status = emaster_relative_motion_init(
+            session->plan->motion_profile, session->motion_axis_configs,
+            session->motion_scales, session->target_positions,
+            session->plan->axis_count, session->plan->cycle_ns,
+            session->motion_axes, &session->motion);
+
+        if (motion_status != EMASTER_RELATIVE_MOTION_ACTIVE)
+        {
+            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+        }
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+        {
+            if (!emaster_relative_motion_axis_within_software_limits(
+                    &session->motion_axes[axis_index],
+                    session->axes[axis_index].software_position_limit_min,
+                    session->axes[axis_index].software_position_limit_max))
+            {
+                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+            }
+            session->axes[axis_index].motion_final_position =
+                session->motion_axes[axis_index].final_position;
+            session->axes[axis_index].max_following_error_counts =
+                session->motion_axes[axis_index].max_following_error_counts;
+        }
+        session->motion_prepared = true;
+    }
+    return EMASTER_CONTROL_SESSION_OK;
+}
+
 emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session_t *session) {
     size_t axis_index;
     emaster_control_session_status_t status;
@@ -91,7 +164,7 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
             session->axes[axis_index].mode_display = mode_display;
         }
         session->axes[axis_index].status_word = status_word;
-        session->axes[axis_index].initial_actual_position = actual_position;
+        session->axes[axis_index].safeop_actual_position = actual_position;
         session->axes[axis_index].actual_position = actual_position;
         session->axes[axis_index].target_position = actual_position;
         if (session->plan->motion_profile != NULL) {
@@ -106,29 +179,11 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
             return status;
         }
     }
-    if (session->plan->motion_profile != NULL) {
-        emaster_relative_motion_status_t motion_status = emaster_relative_motion_init(
-            session->plan->motion_profile, session->motion_axis_configs,
-            session->motion_scales, session->target_positions, session->plan->axis_count,
-            session->plan->cycle_ns, session->motion_axes, &session->motion);
-
-        if (motion_status != EMASTER_RELATIVE_MOTION_ACTIVE) {
-            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-        }
-        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-            if (!emaster_relative_motion_axis_within_software_limits(
-                    &session->motion_axes[axis_index],
-                    session->axes[axis_index].software_position_limit_min,
-                    session->axes[axis_index].software_position_limit_max)) {
-                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-            }
-            session->axes[axis_index].motion_final_position =
-                session->motion_axes[axis_index].final_position;
-            session->axes[axis_index].max_following_error_counts =
-                session->motion_axes[axis_index].max_following_error_counts;
-        }
-        session->motion_prepared = true;
-    }
+    /*
+     * SAFE-OP 的 6064 只作为现场观察值，不在这里建立运动起点
+     * 驱动器可能在切入 OP 时完成位置初始化，运动起点必须来自 OP 首个有效反馈
+     */
+    session->motion_prepared = false;
     if (session->dc_required) {
         uint64_t startup_cycle;
         uint64_t max_startup_exchanges;
@@ -277,6 +332,11 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
     if (!session->report->op_reached) {
         ecx_readstate(&session->context);
         status = EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
+        return status;
+    }
+    status = prepare_op_position(session);
+    if (status != EMASTER_CONTROL_SESSION_OK)
+    {
         return status;
     }
     emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_OPERATIONAL,

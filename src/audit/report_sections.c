@@ -311,7 +311,8 @@ static bool write_axis(FILE *stream,
         "\"software_position_limit_max\":%" PRId32 ","
         "\"following_error_read\":%s,\"following_error_actual\":%" PRId32 ","
         "\"polarity_read\":%s,\"polarity\":%u,"
-        "\"initial_actual_position\":%" PRId32
+        "\"safeop_actual_position\":%" PRId32
+        ",\"initial_actual_position\":%" PRId32
         ",\"actual_position\":%" PRId32 ",\"target_position\":%" PRId32
         ",\"operation_enabled_seen\":%s,\"motion_final_position\":%" PRId32
         ",\"max_following_error_counts\":%" PRIu64
@@ -341,7 +342,8 @@ static bool write_axis(FILE *stream,
         axis->following_error_actual,
         axis->polarity_read ? "true" : "false",
         (unsigned int)axis->polarity,
-        axis->initial_actual_position, axis->actual_position,
+        axis->safeop_actual_position, axis->initial_actual_position,
+        axis->actual_position,
         axis->target_position,
         axis->operation_enabled_seen ? "true" : "false",
         axis->motion_final_position, axis->max_following_error_counts,

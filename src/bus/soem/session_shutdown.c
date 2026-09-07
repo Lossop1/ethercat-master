@@ -93,9 +93,18 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                 continue;
             }
             axis->cia402_state = state;
-            if (state != EMASTER_CIA402_STATE_SWITCH_ON_DISABLED &&
-                state != EMASTER_CIA402_STATE_NOT_READY_TO_SWITCH_ON) {
-                all_axes_safe = false;
+            {
+                const emaster_slave_profile_t *profile =
+                    session->plan->axes[axis_index].device_profile;
+                bool device_safe = profile != NULL && profile->safe_stop_status_mask != 0U &&
+                                   (axis->status_word & profile->safe_stop_status_mask) ==
+                                       profile->safe_stop_status_value;
+                bool standard_safe = state == EMASTER_CIA402_STATE_SWITCH_ON_DISABLED ||
+                                     state == EMASTER_CIA402_STATE_NOT_READY_TO_SWITCH_ON;
+
+                if (!device_safe && !standard_safe) {
+                    all_axes_safe = false;
+                }
             }
         }
         if (all_axes_safe) {
