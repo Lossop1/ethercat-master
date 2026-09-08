@@ -59,6 +59,16 @@ bool emaster_position_scale_matches(
     const emaster_position_scale_t *scale);
 
 /*
+ * 使用当前物理从站的换算参数，把工程角度转换为有符号设备计数。
+ * angle_millidegrees 使用毫度，输出可以是负数；溢出或未完成换算参数读取时返回 false。
+ */
+bool emaster_motion_angle_to_counts(
+    int32_t angle_millidegrees,
+    emaster_motion_coordinate_t coordinate,
+    const emaster_position_scale_t *scale,
+    int64_t *counts);
+
+/*
  * 检查轨迹终点是否落在驱动器当前有效的软件位置范围内
  * 最小值等于最大值时没有形成有效区间，按该设备默认配置不启用此项限制
  */

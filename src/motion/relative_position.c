@@ -84,6 +84,33 @@ static bool angle_to_counts(uint32_t angle_millidegrees,
     return true;
 }
 
+bool emaster_motion_angle_to_counts(
+    int32_t angle_millidegrees,
+    emaster_motion_coordinate_t coordinate,
+    const emaster_position_scale_t *scale,
+    int64_t *counts)
+{
+    uint32_t magnitude;
+    uint64_t unsigned_counts;
+    int64_t signed_counts;
+
+    if (counts == NULL)
+    {
+        return false;
+    }
+    magnitude = (uint32_t)(angle_millidegrees < 0
+                               ? -(int64_t)angle_millidegrees
+                               : angle_millidegrees);
+    if (!angle_to_counts(magnitude, coordinate, scale, &unsigned_counts) ||
+        unsigned_counts > (uint64_t)INT64_MAX)
+    {
+        return false;
+    }
+    signed_counts = (int64_t)unsigned_counts;
+    *counts = angle_millidegrees < 0 ? -signed_counts : signed_counts;
+    return true;
+}
+
 static uint64_t absolute_difference_i32(int32_t left, int32_t right)
 {
     int64_t difference = (int64_t)left - (int64_t)right;

@@ -5,6 +5,7 @@
 #include "emaster/cia402/controller.h"
 #include "emaster/cyclic/timing.h"
 #include "emaster/motion/relative_position.h"
+#include "emaster/motion/position_command.h"
 #include "emaster/session/session_plan.h"
 
 #include <stdbool.h>
@@ -269,7 +270,21 @@ typedef void (*emaster_control_session_feedback_updated_t)(
     const emaster_control_feedback_frame_t *feedback,
     void *user_data);
 
-/* 应用层回调集中管理，新增观察接口时不改变主会话函数签名 */
+/*
+ * 应用层位置命令来源。回调运行在主站周期线程中，必须无阻塞、无动态分配且不得访问 SOEM。
+ * target_positions 只有在返回 UPDATED 时才会被采用，单位为所选 PDO 的原始位置计数。
+ * observation 的 sequence 必须严格递增，expire_cycle 为不包含边界的失效周期。
+ */
+typedef emaster_position_command_status_t (*emaster_control_session_position_command_t)(
+    uint64_t cycle,
+    const emaster_control_session_axis_result_t *axes,
+    size_t axis_count,
+    int32_t *target_positions,
+    size_t target_capacity,
+    emaster_position_command_observation_t *observation,
+    void *user_data);
+
+/* 应用层回调集中管理，不改变主会话函数签名。 */
 typedef struct
 {
     emaster_control_session_stop_requested_t stop_requested;
@@ -278,12 +293,15 @@ typedef struct
     void *state_user_data;
     emaster_control_session_feedback_updated_t feedback_updated;
     void *feedback_user_data;
+    emaster_control_session_position_command_t position_command;
+    void *position_command_user_data;
 } emaster_control_session_callbacks_t;
 
 /*
  * 按部署计划建立 EtherCAT 过程数据会话。SAFE-OP 首帧会先从 6064 初始化 607A，防止 CSP
  * 使能时追逐零位置；进入 OP 后，每周期根据 6041 计算并发送 6040。部署未引用运动方案时持续
  * 保持启动位置；引用已批准方案时由独立轨迹模块生成全轴目标，完成后自动执行安全停止。
+ * position_command 回调存在时，OP 中的 CSP 目标改由该回调按周期提供，固定轨迹不再推进。
  * 任意失败和正常停止路径都会尝试安全停用、关闭 Sync0 并请求恢复 INIT，结果分别记录。
  */
 emaster_control_session_status_t emaster_soem_control_session(

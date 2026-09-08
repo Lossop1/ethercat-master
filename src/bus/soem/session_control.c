@@ -209,6 +209,26 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
             if (feedback_valid && !safety_denied &&
                 session->plan->motion_profile != NULL && all_axes_enabled &&
                 all_modes_confirmed) {
+                if (session->position_command != NULL)
+                {
+                    bool command_updated = false;
+
+                    status = emaster_soem_session_position_command_step(
+                        session, &command_updated);
+                    if (status != EMASTER_CONTROL_SESSION_OK)
+                    {
+                        emaster_soem_session_note_runtime_failure(
+                            session, status, &safety_status);
+                        safety_denied = true;
+                    }
+                    else if (command_updated && !motion_initialized)
+                    {
+                        motion_initialized = true;
+                        session->report->motion_started = true;
+                    }
+                }
+                else
+                {
                 emaster_relative_motion_status_t motion_status;
 
                 if (!motion_initialized) {
@@ -301,6 +321,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     {
                         session->report->motion_completed = false;
                     }
+                }
                 }
             }
             {
