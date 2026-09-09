@@ -384,18 +384,13 @@ emaster_control_session_status_t emaster_soem_session_switch_motion(
 {
     size_t axis_index;
 
+    /* 验证基本参数 */
     if (session == NULL || new_profile == NULL) {
         return EMASTER_CONTROL_SESSION_MOTION_INVALID;
     }
 
-    /* 只在 OPERATIONAL 或 RUNNING 状态下允许切换 */
-    if (session->report->state != EMASTER_CONTROL_STATE_OPERATIONAL &&
-        session->report->state != EMASTER_CONTROL_STATE_RUNNING) {
-        return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-    }
-
-    /* 已有故障锁存时拒绝切换 */
-    if (session->fault_latched) {
+    /* 验证新配置的轴数量与当前会话匹配 */
+    if (new_profile->axis_count != session->plan->axis_count) {
         return EMASTER_CONTROL_SESSION_MOTION_INVALID;
     }
 
@@ -409,6 +404,11 @@ emaster_control_session_status_t emaster_soem_session_switch_motion(
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
         session->target_positions[axis_index] =
             session->axes[axis_index].actual_position;
+    }
+
+    /* 更新轴配置指针数组指向新配置的轴 */
+    for (axis_index = 0U; axis_index < new_profile->axis_count; ++axis_index) {
+        session->motion_axis_configs[axis_index] = &new_profile->axes[axis_index];
     }
 
     /* 根据新轨迹类型初始化运动 */
