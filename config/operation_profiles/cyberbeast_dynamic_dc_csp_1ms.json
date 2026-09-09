@@ -11,7 +11,7 @@
     "cycle_ns": 1000000,
     "process_data_phase_ns": 50000,
     "dc_startup_cycles": 1000,
-    "sync0_shift_ns": 850000,
+    "sync0_shift_ns": 250000,
     "sm2_sync_type": "0x0002",
     "sm3_sync_type": "0x0022"
   },

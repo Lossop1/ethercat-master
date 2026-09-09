@@ -90,6 +90,7 @@ bool emaster_cyclic_timing_stats_record(
     int64_t arrival_time_ns;
     int64_t arrival_phase_ns;
     int64_t sync0_phase_ns;
+    int64_t sync0_margin_ns;
 
     if (stats == NULL || observation == NULL || cycle_ns == 0U ||
         target_phase_ns >= cycle_ns || observation->exchange == 0U)
@@ -162,18 +163,25 @@ bool emaster_cyclic_timing_stats_record(
     arrival_time_ns = observation->dc_time_ns + propagation_delay_ns;
     arrival_phase_ns = positive_mod(arrival_time_ns, cycle_ns);
     sync0_phase_ns = positive_mod(sync0_shift_ns, cycle_ns);
+    /*
+     * 两个相位都由取模得到，直接相减会在周期边界附近折返：帧比原点略早到达时
+     * arrival_phase 取模后接近一个完整周期，差值会退化成接近 -cycle_ns 的伪迟到。
+     * 与 phase_error 一样按半周期归一化，使裕量始终表示到 Sync0 的最短有向距离。
+     */
+    sync0_margin_ns =
+        centered_difference(sync0_phase_ns, arrival_phase_ns, cycle_ns);
     update_signed_range(&stats->has_dc_phase, &stats->min_dc_arrival_phase_ns,
                         &stats->max_dc_arrival_phase_ns, arrival_phase_ns);
     update_signed_range(&stats->has_phase_error, &stats->min_phase_error_ns,
                         &stats->max_phase_error_ns,
                         centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns));
     update_signed_range(&stats->has_sync0_margin, &stats->min_sync0_margin_ns,
-                        &stats->max_sync0_margin_ns, sync0_phase_ns - arrival_phase_ns);
+                        &stats->max_sync0_margin_ns, sync0_margin_ns);
     stats->last_phase_error_ns =
         centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns);
-    stats->last_sync0_margin_ns = sync0_phase_ns - arrival_phase_ns;
+    stats->last_sync0_margin_ns = sync0_margin_ns;
     stats->last_dc_sample_valid = true;
-    if (sync0_phase_ns - arrival_phase_ns < 0 && stats->sync0_late_count != UINT64_MAX)
+    if (sync0_margin_ns < 0 && stats->sync0_late_count != UINT64_MAX)
     {
         ++stats->sync0_late_count;
     }
