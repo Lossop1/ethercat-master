@@ -429,6 +429,22 @@ int main(int argc, char **argv)
     callbacks.position_target_source_user_data = &ramp;
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
                                                   &callbacks, &report);
+    /*
+     * 运行报告在 print_probe_summary 之前发布，使诊断输出和报告文件的内容保持一致。
+     * 发布路径来自部署配置，与主程序共用同一个文件；工具运行后可直接用主程序的报告
+     * 分析脚本比较时序数据，无需单独维护解析逻辑。
+     */
+    if (deployment->run_report_path != NULL)
+    {
+        if (!emaster_run_report_publish(&plan, &report, deployment->run_report_path))
+        {
+            fprintf(stderr, "报告发布失败：%s\n", deployment->run_report_path);
+        }
+        else
+        {
+            fprintf(stdout, "报告已发布：%s\n", deployment->run_report_path);
+        }
+    }
     print_probe_summary(&ramp, &report, plan.axis_count);
     emaster_control_session_report_destroy(&report);
     free(plan_axes);
