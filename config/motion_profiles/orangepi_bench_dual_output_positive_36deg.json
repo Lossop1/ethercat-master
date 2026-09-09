@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "motion_profile_id": "orangepi-bench.dual-output-positive-36deg",
+  "status": "approved",
+  "required_mode_id": "csp",
+  "trajectory": "relative_linear_position",
+  "coordinate_frame": "output_shaft",
+  "duration_ms": 5000,
+  "settle_ms": 1000,
+  "axes": [
+    {
+      "axis_id": "bench_axis_01",
+      "relative_angle_millidegrees": 36000,
+      "target_velocity_millidegrees_per_second": 0,
+      "acceleration_millidegrees_per_second2": 0,
+      "deceleration_millidegrees_per_second2": 0,
+      "max_following_error_millidegrees": 2000,
+      "max_velocity_error_millidegrees_per_second": 0,
+      "expected_position_scale": {
+        "encoder_increments": 16384,
+        "encoder_motor_revolutions": 1,
+        "gear_motor_revolutions": 28,
+        "gear_shaft_revolutions": 1
+      }
+    },
+    {
+      "axis_id": "bench_axis_02",
+      "relative_angle_millidegrees": 36000,
+      "target_velocity_millidegrees_per_second": 0,
+      "acceleration_millidegrees_per_second2": 0,
+      "deceleration_millidegrees_per_second2": 0,
+      "max_following_error_millidegrees": 2000,
+      "max_velocity_error_millidegrees_per_second": 0,
+      "expected_position_scale": {
+        "encoder_increments": 16384,
+        "encoder_motor_revolutions": 1,
+        "gear_motor_revolutions": 28,
+        "gear_shaft_revolutions": 1
+      }
+    }
+  ]
+}
