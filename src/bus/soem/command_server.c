@@ -117,6 +117,7 @@ static void *listen_thread(void *arg)
             command.type = EMASTER_COMMAND_SWITCH_MOTION;
             /* payload 包含motion profile ID */
             strncpy(command.payload, buffer + 7, sizeof(command.payload) - 1U);
+            command.payload[strcspn(command.payload, "\n")] = '\0';
         }
         else if (strncmp(buffer, "stop", 4) == 0)
         {
