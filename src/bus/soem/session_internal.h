@@ -117,5 +117,9 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
 emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t *session);
 /* 统一执行停用、诊断和总线关闭；不会覆盖首次运行失败。 */
 void emaster_soem_session_shutdown(emaster_soem_session_t *session);
+/* 运行时切换运动配置：重新初始化运动轨迹，从当前位置开始。 */
+emaster_control_session_status_t emaster_soem_session_switch_motion(
+    emaster_soem_session_t *session,
+    const emaster_motion_profile_t *new_profile);
 
 #endif

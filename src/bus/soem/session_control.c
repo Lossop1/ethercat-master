@@ -1,5 +1,7 @@
 #include "session_internal.h"
 
+#include "emaster/config/runtime_config.h"
+
 #include <limits.h>
 #include <stdio.h>
 
@@ -406,11 +408,39 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             response.success = true;
                             break;
 
-                        case EMASTER_COMMAND_SWITCH_MOTION:
+                        case EMASTER_COMMAND_SWITCH_MOTION: {
+                            const emaster_motion_profile_t *new_profile;
+                            emaster_control_session_status_t switch_status;
+
+                            /* payload 应该是运动配置 ID */
+                            if (command.payload[0] == '\0') {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "missing motion profile ID");
+                                response.success = false;
+                                break;
+                            }
+
+                            new_profile = emaster_motion_profile_by_id(command.payload);
+                            if (new_profile == NULL) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "motion profile not found: %s", command.payload);
+                                response.success = false;
+                                break;
+                            }
+
+                            switch_status = emaster_soem_session_switch_motion(session, new_profile);
+                            if (switch_status != EMASTER_CONTROL_SESSION_OK) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "motion switch failed: status=%d", (int)switch_status);
+                                response.success = false;
+                                break;
+                            }
+
                             (void)snprintf(response.message, sizeof(response.message),
-                                "motion switch not yet implemented");
-                            response.success = false;
+                                "motion switched to %s", command.payload);
+                            response.success = true;
                             break;
+                        }
 
                         case EMASTER_COMMAND_STOP_MOTION:
                             session->report->stop_requested = true;

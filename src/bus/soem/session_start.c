@@ -372,3 +372,90 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
      */
     return EMASTER_CONTROL_SESSION_OK;
 }
+
+/*
+ * 运行时切换运动配置：从当前位置重新初始化运动轨迹。
+ * 前提：会话已进入 OPERATIONAL 状态，当前无 fault_latched。
+ * 仅支持轨迹类型切换和参数更新，不支持更改轴数量或模式。
+ */
+emaster_control_session_status_t emaster_soem_session_switch_motion(
+    emaster_soem_session_t *session,
+    const emaster_motion_profile_t *new_profile)
+{
+    size_t axis_index;
+
+    if (session == NULL || new_profile == NULL) {
+        return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+    }
+
+    /* 只在 OPERATIONAL 或 RUNNING 状态下允许切换 */
+    if (session->report->state != EMASTER_CONTROL_STATE_OPERATIONAL &&
+        session->report->state != EMASTER_CONTROL_STATE_RUNNING) {
+        return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+    }
+
+    /* 已有故障锁存时拒绝切换 */
+    if (session->fault_latched) {
+        return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+    }
+
+    /* 清除旧运动状态标志 */
+    session->motion_prepared = false;
+    session->velocity_motion_prepared = false;
+    session->report->motion_started = false;
+    session->report->motion_completed = false;
+
+    /* 使用当前反馈位置作为新运动的起点 */
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+        session->target_positions[axis_index] =
+            session->axes[axis_index].actual_position;
+    }
+
+    /* 根据新轨迹类型初始化运动 */
+    if (new_profile->trajectory == EMASTER_MOTION_TRAJECTORY_RELATIVE_LINEAR_POSITION) {
+        emaster_relative_motion_status_t motion_status = emaster_relative_motion_init(
+            new_profile, session->motion_axis_configs, session->motion_scales,
+            session->target_positions, session->plan->axis_count,
+            session->plan->cycle_ns, session->motion_axes, &session->motion);
+
+        if (motion_status != EMASTER_RELATIVE_MOTION_ACTIVE) {
+            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+        }
+
+        /* 检查软限位 */
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+            if (!emaster_relative_motion_axis_within_software_limits(
+                    &session->motion_axes[axis_index],
+                    session->axes[axis_index].software_position_limit_min,
+                    session->axes[axis_index].software_position_limit_max)) {
+                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+            }
+            session->axes[axis_index].motion_final_position =
+                session->motion_axes[axis_index].final_position;
+            session->axes[axis_index].max_following_error_counts =
+                session->motion_axes[axis_index].max_following_error_counts;
+        }
+
+        session->motion_prepared = true;
+    }
+    else if (new_profile->trajectory == EMASTER_MOTION_TRAJECTORY_CONSTANT_VELOCITY) {
+        if (!emaster_velocity_motion_init(
+                new_profile, session->motion_axis_configs, session->motion_scales,
+                session->plan->axis_count, session->plan->cycle_ns,
+                session->velocity_axes, &session->velocity_motion)) {
+            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+        }
+
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+            session->axes[axis_index].max_following_error_counts =
+                session->velocity_axes[axis_index].max_velocity_error;
+        }
+
+        session->velocity_motion_prepared = true;
+    }
+    else {
+        return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+    }
+
+    return EMASTER_CONTROL_SESSION_OK;
+}
