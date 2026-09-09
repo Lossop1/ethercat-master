@@ -54,6 +54,8 @@ typedef struct {
     emaster_control_session_position_target_source_t position_target_source;
     void *position_target_source_user_data;
     int32_t *position_target_source_targets;
+    /* 0 表示调用者未启用跟随误差检查；非零时每周期对比实际位置与上一目标。 */
+    uint64_t position_target_max_following_error_counts;
 } emaster_soem_session_t;
 
 /* 原子更新会话状态并通知应用层；通知回调不得阻塞周期线程 */

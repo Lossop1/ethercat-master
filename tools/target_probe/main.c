@@ -32,7 +32,13 @@ enum
     EMASTER_PROBE_RAMP_CYCLES = 5000,
     EMASTER_PROBE_HOLD_CYCLES = 1000,
     EMASTER_PROBE_TARGET_MILLIDEGREES = 36000,
-    EMASTER_PROBE_MAX_AXES = 32
+    EMASTER_PROBE_MAX_AXES = 32,
+    /*
+     * 回调路径的跟随误差保护上限（原始位置计数）。基于真机实测峰值（1274 counts）
+     * 取约 2 倍余量（1274 * 2 ≈ 2550，取整为 2560）。与固定方案的 2000 毫度
+     * 上限（2548 counts）属于同一量级，能可靠检测驱动器完全不动的场景。
+     */
+    EMASTER_PROBE_MAX_FOLLOWING_ERROR_COUNTS = 2560
 };
 
 /*
@@ -427,6 +433,8 @@ int main(int argc, char **argv)
     callbacks.stop_user_data = &ramp;
     callbacks.position_target_source = probe_position_target_source;
     callbacks.position_target_source_user_data = &ramp;
+    callbacks.position_target_max_following_error_counts =
+        EMASTER_PROBE_MAX_FOLLOWING_ERROR_COUNTS;
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
                                                   &callbacks, &report);
     /*

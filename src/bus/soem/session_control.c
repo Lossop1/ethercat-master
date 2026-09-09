@@ -214,6 +214,41 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 {
                     bool command_updated = false;
 
+                    /*
+                     * 先检查上一周期目标的跟随误差，再请求新目标。顺序与固定方案路径
+                     * 一致：motion_step 先检查跟随误差，再计算下一周期目标。
+                     * 调用者通过 callbacks->position_target_max_following_error_counts
+                     * 设置上限；0 表示不启用此检查（不依赖固定方案时的向后兼容行为）。
+                     */
+                    if (motion_initialized &&
+                        session->position_target_max_following_error_counts > 0U)
+                    {
+                        for (axis_index = 0U;
+                             axis_index < session->plan->axis_count; ++axis_index)
+                        {
+                            uint64_t following_error;
+                            int64_t diff = (int64_t)session->axes[axis_index].actual_position -
+                                           (int64_t)session->target_positions[axis_index];
+                            following_error = (uint64_t)(diff < 0 ? -diff : diff);
+                            if (following_error >
+                                session->axes[axis_index].max_observed_following_error_counts)
+                            {
+                                session->axes[axis_index].max_observed_following_error_counts =
+                                    following_error;
+                            }
+                            if (following_error >
+                                session->position_target_max_following_error_counts)
+                            {
+                                status = EMASTER_CONTROL_SESSION_FOLLOWING_ERROR;
+                                emaster_soem_session_note_runtime_failure(
+                                    session, status, &safety_status);
+                                safety_denied = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!safety_denied)
+                    {
                     status = emaster_soem_session_position_target_step(
                         session, &command_updated);
                     if (status != EMASTER_CONTROL_SESSION_OK)
@@ -226,6 +261,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     {
                         motion_initialized = true;
                         session->report->motion_started = true;
+                    }
                     }
                 }
                 else

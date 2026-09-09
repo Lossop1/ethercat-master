@@ -294,6 +294,13 @@ typedef struct
     void *feedback_user_data;
     emaster_control_session_position_target_source_t position_target_source;
     void *position_target_source_user_data;
+    /*
+     * 位置目标来源回调路径的可选跟随误差保护。固定方案路径通过 motion_profile 的
+     * max_following_error_millidegrees 限制；回调路径没有绑定运动方案，由调用者
+     * 在这里单独提供每轴统一的上限（原始位置计数，0 表示不启用此检查）。
+     * 主站每周期以上一条已写入的目标为基准计算偏差，超限时触发 FOLLOWING_ERROR。
+     */
+    uint64_t position_target_max_following_error_counts;
 } emaster_control_session_callbacks_t;
 
 /*
