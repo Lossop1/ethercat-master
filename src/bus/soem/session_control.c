@@ -84,6 +84,27 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 if (!emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
                                                     &session->axes[axis_index], actual_position))
                     feedback_valid = false;
+                /* 读取电流和电压（不依赖运行模式，总是尝试读取） */
+                if (session->images[axis_index].tx_actual_current_ordinal != SIZE_MAX)
+                {
+                    emaster_pdo_codec_value_t current_value =
+                        session->images[axis_index].tx_values[
+                            session->images[axis_index].tx_actual_current_ordinal];
+                    if (current_value.kind == EMASTER_PDO_CODEC_VALUE_SIGNED)
+                    {
+                        session->axes[axis_index].actual_current = (int16_t)current_value.value.s;
+                    }
+                }
+                if (session->images[axis_index].tx_dc_link_voltage_ordinal != SIZE_MAX)
+                {
+                    emaster_pdo_codec_value_t voltage_value =
+                        session->images[axis_index].tx_values[
+                            session->images[axis_index].tx_dc_link_voltage_ordinal];
+                    if (voltage_value.kind == EMASTER_PDO_CODEC_VALUE_UNSIGNED)
+                    {
+                        session->axes[axis_index].dc_link_voltage = (uint32_t)voltage_value.value.u;
+                    }
+                }
                 session->status_words[axis_index] = status_word;
                 {
                     emaster_cia402_status_t decoded_status;

@@ -156,6 +156,8 @@ typedef struct
     int32_t target_velocity;
     int16_t actual_torque;
     int16_t target_torque;
+    int16_t actual_current;
+    uint32_t dc_link_voltage;
     int32_t motion_final_position;
     int32_t motion_completion_actual_position;
     int64_t motion_actual_delta_counts;

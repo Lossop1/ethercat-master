@@ -32,6 +32,8 @@ typedef struct
     size_t tx_actual_velocity_ordinal;
     size_t rx_target_torque_ordinal;
     size_t tx_actual_torque_ordinal;
+    size_t tx_actual_current_ordinal;
+    size_t tx_dc_link_voltage_ordinal;
     /* 动态模块通过 PDO 提供模式字段；固定模块没有该字段。 */
     bool rx_mode_available;
     bool tx_mode_available;

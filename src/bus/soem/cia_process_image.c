@@ -18,7 +18,9 @@ enum
     EMASTER_CIA402_TARGET_VELOCITY_INDEX = 0x60FF,
     EMASTER_CIA402_ACTUAL_VELOCITY_INDEX = 0x606C,
     EMASTER_CIA402_TARGET_TORQUE_INDEX = 0x6071,
-    EMASTER_CIA402_ACTUAL_TORQUE_INDEX = 0x6077
+    EMASTER_CIA402_ACTUAL_TORQUE_INDEX = 0x6077,
+    EMASTER_CIA402_ACTUAL_CURRENT_INDEX = 0x6078,
+    EMASTER_CIA402_DC_LINK_VOLTAGE_INDEX = 0x6079
 };
 
 static const emaster_pdo_mapping_profile_t *profile_mapping_for(
@@ -305,6 +307,8 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     image->tx_actual_velocity_ordinal = SIZE_MAX;
     image->rx_target_torque_ordinal = SIZE_MAX;
     image->tx_actual_torque_ordinal = SIZE_MAX;
+    image->tx_actual_current_ordinal = SIZE_MAX;
+    image->tx_dc_link_voltage_ordinal = SIZE_MAX;
     image->rx_mode_available = false;
     image->tx_mode_available = false;
     if (!build_direction_codec(&image->layout.rx, axis->pdo_set->rx_mappings,
@@ -347,6 +351,10 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
         &image->layout.rx, EMASTER_CIA402_TARGET_TORQUE_INDEX, UINT8_C(0));
     image->tx_actual_torque_ordinal = field_ordinal_for(
         &image->layout.tx, EMASTER_CIA402_ACTUAL_TORQUE_INDEX, UINT8_C(0));
+    image->tx_actual_current_ordinal = field_ordinal_for(
+        &image->layout.tx, EMASTER_CIA402_ACTUAL_CURRENT_INDEX, UINT8_C(0));
+    image->tx_dc_link_voltage_ordinal = field_ordinal_for(
+        &image->layout.tx, EMASTER_CIA402_DC_LINK_VOLTAGE_INDEX, UINT8_C(0));
     if (axis->operation_mode->value == INT8_C(8) &&
         (image->rx_target_position_ordinal == SIZE_MAX || image->tx_actual_position_ordinal == SIZE_MAX))
     {
