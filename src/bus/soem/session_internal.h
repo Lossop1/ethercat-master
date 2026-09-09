@@ -4,6 +4,7 @@
 #include "cia_process_image.h"
 #include "cycle_clock.h"
 #include "emaster/bus/control_session.h"
+#include "emaster/config/error_recovery_config.h"
 #include "emaster/multiaxis/coordinator.h"
 #include "emaster/motion/velocity_profile.h"
 #include "emaster/safety/gate.h"
@@ -56,6 +57,8 @@ typedef struct {
     int32_t *position_target_source_targets;
     /* 0 表示调用者未启用跟随误差检查；非零时每周期对比实际位置与上一目标。 */
     uint64_t position_target_max_following_error_counts;
+    /* 错误恢复策略配置：从部署配置加载，与业务逻辑解耦 */
+    const emaster_error_recovery_policy_t *error_recovery_policy;
     /* WKC 错误恢复计数器 */
     uint64_t wkc_consecutive_errors;
     uint64_t wkc_total_errors;

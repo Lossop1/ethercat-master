@@ -215,6 +215,17 @@ emaster_control_session_status_t emaster_soem_control_session(
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
         plan->cycle_ns;
     session->op_transition_cycles = session->transition_cycles * UINT64_C(4);
+
+    /* 加载错误恢复策略：从部署配置引用，解耦容错参数与业务逻辑 */
+    {
+        const char *policy_id = plan->deployment->error_recovery_policy_id;
+        if (policy_id == NULL) {
+            policy_id = "default";
+        }
+        session->error_recovery_policy = emaster_error_recovery_policy_by_id(policy_id);
+        /* 策略未找到时使用 NULL，exchange 逻辑将采用保守默认行为（首次错误即停机） */
+    }
+
     report->axes = axis_storage;
     report->axis_count = plan->axis_count;
     (void)snprintf(report->interface_name, sizeof(report->interface_name), "%s",

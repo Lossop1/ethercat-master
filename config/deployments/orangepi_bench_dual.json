@@ -8,5 +8,6 @@
   "operation_profile_ids": [
     "cyberbeast.dynamic-dc-csp-1ms"
   ],
-  "run_report_path": "runtime/reports/orangepi-dual-bench-latest.json"
+  "run_report_path": "runtime/reports/orangepi-dual-bench-latest.json",
+  "error_recovery_policy_id": "default"
 }

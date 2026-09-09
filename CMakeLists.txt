@@ -40,10 +40,15 @@ file(GLOB EMASTER_OPERATION_PROFILE_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/operation_profiles/*.json")
 file(GLOB EMASTER_MOTION_PROFILE_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/motion_profiles/*.json")
+file(GLOB EMASTER_ERROR_RECOVERY_POLICY_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/error_recovery_policies/*.json")
 if(NOT EMASTER_TOPOLOGY_CONFIG_FILES OR NOT EMASTER_DEPLOYMENT_CONFIG_FILES OR
    NOT EMASTER_OPERATION_PROFILE_CONFIG_FILES)
     message(FATAL_ERROR
         "config/topologies、config/deployments 和 config/operation_profiles 中都至少需要一个配置")
+endif()
+if(NOT EMASTER_ERROR_RECOVERY_POLICY_FILES)
+    message(WARNING "config/error_recovery_policies 中未找到错误恢复策略，将使用空配置")
 endif()
 
 set(EMASTER_MESSAGE_CONFIG_FILE
@@ -56,6 +61,7 @@ set(EMASTER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(EMASTER_GENERATED_CATALOG "${EMASTER_GENERATED_DIR}/slave_catalog.c")
 set(EMASTER_GENERATED_CONFIG "${EMASTER_GENERATED_DIR}/runtime_config.c")
 set(EMASTER_GENERATED_MESSAGES "${EMASTER_GENERATED_DIR}/messages.c")
+set(EMASTER_GENERATED_ERROR_RECOVERY "${EMASTER_GENERATED_DIR}/error_recovery_config.c")
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/include/emaster/version.h.in"

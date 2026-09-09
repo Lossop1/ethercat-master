@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "policy_id": "tolerant",
+  "description": "宽容错误策略：最大容错，减少误停机，适用于干扰环境",
+  "wkc_recovery": {
+    "enabled": true,
+    "consecutive_error_threshold": 10,
+    "total_error_threshold": 100,
+    "description": "宽容WKC容错：允许更多瞬态错误"
+  },
+  "deadline_recovery": {
+    "enabled": false,
+    "consecutive_error_threshold": 20,
+    "description": "宽容周期超时：允许更多超时"
+  },
+  "al_state_recovery": {
+    "enabled": false,
+    "check_interval_cycles": 200,
+    "max_recovery_attempts": 5,
+    "description": "AL状态恢复：多次尝试恢复"
+  },
+  "cia402_fault_recovery": {
+    "enabled": false,
+    "max_reset_attempts": 5,
+    "recoverable_error_codes": [8600, 8611, 8310],
+    "description": "CiA 402故障恢复：尝试恢复更多故障类型"
+  }
+}

@@ -183,6 +183,8 @@ typedef struct
     const emaster_motion_profile_t *motion_profile;
     /* 运行报告路径由部署决定，主站每次原子覆盖该文件，不在命令行追加参数。 */
     const char *run_report_path;
+    /* 错误恢复策略 ID，引用独立的策略配置；NULL 时使用 "default"。 */
+    const char *error_recovery_policy_id;
 } emaster_deployment_config_t;
 
 /* 以下接口只返回生成目录中的只读对象，调用者不得释放或修改返回值。 */

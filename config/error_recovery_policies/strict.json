@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "policy_id": "strict",
+  "description": "严格错误策略：最小容错，优先安全，适用于关键应用",
+  "wkc_recovery": {
+    "enabled": true,
+    "consecutive_error_threshold": 3,
+    "total_error_threshold": 20,
+    "description": "严格WKC容错：更快触发停机"
+  },
+  "deadline_recovery": {
+    "enabled": false,
+    "consecutive_error_threshold": 5,
+    "description": "严格周期超时：更快触发停机"
+  },
+  "al_state_recovery": {
+    "enabled": false,
+    "check_interval_cycles": 50,
+    "max_recovery_attempts": 1,
+    "description": "AL状态恢复：仅尝试一次"
+  },
+  "cia402_fault_recovery": {
+    "enabled": false,
+    "max_reset_attempts": 1,
+    "recoverable_error_codes": [],
+    "description": "CiA 402故障恢复：仅尝试一次"
+  }
+}

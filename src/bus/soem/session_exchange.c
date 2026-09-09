@@ -4,18 +4,9 @@
 #include <time.h>
 
 /*
- * WKC 错误恢复阈值：
- * - 连续错误阈值：连续N次WKC不匹配才触发停机
- * - 累计错误阈值：单次会话累计M次WKC错误触发停机
- *
- * 设计原因：瞬态电磁干扰、电缆松动等可能导致偶发WKC错误，但不应立即停机。
- * 只有持续或频繁的WKC错误才表明严重通信故障。
+ * WKC 错误恢复由配置策略决定，不再硬编码阈值。
+ * 配置策略在 config/error_recovery_policies/ 中定义，部署配置引用具体策略。
  */
-enum
-{
-    EMASTER_WKC_CONSECUTIVE_ERROR_THRESHOLD = 5U,
-    EMASTER_WKC_TOTAL_ERROR_THRESHOLD = 50U
-};
 
 static void note_deadline_missed(emaster_soem_session_t *session)
 {
@@ -95,7 +86,25 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         if (session->wkc_consecutive_errors > session->report->wkc_max_consecutive_errors) {
             session->report->wkc_max_consecutive_errors = session->wkc_consecutive_errors;
         }
-        (void)fail_exchange(session, phase, EMASTER_CONTROL_SESSION_WKC_MISMATCH, true);
+
+        /* 检查是否超过配置的容错阈值 */
+        bool should_fail = false;
+        if (session->error_recovery_policy != NULL &&
+            session->error_recovery_policy->wkc_recovery.enabled) {
+            const emaster_wkc_recovery_config_t *wkc_cfg =
+                &session->error_recovery_policy->wkc_recovery;
+            if (session->wkc_consecutive_errors >= wkc_cfg->consecutive_error_threshold ||
+                session->wkc_total_errors >= wkc_cfg->total_error_threshold) {
+                should_fail = true;
+            }
+        } else {
+            /* 未配置策略或WKC恢复未启用，首次错误即停机（保守默认行为） */
+            should_fail = true;
+        }
+
+        if (should_fail) {
+            (void)fail_exchange(session, phase, EMASTER_CONTROL_SESSION_WKC_MISMATCH, true);
+        }
     } else {
         /* WKC 恢复正常，重置连续错误计数 */
         session->wkc_consecutive_errors = 0U;

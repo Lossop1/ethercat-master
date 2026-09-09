@@ -7,5 +7,6 @@
   "management_interface": "enp97s0",
   "operation_profile_ids": ["cyberbeast.dynamic-dc-csp-1ms"],
   "motion_profile_id": "orangepi-bench.output-positive-36deg",
-  "run_report_path": "runtime/reports/orangepi-current-bench-latest.json"
+  "run_report_path": "runtime/reports/orangepi-current-bench-latest.json",
+  "error_recovery_policy_id": "default"
 }

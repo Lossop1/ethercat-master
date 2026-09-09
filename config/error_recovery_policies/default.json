@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "policy_id": "default",
+  "description": "默认错误恢复策略：保守的容错阈值，适用于大多数工业场景",
+  "wkc_recovery": {
+    "enabled": true,
+    "consecutive_error_threshold": 5,
+    "total_error_threshold": 50,
+    "description": "WKC不匹配容错：连续N次或累计M次错误才停机"
+  },
+  "deadline_recovery": {
+    "enabled": false,
+    "consecutive_error_threshold": 10,
+    "description": "周期超时容错：连续N次超时才停机（当前禁用）"
+  },
+  "al_state_recovery": {
+    "enabled": false,
+    "check_interval_cycles": 100,
+    "max_recovery_attempts": 3,
+    "description": "AL状态降级恢复：检测到OP→SAFE-OP时尝试恢复（待实现）"
+  },
+  "cia402_fault_recovery": {
+    "enabled": false,
+    "max_reset_attempts": 3,
+    "recoverable_error_codes": [],
+    "description": "CiA 402故障恢复：特定故障码可自动reset（待实现）"
+  }
+}
