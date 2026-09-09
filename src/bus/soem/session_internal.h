@@ -51,12 +51,9 @@ typedef struct {
     void *state_user_data;
     emaster_control_session_feedback_updated_t feedback_updated;
     void *feedback_user_data;
-    emaster_control_session_position_command_t position_command;
-    void *position_command_user_data;
-    int32_t *position_command_targets;
-    uint64_t position_command_sequence;
-    uint64_t position_command_expire_cycle;
-    bool position_command_active;
+    emaster_control_session_position_target_source_t position_target_source;
+    void *position_target_source_user_data;
+    int32_t *position_target_source_targets;
 } emaster_soem_session_t;
 
 /* 原子更新会话状态并通知应用层；通知回调不得阻塞周期线程 */
@@ -88,7 +85,7 @@ void emaster_soem_session_note_runtime_failure(
 emaster_control_session_status_t emaster_soem_session_publish_feedback(
     emaster_soem_session_t *session,
     emaster_control_session_status_t status);
-emaster_control_session_status_t emaster_soem_session_position_command_step(
+emaster_control_session_status_t emaster_soem_session_position_target_step(
     emaster_soem_session_t *session,
     bool *updated);
 emaster_control_session_status_t emaster_soem_session_apply_safety(

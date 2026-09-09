@@ -47,7 +47,7 @@ cmake --build build/host-debug
 - `src/session/`：会话计划、布局匹配与模式条件
 - `src/protocol/`：PDO 布局与编解码
 - `src/cia402/`、`src/multiaxis/`、`src/motion/`：单轴状态机、全轴协调和相对位置轨迹
-- `include/emaster/motion/position_command.h`、`src/motion/position_command.c`：有界多轴位置命令流
+- `include/emaster/motion/position_target.h`、`src/motion/position_target.c`：位置目标转换和目标来源契约
 - `src/bus/soem/`：总线配置、周期收发、邮箱及生命周期执行
 - `src/audit/`：执行记录与报告，周期内不输出文件
 - `tools/master/`：进程入口与中文结果展示

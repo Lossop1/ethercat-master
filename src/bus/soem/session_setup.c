@@ -176,7 +176,8 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         }
         emaster_session_observer_read_position_scale(&sdo,
                                                      &session->axes[axis_index].position_scale);
-        if (session->plan->motion_profile != NULL) {
+        if (session->plan->motion_profile != NULL ||
+            session->position_target_source != NULL) {
             session->axes[axis_index].software_position_limits_read =
                 emaster_soem_read_i32(&sdo, UINT16_C(0x607D), UINT8_C(1),
                                       &session->axes[axis_index].software_position_limit_min) &&
@@ -188,11 +189,22 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             if (!session->axes[axis_index].position_scale.read_succeeded ||
                 !session->axes[axis_index].software_position_limits_read ||
                 !session->axes[axis_index].polarity_read ||
-                axis->motion_axis == NULL ||
                 session->axes[axis_index].software_position_limit_min >
                     session->axes[axis_index].software_position_limit_max) {
                 status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
                 return status;
+            }
+            if (session->plan->motion_profile != NULL && axis->motion_axis == NULL) {
+                status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
+                return status;
+            }
+            if (session->plan->motion_profile == NULL)
+            {
+                if (session->report->audit.allocation_failed) {
+                    status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
+                    return status;
+                }
+                continue;
             }
             session->axes[axis_index].position_scale_match = emaster_position_scale_matches(
                 axis->motion_axis, &session->axes[axis_index].position_scale);

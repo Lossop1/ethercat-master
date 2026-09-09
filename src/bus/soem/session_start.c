@@ -53,7 +53,8 @@ static emaster_control_session_status_t prepare_op_position(
                                     ? 0
                                     : actual_position;
         session->status_words[axis_index] = status_word;
-        if (session->plan->motion_profile != NULL)
+        if (session->plan->motion_profile != NULL ||
+            session->position_target_source != NULL)
         {
             session->actual_positions[axis_index] = actual_position;
             session->target_positions[axis_index] = session->axes[axis_index].target_position;
@@ -188,7 +189,8 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         session->axes[axis_index].target_position =
             session->plan->axes[axis_index].operation_mode->value == INT8_C(9)
                 ? 0 : actual_position;
-        if (session->plan->motion_profile != NULL) {
+        if (session->plan->motion_profile != NULL ||
+            session->position_target_source != NULL) {
             session->actual_positions[axis_index] = actual_position;
             session->target_positions[axis_index] = session->axes[axis_index].target_position;
         }

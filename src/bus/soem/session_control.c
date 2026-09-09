@@ -207,13 +207,14 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 safety_denied = true;
             }
             if (feedback_valid && !safety_denied &&
-                session->plan->motion_profile != NULL && all_axes_enabled &&
-                all_modes_confirmed) {
-                if (session->position_command != NULL)
+                (session->plan->motion_profile != NULL ||
+                 session->position_target_source != NULL) &&
+                all_axes_enabled && all_modes_confirmed) {
+                if (session->position_target_source != NULL)
                 {
                     bool command_updated = false;
 
-                    status = emaster_soem_session_position_command_step(
+                    status = emaster_soem_session_position_target_step(
                         session, &command_updated);
                     if (status != EMASTER_CONTROL_SESSION_OK)
                     {

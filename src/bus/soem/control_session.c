@@ -56,7 +56,7 @@ static emaster_control_session_status_t allocate_session(emaster_soem_session_t 
         status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
         return status;
     }
-    if (session->plan->motion_profile != NULL) {
+    if (session->plan->motion_profile != NULL || session->position_target_source != NULL) {
         session->actual_positions =
             calloc(session->plan->axis_count, sizeof(*session->actual_positions));
         session->target_positions =
@@ -72,11 +72,11 @@ static emaster_control_session_status_t allocate_session(emaster_soem_session_t 
             status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
             return status;
         }
-        if (session->position_command != NULL)
+        if (session->position_target_source != NULL)
         {
-            session->position_command_targets = calloc(
-                session->plan->axis_count, sizeof(*session->position_command_targets));
-            if (session->position_command_targets == NULL)
+            session->position_target_source_targets = calloc(
+                session->plan->axis_count, sizeof(*session->position_target_source_targets));
+            if (session->position_target_source_targets == NULL)
             {
                 status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
                 return status;
@@ -98,7 +98,7 @@ static void release_session(emaster_soem_session_t *session) {
     free(session->motion_axis_configs);
     free(session->motion_scales);
     free(session->target_positions);
-    free(session->position_command_targets);
+    free(session->position_target_source_targets);
     free(session->actual_positions);
     free(session->controller_outputs);
     free(session->controllers);
@@ -190,9 +190,7 @@ emaster_control_session_status_t emaster_soem_control_session(
     if (plan == NULL || plan->status != EMASTER_SESSION_PLAN_READY || plan->deployment == NULL ||
         plan->deployment->ethercat_interface == NULL || axis_storage == NULL ||
         axis_capacity < plan->axis_count || report == NULL || plan->axis_count == 0U ||
-        plan->cycle_ns == 0U ||
-        (callbacks != NULL && callbacks->position_command != NULL &&
-         plan->motion_profile == NULL)) {
+        plan->cycle_ns == 0U) {
         return EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     }
     memset(session, 0, sizeof(*session));
@@ -208,8 +206,8 @@ emaster_control_session_status_t emaster_soem_control_session(
         session->state_user_data = callbacks->state_user_data;
         session->feedback_updated = callbacks->feedback_updated;
         session->feedback_user_data = callbacks->feedback_user_data;
-        session->position_command = callbacks->position_command;
-        session->position_command_user_data = callbacks->position_command_user_data;
+        session->position_target_source = callbacks->position_target_source;
+        session->position_target_source_user_data = callbacks->position_target_source_user_data;
     }
     session->transition_cycles =
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
