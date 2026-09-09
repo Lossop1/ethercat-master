@@ -151,9 +151,9 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     if (!matched) {
         if (session->error_recovery_policy != NULL &&
             (session->wkc_consecutive_errors >=
-             session->error_recovery_policy->wkc_recovery.consecutive_threshold ||
+             session->error_recovery_policy->wkc_recovery.consecutive_error_threshold ||
              session->wkc_total_errors >=
-             session->error_recovery_policy->wkc_recovery.total_threshold)) {
+             session->error_recovery_policy->wkc_recovery.total_error_threshold)) {
             emaster_soem_session_latch_failure(session,
                                                 EMASTER_CONTROL_SESSION_WKC_MISMATCH);
             return EMASTER_CONTROL_SESSION_WKC_MISMATCH;

@@ -70,8 +70,7 @@ static const emaster_deployment_config_t *deployment_for_current_host(void)
             fprintf(stderr, "\n");
         }
         fprintf(stderr, "请使用 --deployment 参数指定：\n");
-        fprintf(stderr, "  %s %s --deployment %s\n",
-                program_invocation_short_name,
+        fprintf(stderr, "  emaster-dc-prepare %s --deployment %s\n",
                 emaster_text(EMASTER_TEXT_COMMAND_PREPARE_DC),
                 candidates[0]->deployment_id);
     }
