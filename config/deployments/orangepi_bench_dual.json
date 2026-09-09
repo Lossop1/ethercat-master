@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "deployment_id": "orangepi-bench-dual",
+  "hostname": "orangepi6plus",
+  "topology_id": "bench-dual-slave",
+  "ethercat_interface": "enp49s0",
+  "management_interface": "enp97s0",
+  "operation_profile_ids": [
+    "cyberbeast.dynamic-dc-csp-1ms"
+  ],
+  "run_report_path": "runtime/reports/orangepi-dual-bench-latest.json"
+}
