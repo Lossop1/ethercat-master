@@ -149,8 +149,11 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
      * 这样可以避免瞬态干扰导致的误停机，同时保持对严重通信故障的响应。
      */
     if (!matched) {
-        if (session->wkc_consecutive_errors >= EMASTER_WKC_CONSECUTIVE_ERROR_THRESHOLD ||
-            session->wkc_total_errors >= EMASTER_WKC_TOTAL_ERROR_THRESHOLD) {
+        if (session->error_recovery_policy != NULL &&
+            (session->wkc_consecutive_errors >=
+             session->error_recovery_policy->wkc_recovery.consecutive_threshold ||
+             session->wkc_total_errors >=
+             session->error_recovery_policy->wkc_recovery.total_threshold)) {
             emaster_soem_session_latch_failure(session,
                                                 EMASTER_CONTROL_SESSION_WKC_MISMATCH);
             return EMASTER_CONTROL_SESSION_WKC_MISMATCH;

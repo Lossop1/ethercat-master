@@ -87,8 +87,8 @@ static const emaster_deployment_config_t *deployment_for_current_host(void)
             fprintf(stderr, "\n");
         }
         fprintf(stderr, "请使用 --deployment 参数指定：\n");
-        fprintf(stderr, "  %s --deployment %s\n",
-                program_invocation_short_name, candidates[0]->deployment_id);
+        fprintf(stderr, "  emaster-fingerprint --deployment %s\n",
+                candidates[0]->deployment_id);
     }
 
     return NULL;

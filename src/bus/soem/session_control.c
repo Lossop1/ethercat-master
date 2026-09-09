@@ -1,6 +1,7 @@
 #include "session_internal.h"
 
 #include <limits.h>
+#include <stdio.h>
 
 static uint64_t absolute_position_difference(int32_t left, int32_t right) {
     int64_t difference = (int64_t)left - (int64_t)right;
@@ -398,7 +399,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         case EMASTER_COMMAND_QUERY_STATUS:
                             (void)snprintf(response.message, sizeof(response.message),
                                 "state=%d cycle=%lu axes_enabled=%d motion_completed=%d",
-                                (int)session->state,
+                                (int)session->report->state,
                                 (unsigned long)session->report->cycle_count,
                                 session->report->all_axes_enabled_reached ? 1 : 0,
                                 session->report->motion_completed ? 1 : 0);
