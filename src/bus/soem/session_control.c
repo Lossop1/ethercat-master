@@ -386,6 +386,56 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                EMASTER_CONTROL_SESSION_OK);
             }
             (void)emaster_soem_session_publish_feedback(session, safety_status);
+
+            /* 处理实时命令（非阻塞） */
+            if (session->command_server != NULL) {
+                emaster_command_t command;
+                if (emaster_command_server_receive(session->command_server, &command)) {
+                    emaster_command_response_t response;
+                    response.success = false;
+
+                    switch (command.type) {
+                        case EMASTER_COMMAND_QUERY_STATUS:
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "state=%d cycle=%lu axes_enabled=%d motion_completed=%d",
+                                (int)session->state,
+                                (unsigned long)session->report->cycle_count,
+                                session->report->all_axes_enabled_reached ? 1 : 0,
+                                session->report->motion_completed ? 1 : 0);
+                            response.success = true;
+                            break;
+
+                        case EMASTER_COMMAND_SWITCH_MOTION:
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "motion switch not yet implemented");
+                            response.success = false;
+                            break;
+
+                        case EMASTER_COMMAND_STOP_MOTION:
+                            session->report->stop_requested = true;
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "stop requested");
+                            response.success = true;
+                            break;
+
+                        case EMASTER_COMMAND_SHUTDOWN:
+                            session->report->stop_requested = true;
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "shutdown requested");
+                            response.success = true;
+                            break;
+
+                        default:
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "unknown command type");
+                            response.success = false;
+                            break;
+                    }
+
+                    (void)emaster_command_server_respond(session->command_server, &response);
+                }
+            }
+
             if (session->report->motion_completed) {
                 break;
             }

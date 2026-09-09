@@ -226,6 +226,19 @@ emaster_control_session_status_t emaster_soem_control_session(
         /* 策略未找到时使用 NULL，exchange 逻辑将采用保守默认行为（首次错误即停机） */
     }
 
+    /* 创建实时命令服务器：允许运行期间接收外部命令 */
+    {
+        char socket_path[256];
+        (void)snprintf(socket_path, sizeof(socket_path), "/tmp/emaster-%s.sock",
+                       plan->deployment->deployment_id);
+        session->command_server = emaster_command_server_create(socket_path);
+        if (session->command_server != NULL) {
+            fprintf(stdout, "命令服务器已启动：%s\n", socket_path);
+            (void)fflush(stdout);
+        }
+        /* 命令服务器创建失败不影响主站运行，只是无法接收实时命令 */
+    }
+
     report->axes = axis_storage;
     report->axis_count = plan->axis_count;
     (void)snprintf(report->interface_name, sizeof(report->interface_name), "%s",

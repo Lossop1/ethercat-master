@@ -772,6 +772,12 @@ def deployment_values(
                     f"部署 {deployment_id} 的运动方案必须完整覆盖拓扑中的全部轴"
                 )
 
+        error_recovery_policy_id = document.get("error_recovery_policy_id", "default")
+        if not isinstance(error_recovery_policy_id, str) or not error_recovery_policy_id.strip():
+            raise ValueError(
+                f"部署 {deployment_id} 的 error_recovery_policy_id 必须是非空字符串"
+            )
+
         values.append(
             {
                 "id": deployment_id,
@@ -788,6 +794,7 @@ def deployment_values(
                 "topology": topology_id,
                 "operation_profile_ids": operation_profile_ids,
                 "motion_profile_id": motion_profile_id,
+                "error_recovery_policy_id": error_recovery_policy_id,
             }
         )
     return sorted(values, key=lambda item: item["id"])

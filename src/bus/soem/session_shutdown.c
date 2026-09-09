@@ -234,4 +234,10 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     }
     ecx_close(&session->context);
     session->context_open = false;
+
+    /* 销毁实时命令服务器 */
+    if (session->command_server != NULL) {
+        emaster_command_server_destroy(session->command_server);
+        session->command_server = NULL;
+    }
 }

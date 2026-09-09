@@ -308,6 +308,8 @@ def render_deployments(
             + f", &topologies[{topology_ordinal}], "
             + f"{operation_pointer}, {operation_count}, {motion_pointer}, "
             + c_string(deployment["run_report_path"])
+            + ", "
+            + c_string(deployment["error_recovery_policy_id"])
             + "}"
         )
     return "\n\n".join(pointer_arrays), ",\n".join(initializers)

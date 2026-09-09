@@ -3,6 +3,7 @@
 
 #include "cia_process_image.h"
 #include "cycle_clock.h"
+#include "emaster/bus/command_server.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/config/error_recovery_config.h"
 #include "emaster/multiaxis/coordinator.h"
@@ -62,6 +63,8 @@ typedef struct {
     /* WKC 错误恢复计数器 */
     uint64_t wkc_consecutive_errors;
     uint64_t wkc_total_errors;
+    /* 实时命令服务器：运行期间接收外部命令（可选） */
+    emaster_command_server_t *command_server;
 } emaster_soem_session_t;
 
 /* 原子更新会话状态并通知应用层；通知回调不得阻塞周期线程 */
