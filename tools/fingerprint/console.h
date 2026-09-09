@@ -19,6 +19,7 @@ typedef struct
 {
     emaster_command_kind_t kind;
     const char *output_path;
+    const char *deployment_id;  /* NULL 表示自动匹配当前主机 */
 } emaster_command_t;
 
 typedef enum

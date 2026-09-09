@@ -39,7 +39,7 @@ static const char *probe_status_text(emaster_preop_probe_status_t status)
 
 emaster_command_t emaster_console_parse_command(int argc, char **argv)
 {
-    emaster_command_t result = {EMASTER_COMMAND_INVALID, NULL};
+    emaster_command_t result = {EMASTER_COMMAND_INVALID, NULL, NULL};
 
     if (argc == 2 && strcmp(argv[1], emaster_text(EMASTER_TEXT_COMMAND_INTERFACES)) == 0)
     {
@@ -53,6 +53,14 @@ emaster_command_t emaster_console_parse_command(int argc, char **argv)
     {
         result.kind = EMASTER_COMMAND_CAPTURE;
         result.output_path = argv[2];
+        result.deployment_id = NULL;  /* 自动匹配当前主机 */
+    }
+    else if (argc == 5 && strcmp(argv[1], emaster_text(EMASTER_TEXT_COMMAND_CAPTURE)) == 0 &&
+             strcmp(argv[3], "--deployment") == 0)
+    {
+        result.kind = EMASTER_COMMAND_CAPTURE;
+        result.output_path = argv[2];
+        result.deployment_id = argv[4];  /* 显式指定部署配置 */
     }
     return result;
 }
