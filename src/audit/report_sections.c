@@ -541,7 +541,11 @@ bool emaster_run_report_write(FILE *stream,
         "},\"result\":{\"status_code\":%u,\"control_state\":%u,\"io_map_size\":%zu,"
         "\"expected_wkc\":%u,\"actual_wkc\":%d,\"cycle_count\":%" PRIu64
         ",\"process_data_exchange_count\":%" PRIu64
-        ",\"cycle_deadline_missed\":%s,\"fault_latched\":%s,"
+        ",\"cycle_deadline_missed\":%s,"
+        "\"wkc_error_count\":%" PRIu64
+        ",\"wkc_consecutive_errors\":%" PRIu64
+        ",\"wkc_max_consecutive_errors\":%" PRIu64
+        ",\"fault_latched\":%s,"
         "\"safety_control_permitted\":%s,\"safety_blocking_reasons\":%" PRIu32
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
@@ -552,6 +556,9 @@ bool emaster_run_report_write(FILE *stream,
         (unsigned int)report->expected_wkc, report->actual_wkc,
         report->cycle_count, report->process_data_exchange_count,
         report->cycle_deadline_missed ? "true" : "false",
+        report->wkc_error_count,
+        report->wkc_consecutive_errors,
+        report->wkc_max_consecutive_errors,
         report->fault_latched ? "true" : "false",
         report->safety_control_permitted ? "true" : "false",
         report->safety_blocking_reasons,

@@ -3,6 +3,20 @@
 #include <string.h>
 #include <time.h>
 
+/*
+ * WKC 错误恢复阈值：
+ * - 连续错误阈值：连续N次WKC不匹配才触发停机
+ * - 累计错误阈值：单次会话累计M次WKC错误触发停机
+ *
+ * 设计原因：瞬态电磁干扰、电缆松动等可能导致偶发WKC错误，但不应立即停机。
+ * 只有持续或频繁的WKC错误才表明严重通信故障。
+ */
+enum
+{
+    EMASTER_WKC_CONSECUTIVE_ERROR_THRESHOLD = 5U,
+    EMASTER_WKC_TOTAL_ERROR_THRESHOLD = 50U
+};
+
 static void note_deadline_missed(emaster_soem_session_t *session)
 {
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
@@ -74,7 +88,18 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     ++session->report->cycle_count;
     matched = session->report->actual_wkc == (int)session->report->expected_wkc;
     if (!matched) {
+        ++session->wkc_consecutive_errors;
+        ++session->wkc_total_errors;
+        ++session->report->wkc_error_count;
+        session->report->wkc_consecutive_errors = session->wkc_consecutive_errors;
+        if (session->wkc_consecutive_errors > session->report->wkc_max_consecutive_errors) {
+            session->report->wkc_max_consecutive_errors = session->wkc_consecutive_errors;
+        }
         (void)fail_exchange(session, phase, EMASTER_CONTROL_SESSION_WKC_MISMATCH, true);
+    } else {
+        /* WKC 恢复正常，重置连续错误计数 */
+        session->wkc_consecutive_errors = 0U;
+        session->report->wkc_consecutive_errors = 0U;
     }
     memset(&timing, 0, sizeof(timing));
     timing.exchange = session->exchange;
@@ -110,10 +135,19 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                        : EMASTER_CONTROL_SESSION_WKC_MISMATCH;
         }
     }
+    /*
+     * WKC 容错策略：单次或少量WKC错误可以容忍，只有持续或频繁错误才停机。
+     * 这样可以避免瞬态干扰导致的误停机，同时保持对严重通信故障的响应。
+     */
     if (!matched) {
-        emaster_soem_session_latch_failure(session,
-                                            EMASTER_CONTROL_SESSION_WKC_MISMATCH);
-        return EMASTER_CONTROL_SESSION_WKC_MISMATCH;
+        if (session->wkc_consecutive_errors >= EMASTER_WKC_CONSECUTIVE_ERROR_THRESHOLD ||
+            session->wkc_total_errors >= EMASTER_WKC_TOTAL_ERROR_THRESHOLD) {
+            emaster_soem_session_latch_failure(session,
+                                                EMASTER_CONTROL_SESSION_WKC_MISMATCH);
+            return EMASTER_CONTROL_SESSION_WKC_MISMATCH;
+        }
+        /* 未达阈值，记录但继续运行 */
+        return EMASTER_CONTROL_SESSION_OK;
     }
     if (session->dc_required &&
         !emaster_cycle_clock_observe_dc(&session->clock, session->context.DCtime)) {

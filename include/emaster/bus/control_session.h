@@ -212,6 +212,10 @@ typedef struct
     uint64_t cycle_count;
     uint64_t process_data_exchange_count;
     bool cycle_deadline_missed;
+    /* WKC 错误统计：支持容错分析 */
+    uint64_t wkc_error_count;
+    uint64_t wkc_consecutive_errors;
+    uint64_t wkc_max_consecutive_errors;
     /* 安全门的最后一次判定，供上层明确知道为何禁止输出 */
     uint32_t safety_blocking_reasons;
     bool safety_control_permitted;
