@@ -4,6 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 拓扑映射：在 topology_mapper.c 中实现 */
+typedef struct {
+    uint16_t bus_position;
+    uint32_t vendor_id;
+    uint32_t product_code;
+    uint32_t revision;
+    bool assigned;
+} emaster_discovered_slave_t;
+
+extern bool emaster_soem_session_map_topology(
+    emaster_soem_session_t *session,
+    int slave_count,
+    emaster_discovered_slave_t *discovered);
+
 /*
  * 按配置声明的精确类型写入并立即读回，避免对象宽度由调用点猜测。
  * 返回成功只表示邮箱事务成功且读回值与配置值一致。
@@ -61,6 +75,9 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
     int io_map_size;
     int slave_count;
     emaster_control_session_status_t status;
+    emaster_discovered_slave_t *discovered = NULL;
+    bool mapping_succeeded = false;
+    int i;
 
     memset(&session->context, 0, sizeof(session->context));
     if (!emaster_soem_interface_carrier(session->plan->deployment->ethercat_interface)) {
@@ -77,7 +94,42 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         status = EMASTER_CONTROL_SESSION_NO_SLAVES;
         return status;
     }
-    if ((size_t)slave_count != session->plan->axis_count) {
+    /*
+     * 拓扑验证与映射：
+     * 1. 扫描总线，发现所有从站
+     * 2. 根据身份匹配，将配置轴映射到实际从站
+     * 3. 允许总线上有未配置的从站（只警告，不失败）
+     *
+     * 历史问题：硬性要求 slave_count == axis_count 导致：
+     * - 配置2轴但总线只有1个从站时失败（2024-09-10故障）
+     * - 无法容忍调试时临时断开的从站
+     */
+    if ((size_t)slave_count < session->plan->axis_count) {
+        status = EMASTER_CONTROL_SESSION_TOPOLOGY_MISMATCH;
+        return status;
+    }
+
+    /* 分配发现表 */
+    discovered = (emaster_discovered_slave_t *)calloc((size_t)slave_count, sizeof(emaster_discovered_slave_t));
+    if (discovered == NULL) {
+        status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
+        return status;
+    }
+
+    /* 执行拓扑映射 */
+    mapping_succeeded = emaster_soem_session_map_topology(session, slave_count, discovered);
+
+    /* 警告未分配的从站 */
+    for (i = 0; i < slave_count; i++) {
+        if (!discovered[i].assigned) {
+            /* 未分配的从站：记录到审计日志但不失败 */
+            (void)discovered[i];  /* TODO: 添加到审计报告 */
+        }
+    }
+
+    free(discovered);
+
+    if (!mapping_succeeded) {
         status = EMASTER_CONTROL_SESSION_TOPOLOGY_MISMATCH;
         return status;
     }
@@ -89,17 +141,21 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
 
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
         const emaster_session_axis_plan_t *axis = &session->plan->axes[axis_index];
-        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        uint16_t bus_position;
+        const ec_slavet *slave;
         emaster_session_layout_status_t layout_status;
         uint16_t sm2_value;
         uint16_t sm3_value;
         int8_t mode_value;
         emaster_soem_sdo_reader_context_t sdo;
 
-        emaster_soem_sdo_context_init(&sdo, &session->context, (uint16_t)(axis_index + 1U),
+        /* 使用映射后的总线位置，而不是假设 axis_index + 1 */
+        bus_position = session->axes[axis_index].position;
+        slave = &session->context.slavelist[bus_position];
+
+        emaster_soem_sdo_context_init(&sdo, &session->context, bus_position,
                                       &session->report->audit,
                                       EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, session->exchange);
-        session->axes[axis_index].position = (uint16_t)(axis_index + 1U);
         emaster_cyclic_timing_stats_init(&session->axes[axis_index].timing);
         session->axes[axis_index].requested_mode = axis->operation_mode->value;
         session->axes[axis_index].actual_vendor_id = slave->eep_man;

@@ -34,7 +34,7 @@ emaster_enable_strict_warnings(emaster_soem_dc_prepare)
 add_library(emaster_soem_control_session STATIC
     control_session.c session_setup.c session_start.c session_exchange.c
     session_control.c session_target.c session_supervisor.c session_shutdown.c cia_process_image.c
-    cycle_clock.c session_observer.c command_server.c)
+    cycle_clock.c session_observer.c command_server.c topology_mapper.c)
 add_library(emaster::soem_control_session ALIAS emaster_soem_control_session)
 target_link_libraries(emaster_soem_control_session PRIVATE emaster::soem_common soem
                                                          emaster::session emaster::catalog
