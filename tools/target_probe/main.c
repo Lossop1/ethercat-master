@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 
 /* 外部控制全局变量（未使用，但链接需要） */
 int32_t external_target_positions[16] = {0};
