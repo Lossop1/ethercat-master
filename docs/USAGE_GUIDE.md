@@ -45,6 +45,27 @@ sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch 500
 
 ### 3. 交互式控制
 
+#### 角度控制（推荐）
+
+```bash
+sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg
+```
+
+**使用方法**：
+```
+角度> 45.5 120.0    # 输入各轴目标角度（度）
+角度> 90.0 180.0    # 继续输入新角度
+角度> quit          # 退出
+```
+
+**优点**：
+- 直观的角度输入（如 45.5°）
+- 自动查询编码器参数和齿轮比
+- 自动计算脉冲换算
+- 显示实际发送的脉冲值
+
+#### 脉冲控制（底层接口）
+
 ```bash
 sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move
 ```
@@ -57,7 +78,8 @@ sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move
 ```
 
 **注意**：
-- 单位是**脉冲**（不是角度）
+- **推荐使用角度控制工具**（`emaster-move-deg`），无需手动换算
+- 脉冲控制适合需要精确底层控制的场景
 - 输入的轴数必须与实际系统一致
 - 工具在后台持续运行，保持控制权
 

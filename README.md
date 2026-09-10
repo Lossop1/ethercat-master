@@ -16,7 +16,18 @@ sudo ~/ethercat-master/build/bench/tools/master/emaster-master --deployment oran
 sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch 500
 ```
 
-### 交互式控制
+### 角度控制（推荐）
+
+```bash
+sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg
+```
+
+输入目标位置（单位：角度）：
+```
+角度> 45.5 120.0
+```
+
+### 脉冲控制（底层接口）
 
 ```bash
 sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move
@@ -34,7 +45,9 @@ sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move
 - 负载侧分辨率：458752 脉冲/转
 - **1° = 1274 脉冲**
 
-示例：
+**推荐使用角度控制工具** (`emaster-move-deg`)，自动完成换算。
+
+脉冲控制示例（如需底层接口）：
 - 移动 45° → 输入 `57330`
 - 移动 90° → 输入 `114660`
 
