@@ -94,7 +94,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             session->images[axis_index].tx_actual_current_ordinal];
                     if (current_value.kind == EMASTER_PDO_CODEC_VALUE_SIGNED)
                     {
-                        session->axes[axis_index].actual_current = (int16_t)current_value.value.s;
+                        session->axes[axis_index].actual_current = (int16_t)current_value.value.signed_value;
                     }
                 }
                 if (session->images[axis_index].tx_dc_link_voltage_ordinal != SIZE_MAX)
@@ -104,7 +104,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             session->images[axis_index].tx_dc_link_voltage_ordinal];
                     if (voltage_value.kind == EMASTER_PDO_CODEC_VALUE_UNSIGNED)
                     {
-                        session->axes[axis_index].dc_link_voltage = (uint32_t)voltage_value.value.u;
+                        session->axes[axis_index].dc_link_voltage = (uint32_t)voltage_value.value.unsigned_value;
                     }
                 }
                 session->status_words[axis_index] = status_word;
@@ -535,6 +535,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             break;
                     }
 
+                send_response:
                     (void)emaster_command_server_respond(session->command_server, &response);
                 }
             }
