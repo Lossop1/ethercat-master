@@ -210,25 +210,30 @@ int main(int argc, char **argv)
     }
 
     /* 显示发现的拓扑 */
+    printf("\033[2J\033[H");  /* 清屏 */
     printf("═══════════════════════════════════════════════════════════════════════════════\n");
-    printf("  发现 %zu 轴系统\n", topo.axis_count);
+    printf("  发现 %zu 轴 EtherCAT 系统\n", topo.axis_count);
     printf("═══════════════════════════════════════════════════════════════════════════════\n\n");
     for (i = 0; i < topo.axis_count; i++)
     {
         const axis_config_t *axis = &topo.axes[i];
         unsigned long load_resolution = (unsigned long)axis->encoder_resolution * axis->gear_ratio_num / axis->gear_ratio_den;
+        unsigned long pulses_per_degree = load_resolution / 360;
 
         printf("轴 %zu:\n", i + 1);
         printf("  总线位置: %u\n", axis->bus_position);
         printf("  编码器分辨率: %u 脉冲/转（电机侧）\n", axis->encoder_resolution);
-        printf("  齿轮比: %u:%u\n", axis->gear_ratio_num, axis->gear_ratio_den);
+        printf("  齿轮比: %u:%u（电机:负载）\n", axis->gear_ratio_num, axis->gear_ratio_den);
         printf("  负载侧分辨率: %lu 脉冲/转\n", load_resolution);
-        printf("  角度换算: 1° = %lu 脉冲\n", load_resolution / 360);
-        printf("  额定力矩: %u mNm\n", axis->rated_torque_mnm);
+        printf("  角度换算: 1° = %lu 脉冲\n", pulses_per_degree);
+        if (axis->rated_torque_mnm > 0) {
+            printf("  额定力矩: %u mNm\n", axis->rated_torque_mnm);
+        }
         printf("\n");
     }
-    printf("按 Ctrl+C 退出...\n");
-    sleep(2);
+    printf("─────────────────────────────────────────────────────────────────────────────\n");
+    printf("开始实时监控（500ms刷新），按 Ctrl+C 退出...\n\n");
+    sleep(3);
 
     sleep_time.tv_sec = refresh_ms / 1000;
     sleep_time.tv_nsec = (refresh_ms % 1000) * 1000000L;

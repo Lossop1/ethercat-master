@@ -475,15 +475,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
                                     break;
                                 }
+                                /* 编码器分辨率 = encoder_increments / encoder_motor_revolutions
+                                 * 齿轮比 = gear_motor_revolutions : gear_shaft_revolutions
+                                 * 注意：rated_torque 字段可能不在 position_scale 中，暂时输出0 */
                                 written = snprintf(response.message + offset,
                                                    sizeof(response.message) - (size_t)offset,
-                                                   "|a%u:bus=%u,enc=%u,gear=%u/%u,torque=%u",
+                                                   "|a%u:bus=%u,enc=%u,gear=%u/%u,torque=0",
                                                    (unsigned int)(axis_index + 1U),
                                                    (unsigned int)axis->position,
-                                                   (unsigned int)scale->feed_constant_feed,
-                                                   (unsigned int)scale->feed_constant_shaft,
-                                                   (unsigned int)scale->gear_ratio_motor,
-                                                   (unsigned int)scale->rated_torque_mnm);
+                                                   (unsigned int)scale->encoder_increments,
+                                                   (unsigned int)scale->gear_motor_revolutions,
+                                                   (unsigned int)scale->gear_shaft_revolutions);
                                 if (written < 0) {
                                     break;
                                 }
