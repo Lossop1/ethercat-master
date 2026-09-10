@@ -4,10 +4,12 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -70,6 +72,24 @@ static bool queue_pop(command_queue_t *queue, emaster_command_t *command)
     return true;
 }
 
+/* 客户端空闲多久后视为断开。单次操作的客户端不会保持连接超过数秒。 */
+#define COMMAND_CLIENT_IDLE_TIMEOUT_S 5
+
+/*
+ * 客户端断开而主站仍持有 socket 时，read 不会返回：TCP/Unix 流套接字要等到写失败
+ * 或收到 FIN 才能察觉。若此时客户端进程被 kill，连接会一直挂着，监听线程永远阻塞在
+ * read 上，后续任何客户端都连不进来（accept 队列被占满，表现为 Connection refused）。
+ * 用接收超时把这种「半开连接」变成可回收状态，使连接失败后仍能重新连接。
+ */
+static void set_client_timeout(int fd)
+{
+    struct timeval timeout;
+
+    timeout.tv_sec = COMMAND_CLIENT_IDLE_TIMEOUT_S;
+    timeout.tv_usec = 0;
+    (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+}
+
 /* 监听线程：接受连接并读取命令 */
 static void *listen_thread(void *arg)
 {
@@ -77,6 +97,12 @@ static void *listen_thread(void *arg)
     char buffer[512];
     ssize_t bytes_read;
     emaster_command_t command;
+
+    /*
+     * 客户端可能在响应写出前关闭连接，此时 write 会触发 SIGPIPE 并终止整个主站。
+     * 屏蔽该信号，写失败退化为 EPIPE，由调用者处理。
+     */
+    (void)signal(SIGPIPE, SIG_IGN);
 
     while (server->running)
     {
@@ -87,7 +113,9 @@ static void *listen_thread(void *arg)
 
         if (current_client_fd < 0)
         {
-            int new_fd = accept(server->listen_fd, NULL, NULL);
+            int new_fd;
+
+            new_fd = accept(server->listen_fd, NULL, NULL);
             if (new_fd < 0)
             {
                 if (errno == EINTR)
@@ -97,9 +125,18 @@ static void *listen_thread(void *arg)
                 break;  /* 接受失败 */
             }
             pthread_mutex_lock(&server->mutex);
+            /*
+             * 监听线程只会缓慢推进，但 client_fd 可能已被销毁路径或超时回收置为 -1；
+             * 若仍有旧连接，先关闭再接管，避免 fd 泄漏。
+             */
+            if (server->client_fd >= 0 && server->client_fd != new_fd)
+            {
+                close(server->client_fd);
+            }
             server->client_fd = new_fd;
             current_client_fd = new_fd;
             pthread_mutex_unlock(&server->mutex);
+            set_client_timeout(new_fd);
         }
 
         /* 读取命令前再次验证fd有效性（防止TOCTOU） */
@@ -111,11 +148,13 @@ static void *listen_thread(void *arg)
         }
         pthread_mutex_unlock(&server->mutex);
 
-        /* 读取命令（阻塞） */
+        /* 读取命令（阻塞，受 SO_RCVTIMEO 限制） */
         bytes_read = read(current_client_fd, buffer, sizeof(buffer) - 1U);
         if (bytes_read <= 0)
         {
-            /* 连接关闭或错误 */
+            /* EAGAIN/EWOULDBLOCK 表示超时：客户端已不再持有连接，回收以便下次连接。 */
+            bool timed_out = bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+
             pthread_mutex_lock(&server->mutex);
             if (server->client_fd == current_client_fd)
             {
@@ -123,6 +162,12 @@ static void *listen_thread(void *arg)
                 server->client_fd = -1;
             }
             pthread_mutex_unlock(&server->mutex);
+            if (timed_out)
+            {
+                fprintf(stderr, "[CMD_SERVER] Client idle for %ds, connection released\n",
+                        COMMAND_CLIENT_IDLE_TIMEOUT_S);
+                fflush(stderr);
+            }
             continue;
         }
 
@@ -342,11 +387,25 @@ bool emaster_command_server_receive(emaster_command_server_t *server,
 bool emaster_command_server_respond(emaster_command_server_t *server,
                                    const emaster_command_response_t *response)
 {
-    char buffer[512];
+    /* 响应缓冲区必须覆盖 message 全文，否则截断的多轴状态会被当成完整回读。 */
+    char buffer[sizeof(response->message) + 16];
     ssize_t bytes_written;
     int len;
+    int client_fd;
 
-    if (server == NULL || response == NULL || server->client_fd < 0)
+    if (server == NULL || response == NULL)
+    {
+        return false;
+    }
+
+    /*
+     * 在锁内取 fd 快照：监听线程可能因超时关闭同一 fd，若在锁外读取并与 close
+     * 竞争，写出的响应可能落到被复用的 fd 上。
+     */
+    pthread_mutex_lock(&server->mutex);
+    client_fd = server->client_fd;
+    pthread_mutex_unlock(&server->mutex);
+    if (client_fd < 0)
     {
         return false;
     }
@@ -360,8 +419,8 @@ bool emaster_command_server_respond(emaster_command_server_t *server,
         return false;
     }
 
-    /* 发送响应 */
-    bytes_written = write(server->client_fd, buffer, (size_t)len);
+    /* 发送响应；客户端已断开时返回 EPIPE（SIGPIPE 已屏蔽），不影响主站运行。 */
+    bytes_written = write(client_fd, buffer, (size_t)len);
     return bytes_written == len;
 }
 

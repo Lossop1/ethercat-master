@@ -95,6 +95,7 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     add_subdirectory(src/bus/soem)
     add_subdirectory(tools/dc_prepare)
     add_subdirectory(tools/master)
+    add_subdirectory(tools/status_client)
     add_subdirectory(tools/target_probe)
 endif()
 

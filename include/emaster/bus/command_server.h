@@ -30,10 +30,10 @@ typedef struct {
     char payload[256];  /* 命令参数（JSON字符串或纯文本） */
 } emaster_command_t;
 
-/* 命令响应结构 */
+/* 命令响应结构。message 需容纳多轴状态回读，按轴数与字段数留足余量。 */
 typedef struct {
     bool success;
-    char message[256];
+    char message[1024];
 } emaster_command_response_t;
 
 /*

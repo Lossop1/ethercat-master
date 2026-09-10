@@ -86,27 +86,13 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 if (!emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
                                                     &session->axes[axis_index], actual_position))
                     feedback_valid = false;
-                /* 读取电流和电压（不依赖运行模式，总是尝试读取） */
-                if (session->images[axis_index].tx_actual_current_ordinal != SIZE_MAX)
-                {
-                    emaster_pdo_codec_value_t current_value =
-                        session->images[axis_index].tx_values[
-                            session->images[axis_index].tx_actual_current_ordinal];
-                    if (current_value.kind == EMASTER_PDO_CODEC_VALUE_SIGNED)
-                    {
-                        session->axes[axis_index].actual_current = (int16_t)current_value.value.signed_value;
-                    }
-                }
-                if (session->images[axis_index].tx_dc_link_voltage_ordinal != SIZE_MAX)
-                {
-                    emaster_pdo_codec_value_t voltage_value =
-                        session->images[axis_index].tx_values[
-                            session->images[axis_index].tx_dc_link_voltage_ordinal];
-                    if (voltage_value.kind == EMASTER_PDO_CODEC_VALUE_UNSIGNED)
-                    {
-                        session->axes[axis_index].dc_link_voltage = (uint32_t)voltage_value.value.unsigned_value;
-                    }
-                }
+                /*
+                 * 6078h (actual_current) 和 607Dh (dc_link_voltage) 未映射进 TxPDO
+                 * （设备 ESI 将三个模块都声明为 Fixed="true"，且 supports_pdo_configuration=false）。
+                 * 主站从不写 0x1A00 配置对象，因此 tx_actual_current_ordinal 和 tx_dc_link_voltage_ordinal
+                 * 始终为 SIZE_MAX。通过 SDO 读取会挤占周期预算，因此 actual_current / dc_link_voltage
+                 * 字段保持为零。若将来需要，应在离线审计中单独 SDO 查询，而不是在此处每周期读取。
+                 */
                 session->status_words[axis_index] = status_word;
                 {
                     emaster_cia402_status_t decoded_status;
@@ -421,15 +407,55 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     response.success = false;
 
                     switch (command.type) {
-                        case EMASTER_COMMAND_QUERY_STATUS:
-                            (void)snprintf(response.message, sizeof(response.message),
-                                "state=%d cycle=%lu axes_enabled=%d motion_completed=%d",
+                        case EMASTER_COMMAND_QUERY_STATUS: {
+                            /*
+                             * 状态回读只报告本周期已解码的 PDO 内容，不回读 SDO：
+                             * 命令在周期线程处理，任何邮箱访问都会挤占周期预算。
+                             * planned 用于区分「主站写入的目标」和「PDO 实际目标」，
+                             * 两者不一致说明输出映射有问题而不是驱动器不动。
+                             */
+                            int offset = snprintf(response.message, sizeof(response.message),
+                                "state=%d cycle=%lu axes=%zu enabled=%d completed=%d",
                                 (int)session->report->state,
                                 (unsigned long)session->report->cycle_count,
+                                session->plan->axis_count,
                                 session->report->all_axes_enabled_reached ? 1 : 0,
                                 session->report->motion_completed ? 1 : 0);
+
+                            for (axis_index = 0U;
+                                 axis_index < session->plan->axis_count; ++axis_index) {
+                                const emaster_control_session_axis_result_t *axis =
+                                    &session->axes[axis_index];
+                                int written;
+
+                                if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
+                                    break;
+                                }
+                                written = snprintf(response.message + offset,
+                                                   sizeof(response.message) - (size_t)offset,
+                                                   "|a%u:pos=%d,vel=%d,torque=%d,status=0x%04x,"
+                                                   "target_pos=%d,planned=%d,err=0x%04x,state=%d",
+                                                   (unsigned int)(axis_index + 1U),
+                                                   axis->actual_position, axis->actual_velocity,
+                                                   (int)axis->actual_torque,
+                                                   (unsigned int)axis->status_word,
+                                                   axis->target_position,
+                                                   session->target_positions[axis_index],
+                                                   (unsigned int)axis->drive_diagnostic.cia402_error_code,
+                                                   (int)axis->cia402_state);
+                                if (written < 0) {
+                                    break;
+                                }
+                                offset += written;
+                            }
+                            /* 轴数多到填满缓冲区时显式标注，避免客户端把截断当完整。 */
+                            if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
+                                (void)snprintf(response.message + sizeof(response.message) - 8U, 8U,
+                                              "|TRUNC");
+                            }
                             response.success = true;
                             break;
+                        }
 
                         case EMASTER_COMMAND_SWITCH_MOTION: {
                             const emaster_motion_profile_t *new_profile;
