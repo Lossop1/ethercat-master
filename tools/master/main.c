@@ -6,6 +6,7 @@
 #include "emaster/config/runtime_config.h"
 #include "emaster/messages.h"
 
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,46 @@ static void request_stop(int signal_number) {
 static bool application_stop_requested(void *user_data) {
     (void)user_data;
     return stop_requested != 0;
+}
+
+/*
+ * 实时位置目标源回调：每个周期被主站调用以获取位置目标。
+ *
+ * 验证模式：硬编码正弦波运动（周期 10 秒，幅度 ±180°），验证回调机制是否工作。
+ * 后续扩展：从共享缓冲区读取外部控制器发送的目标。
+ */
+static emaster_position_target_source_result_t position_target_source(
+    uint64_t cycle,
+    const emaster_control_session_axis_result_t *axes,
+    size_t axis_count,
+    int32_t *target_positions,
+    size_t target_capacity,
+    void *user_data)
+{
+    size_t i;
+    double time_seconds;
+    double angle_degrees;
+    int32_t target_counts;
+
+    (void)axes;
+    (void)target_capacity;
+    (void)user_data;
+
+    /* 计算当前时间（假设 1ms 周期）*/
+    time_seconds = (double)cycle * 0.001;
+
+    /* 生成正弦波：周期 10 秒，幅度 ±180° */
+    angle_degrees = 180.0 * sin(2.0 * 3.14159265358979323846 * time_seconds / 10.0);
+
+    /* 转换为编码器 counts（16384 counts/rev = 360°）*/
+    target_counts = (int32_t)(angle_degrees * 16384.0 / 360.0);
+
+    /* 所有轴使用相同的目标（验证模式）*/
+    for (i = 0; i < axis_count; i++) {
+        target_positions[i] = target_counts;
+    }
+
+    return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
 }
 
 static bool install_signal_handlers(void) {
@@ -168,6 +209,8 @@ int main(int argc, char **argv) {
     memset(&report, 0, sizeof(report));
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.stop_requested = application_stop_requested;
+    callbacks.position_target_source = position_target_source;
+    callbacks.position_target_source_user_data = NULL;
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
                                                   &callbacks, &report);
     report_published = emaster_run_report_publish(&plan, &report, deployment->run_report_path);
