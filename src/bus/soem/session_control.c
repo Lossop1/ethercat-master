@@ -488,7 +488,9 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 }
             }
 
-            if (session->report->motion_completed) {
+            // 只有配置了运动配置时，motion_completed 才导致退出
+            // 无运动配置时保持运行，等待外部实时指令
+            if (session->plan->motion_profile != NULL && session->report->motion_completed) {
                 break;
             }
             if (safety_denied &&
