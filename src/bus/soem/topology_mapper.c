@@ -83,7 +83,7 @@ bool emaster_soem_session_map_topology(
         matched_index = find_unassigned_slave_by_identity(
             discovered,
             slave_count,
-            axis->device_profile->slave_profile
+            axis->device_profile
         );
 
         if (matched_index < 0) {

@@ -457,6 +457,46 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             break;
                         }
 
+                        case EMASTER_COMMAND_QUERY_TOPOLOGY: {
+                            /*
+                             * 拓扑查询：返回实际轴数、总线位置和关键参数
+                             * 格式: axes=N|a1:bus=B,enc=E,gear=G1/G2,torque=T|a2:...
+                             */
+                            int offset = snprintf(response.message, sizeof(response.message),
+                                "axes=%zu", session->plan->axis_count);
+
+                            for (axis_index = 0U;
+                                 axis_index < session->plan->axis_count; ++axis_index) {
+                                const emaster_control_session_axis_result_t *axis =
+                                    &session->axes[axis_index];
+                                const emaster_position_scale_t *scale = &axis->position_scale;
+                                int written;
+
+                                if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
+                                    break;
+                                }
+                                written = snprintf(response.message + offset,
+                                                   sizeof(response.message) - (size_t)offset,
+                                                   "|a%u:bus=%u,enc=%u,gear=%u/%u,torque=%u",
+                                                   (unsigned int)(axis_index + 1U),
+                                                   (unsigned int)axis->position,
+                                                   (unsigned int)scale->feed_constant_feed,
+                                                   (unsigned int)scale->feed_constant_shaft,
+                                                   (unsigned int)scale->gear_ratio_motor,
+                                                   (unsigned int)scale->rated_torque_mnm);
+                                if (written < 0) {
+                                    break;
+                                }
+                                offset += written;
+                            }
+                            if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
+                                (void)snprintf(response.message + sizeof(response.message) - 8U, 8U,
+                                              "|TRUNC");
+                            }
+                            response.success = true;
+                            break;
+                        }
+
                         case EMASTER_COMMAND_SWITCH_MOTION: {
                             const emaster_motion_profile_t *new_profile;
                             emaster_control_session_status_t switch_status;

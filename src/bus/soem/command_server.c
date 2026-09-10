@@ -187,6 +187,11 @@ static void *listen_thread(void *arg)
         {
             command.type = EMASTER_COMMAND_QUERY_STATUS;
         }
+        else if (bytes_read >= 8 && strncmp(buffer, "topology", 8) == 0 &&
+                 (buffer[8] == '\n' || buffer[8] == '\0'))
+        {
+            command.type = EMASTER_COMMAND_QUERY_TOPOLOGY;
+        }
         else if (bytes_read >= 8 && strncmp(buffer, "switch ", 7) == 0)
         {
             /* 注意：比较中包含空格分隔符 */

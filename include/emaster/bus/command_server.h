@@ -18,6 +18,7 @@ typedef struct emaster_command_server emaster_command_server_t;
 typedef enum {
     EMASTER_COMMAND_INVALID = 0,
     EMASTER_COMMAND_QUERY_STATUS,      /* 查询当前状态 */
+    EMASTER_COMMAND_QUERY_TOPOLOGY,    /* 查询拓扑和参数 */
     EMASTER_COMMAND_SWITCH_MOTION,     /* 切换运动轨迹 */
     EMASTER_COMMAND_STOP_MOTION,       /* 停止运动 */
     EMASTER_COMMAND_SET_EXTERNAL_TARGET, /* 设置外部位置目标 */
