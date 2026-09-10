@@ -1,0 +1,155 @@
+diff --git a/src/bus/soem/command_server.c b/src/bus/soem/command_server.c
+index 4713bb7..cb77094 100644
+--- a/src/bus/soem/command_server.c
++++ b/src/bus/soem/command_server.c
+@@ -80,11 +80,15 @@ static void *listen_thread(void *arg)
+ 
+     while (server->running)
+     {
+-        /* 等待客户端连接（阻塞） */
+-        if (server->client_fd < 0)
++        /* 等待客户端连接（阻塞，需要互斥保护） */
++        pthread_mutex_lock(&server->mutex);
++        int current_client_fd = server->client_fd;
++        pthread_mutex_unlock(&server->mutex);
++
++        if (current_client_fd < 0)
+         {
+-            server->client_fd = accept(server->listen_fd, NULL, NULL);
+-            if (server->client_fd < 0)
++            int new_fd = accept(server->listen_fd, NULL, NULL);
++            if (new_fd < 0)
+             {
+                 if (errno == EINTR)
+                 {
+@@ -92,15 +96,33 @@ static void *listen_thread(void *arg)
+                 }
+                 break;  /* 接受失败 */
+             }
++            pthread_mutex_lock(&server->mutex);
++            server->client_fd = new_fd;
++            current_client_fd = new_fd;
++            pthread_mutex_unlock(&server->mutex);
+         }
+ 
++        /* 读取命令前再次验证fd有效性（防止TOCTOU） */
++        pthread_mutex_lock(&server->mutex);
++        if (server->client_fd != current_client_fd) {
++            /* fd已被其他线程修改，重新循环 */
++            pthread_mutex_unlock(&server->mutex);
++            continue;
++        }
++        pthread_mutex_unlock(&server->mutex);
++
+         /* 读取命令（阻塞） */
+-        bytes_read = read(server->client_fd, buffer, sizeof(buffer) - 1U);
++        bytes_read = read(current_client_fd, buffer, sizeof(buffer) - 1U);
+         if (bytes_read <= 0)
+         {
+             /* 连接关闭或错误 */
+-            close(server->client_fd);
+-            server->client_fd = -1;
++            pthread_mutex_lock(&server->mutex);
++            if (server->client_fd == current_client_fd)
++            {
++                close(server->client_fd);
++                server->client_fd = -1;
++            }
++            pthread_mutex_unlock(&server->mutex);
+             continue;
+         }
+ 
+@@ -108,38 +130,83 @@ static void *listen_thread(void *arg)
+ 
+         /* 解析命令（简单文本协议：第一个单词是命令类型） */
+         memset(&command, 0, sizeof(command));
+-        if (strncmp(buffer, "status", 6) == 0)
++
++        /* 边界检查并精确匹配命令（带分隔符验证） */
++        if (bytes_read >= 4 && strncmp(buffer, "stop", 4) == 0 &&
++            (buffer[4] == '\n' || buffer[4] == '\0'))
++        {
++            command.type = EMASTER_COMMAND_STOP_MOTION;
++        }
++        else if (bytes_read >= 6 && strncmp(buffer, "status", 6) == 0 &&
++                 (buffer[6] == '\n' || buffer[6] == '\0'))
+         {
+             command.type = EMASTER_COMMAND_QUERY_STATUS;
+         }
+-        else if (strncmp(buffer, "switch", 6) == 0)
++        else if (bytes_read >= 8 && strncmp(buffer, "switch ", 7) == 0)
+         {
++            /* 注意：比较中包含空格分隔符 */
+             command.type = EMASTER_COMMAND_SWITCH_MOTION;
+             /* payload 包含motion profile ID */
+-            strncpy(command.payload, buffer + 7, sizeof(command.payload) - 1U);
++            size_t payload_start = 7U;
++            size_t payload_len = (size_t)bytes_read - payload_start;
++            if (payload_len >= sizeof(command.payload))
++            {
++                payload_len = sizeof(command.payload) - 1U;
++            }
++            memcpy(command.payload, buffer + payload_start, payload_len);
++            command.payload[payload_len] = '\0';
+             command.payload[strcspn(command.payload, "\n")] = '\0';
+         }
+-        else if (strncmp(buffer, "stop", 4) == 0)
++        else if (bytes_read >= 22 && strncmp(buffer, "set_external_target ", 20) == 0)
+         {
+-            command.type = EMASTER_COMMAND_STOP_MOTION;
++            /* 注意：比较中包含空格分隔符 */
++            command.type = EMASTER_COMMAND_SET_EXTERNAL_TARGET;
++            /* payload 包含空格分隔的位置值 */
++            size_t payload_start = 20U;
++            size_t payload_len = (size_t)bytes_read - payload_start;
++            if (payload_len >= sizeof(command.payload))
++            {
++                payload_len = sizeof(command.payload) - 1U;
++            }
++            memcpy(command.payload, buffer + payload_start, payload_len);
++            command.payload[payload_len] = '\0';
++            command.payload[strcspn(command.payload, "\n")] = '\0';
+         }
+-        else if (strncmp(buffer, "shutdown", 8) == 0)
++        else if (bytes_read >= 8 && strncmp(buffer, "shutdown", 8) == 0 &&
++                 (buffer[8] == '\n' || buffer[8] == '\0'))
+         {
+             command.type = EMASTER_COMMAND_SHUTDOWN;
+         }
+         else
+         {
+             command.type = EMASTER_COMMAND_INVALID;
++            fprintf(stderr, "[CMD_SERVER] Unknown command, bytes_read=%zd\n", bytes_read);
++            fflush(stderr);
+         }
+ 
+-        /* 入队（线程安全） */
++        fprintf(stderr, "[CMD_SERVER] Parsed command type=%d\n", command.type);
++        fflush(stderr);
++
++        /* 入队（线程安全，完整原子性） */
+         pthread_mutex_lock(&server->mutex);
+-        if (!queue_push(&server->queue, &command))
++        if (server->queue.count >= COMMAND_QUEUE_CAPACITY)
+         {
+-            /* 队列满，丢弃命令 */
++            /* 队列满：发送错误响应给客户端，然后丢弃 */
++            pthread_mutex_unlock(&server->mutex);
++            const char *error_msg = "ERROR|Command queue full\n";
++            write(current_client_fd, error_msg, strlen(error_msg));
+             fprintf(stderr, "警告：命令队列已满，丢弃命令\n");
+         }
+-        pthread_mutex_unlock(&server->mutex);
++        else
++        {
++            /* 执行完整的入队操作：复制命令 + 更新索引 + 增加计数 */
++            server->queue.commands[server->queue.write_index] = command;
++            server->queue.write_index = (server->queue.write_index + 1U) % COMMAND_QUEUE_CAPACITY;
++            ++server->queue.count;
++            fprintf(stderr, "[CMD_SERVER] Enqueued, count=%zu\n", server->queue.count);
++            fflush(stderr);
++            pthread_mutex_unlock(&server->mutex);
++        }
+     }
+ 
+     return NULL;

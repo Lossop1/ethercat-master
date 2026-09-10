@@ -26,6 +26,11 @@
 #include <string.h>
 #include <unistd.h>
 
+/* 外部控制全局变量（未使用，但链接需要） */
+int32_t external_target_positions[16] = {0};
+volatile int external_targets_available = 0;
+size_t external_axis_count = 0;
+
 enum
 {
     /* 与固定方案基线一致的验证轨迹：5 s 斜坡 + 1 s 保持，便于直接对比结果。 */

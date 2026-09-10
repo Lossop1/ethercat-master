@@ -277,7 +277,65 @@ typedef void (*emaster_control_session_feedback_updated_t)(
     void *user_data);
 
 /*
- * 应用层位置目标来源。回调运行在主站周期线程中，必须无阻塞、无动态分配且不得访问 SOEM。
+ * 应用层位置目标来源回调。
+ *
+ * 执行环境：主站周期线程（实时上下文，1ms周期）
+ *
+ * 严格约束（违反将导致主站失效）：
+ * - 执行时间：必须在 10 微秒内返回（推荐 < 5us）
+ * - 无阻塞操作：禁止 I/O、互斥锁、条件变量、信号量
+ * - 无动态分配：禁止 malloc/free/new/delete
+ * - 无系统调用：禁止文件操作、网络操作、时间查询
+ * - 不得访问 SOEM：axes 参数是只读快照，不得调用 EtherCAT API
+ *
+ * 参数：
+ * - cycle: 周期计数器（从0开始）
+ * - axes: 当前周期的轴状态快照（只读），包含实际位置、状态字等
+ * - axis_count: 轴数量
+ * - target_positions: 输出缓冲区（由回调填充），单位为编码器 counts
+ * - target_capacity: 输出缓冲区容量（当前总是等于 axis_count）
+ * - user_data: 用户自定义数据指针
+ *
+ * 返回值：
+ * - EMASTER_POSITION_TARGET_SOURCE_UPDATED: 已填充新目标到 target_positions
+ * - EMASTER_POSITION_TARGET_SOURCE_HOLD: 本周期无新目标，保持当前位置
+ * - 其他值: 视为错误，触发安全停机
+ *
+ * 错误传播：
+ * - 回调返回错误 → 主站设置 MOTION_INVALID 状态 → 安全门阻止输出 → 主站停止
+ * - 后验证失败（限位、速率） → 同上
+ * - 硬件写入失败 → 同上
+ *
+ * 线程安全：
+ * - 回调在主站周期线程中执行（与会话状态同线程）
+ * - user_data 必须对回调线程可见且线程安全
+ * - 如需与其他线程通信，使用无锁数据结构或原子操作
+ *
+ * 示例用法：
+ *
+ *   // 静态缓冲区（避免动态分配）
+ *   static int32_t external_targets[MAX_AXES];
+ *   static _Atomic bool targets_ready = false;
+ *
+ *   emaster_position_target_source_result_t my_callback(
+ *       uint64_t cycle,
+ *       const emaster_control_session_axis_result_t *axes,
+ *       size_t axis_count,
+ *       int32_t *target_positions,
+ *       size_t target_capacity,
+ *       void *user_data)
+ *   {
+ *       if (!atomic_load(&targets_ready)) {
+ *           return EMASTER_POSITION_TARGET_SOURCE_HOLD;
+ *       }
+ *
+ *       for (size_t i = 0; i < axis_count; i++) {
+ *           target_positions[i] = external_targets[i];
+ *       }
+ *
+ *       return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
+ *   }
+ *
  * target_positions 只有在返回 UPDATED 时才会被采用，单位为所选 PDO 的原始位置计数；
  * 这个最小接口不规定上层输入频率、传输协议或命令生产者。
  */

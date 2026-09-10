@@ -1,0 +1,152 @@
+diff --git a/tools/master/main.c b/tools/master/main.c
+index 02d0d28..b325818 100644
+--- a/tools/master/main.c
++++ b/tools/master/main.c
+@@ -1,12 +1,15 @@
+ #define _POSIX_C_SOURCE 200809L
++#define _DEFAULT_SOURCE
+ 
+ #include "console.h"
+ #include "emaster/audit/run_report.h"
+ #include "emaster/bus/control_session.h"
++#include "emaster/bus/command_server.h"
+ #include "emaster/config/runtime_config.h"
+ #include "emaster/messages.h"
+ 
+ #include <math.h>
++#include <pthread.h>
+ #include <signal.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -25,11 +28,25 @@ static bool application_stop_requested(void *user_data) {
+     return stop_requested != 0;
+ }
+ 
++/*
++ * 外部位置目标：通过命令服务器更新
++ * 非static，允许session_control.c访问
++ * 使用互斥锁保护，防止数据竞争
++ */
++#define MAX_EXTERNAL_AXES 16
++int32_t external_target_positions[MAX_EXTERNAL_AXES] = {0};
++int external_targets_available = 0;
++size_t external_axis_count = 0;
++pthread_mutex_t external_targets_mutex = PTHREAD_MUTEX_INITIALIZER;
++
+ /*
+  * 实时位置目标源回调：每个周期被主站调用以获取位置目标。
+  *
+- * 验证模式：硬编码正弦波运动（周期 10 秒，幅度 ±180°），验证回调机制是否工作。
+- * 后续扩展：从共享缓冲区读取外部控制器发送的目标。
++ * 模式：
++ * - 如果 external_targets_available == 1：从 external_target_positions 读取
++ * - 否则：生成正弦波（演示/测试模式）
++ *
++ * 注意：外部目标由session_control.c中的命令处理代码更新
+  */
+ static emaster_position_target_source_result_t position_target_source(
+     uint64_t cycle,
+@@ -40,26 +57,58 @@ static emaster_position_target_source_result_t position_target_source(
+     void *user_data)
+ {
+     size_t i;
+-    double time_seconds;
+-    double angle_degrees;
+-    int32_t target_counts;
++    static int32_t initial_positions[16] = {0};
++    static int initialized = 0;
++    static int last_mode = -1;
+ 
+-    (void)axes;
+     (void)target_capacity;
+     (void)user_data;
+ 
+-    /* 计算当前时间（假设 1ms 周期）*/
+-    time_seconds = (double)cycle * 0.001;
++    /* 首次调用：记录每个轴的初始位置 */
++    if (!initialized) {
++        for (i = 0; i < axis_count && i < 16; i++) {
++            initial_positions[i] = axes[i].actual_position;
++        }
++        initialized = 1;
++        fprintf(stderr, "[INIT] Initial positions:");
++        for (i = 0; i < axis_count && i < 16; i++) {
++            fprintf(stderr, " [%zu]=%d", i, initial_positions[i]);
++        }
++        fprintf(stderr, "\n");
++    }
++
++    /* 检查是否有外部目标可用（加锁保护） */
++    pthread_mutex_lock(&external_targets_mutex);
++    int has_external_targets = external_targets_available;
++    if (has_external_targets) {
++        /* 从外部缓冲区读取目标 */
++        for (i = 0; i < axis_count && i < MAX_EXTERNAL_AXES; i++) {
++            target_positions[i] = external_target_positions[i];
++        }
++    }
++    pthread_mutex_unlock(&external_targets_mutex);
+ 
+-    /* 生成正弦波：周期 10 秒，幅度 ±180° */
+-    angle_degrees = 180.0 * sin(2.0 * 3.14159265358979323846 * time_seconds / 10.0);
++    if (has_external_targets) {
++        /* 模式切换日志 */
++        if (last_mode != 1) {
++            fprintf(stderr, "[MODE] Switched to EXTERNAL control\n");
++            last_mode = 1;
++        }
++    } else {
++        /* 模式切换日志 */
++        if (last_mode != 0) {
++            fprintf(stderr, "[MODE] Running DEMO sine wave (no external input)\n");
++            last_mode = 0;
++        }
+ 
+-    /* 转换为编码器 counts（16384 counts/rev = 360°）*/
+-    target_counts = (int32_t)(angle_degrees * 16384.0 / 360.0);
++        /* 演示模式：生成正弦波 */
++        double time_seconds = (double)cycle * 0.001;
++        double angle_degrees = 180.0 * sin(2.0 * 3.14159265358979323846 * time_seconds / 10.0);
++        int32_t offset_counts = (int32_t)(angle_degrees * 16384.0 / 360.0);
+ 
+-    /* 所有轴使用相同的目标（验证模式）*/
+-    for (i = 0; i < axis_count; i++) {
+-        target_positions[i] = target_counts;
++        for (i = 0; i < axis_count && i < 16; i++) {
++            target_positions[i] = initial_positions[i] + offset_counts;
++        }
+     }
+ 
+     return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
+@@ -206,6 +255,18 @@ int main(int argc, char **argv) {
+             (unsigned int)plan.axis_count);
+     (void)fflush(stdout);
+ 
++    /* 设置轴数量供命令处理使用 */
++    external_axis_count = plan.axis_count;
++
++    /* 启动命令服务器 */
++    char socket_path[256];
++    snprintf(socket_path, sizeof(socket_path), "/tmp/emaster-%s.sock",
++             deployment->deployment_id);
++    emaster_command_server_t *cmd_server = emaster_command_server_create(socket_path);
++    if (cmd_server != NULL) {
++        fprintf(stderr, "命令服务器已启动：%s\n", socket_path);
++    }
++
+     memset(&report, 0, sizeof(report));
+     memset(&callbacks, 0, sizeof(callbacks));
+     callbacks.stop_requested = application_stop_requested;
+@@ -213,6 +274,12 @@ int main(int argc, char **argv) {
+     callbacks.position_target_source_user_data = NULL;
+     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
+                                                   &callbacks, &report);
++
++    /* 清理命令服务器 */
++    if (cmd_server != NULL) {
++        emaster_command_server_destroy(cmd_server);
++    }
++
+     report_published = emaster_run_report_publish(&plan, &report, deployment->run_report_path);
+     emaster_master_console_result(&plan, &report, report_published);
+     emaster_control_session_report_destroy(&report);

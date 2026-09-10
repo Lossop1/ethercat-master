@@ -1,0 +1,69 @@
+diff --git a/src/bus/soem/session_control.c b/src/bus/soem/session_control.c
+index 68dfac2..23afdaf 100644
+--- a/src/bus/soem/session_control.c
++++ b/src/bus/soem/session_control.c
+@@ -4,6 +4,8 @@
+ 
+ #include <limits.h>
+ #include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
+ 
+ static uint64_t absolute_position_difference(int32_t left, int32_t right) {
+     int64_t difference = (int64_t)left - (int64_t)right;
+@@ -477,6 +479,55 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
+                             response.success = true;
+                             break;
+ 
++                        case EMASTER_COMMAND_SET_EXTERNAL_TARGET: {
++                            /* 外部位置目标命令：解析并更新全局外部目标 */
++                            extern int external_targets_available;
++                            extern int32_t external_target_positions[];
++                            extern size_t external_axis_count;
++                            extern pthread_mutex_t external_targets_mutex;
++
++                            char *token;
++                            char *saveptr;
++                            char payload_copy[256];
++                            size_t count = 0;
++                            int32_t positions[16];  /* 假设最多16轴 */
++
++                            strncpy(payload_copy, command.payload, sizeof(payload_copy) - 1);
++                            payload_copy[sizeof(payload_copy) - 1] = '\0';
++
++                            token = strtok_r(payload_copy, " \t", &saveptr);
++                            while (token != NULL && count < 16) {
++                                char *endptr;
++                                long val = strtol(token, &endptr, 10);
++                                /* 检查转换错误：非空字符串、完全转换、范围有效 */
++                                if (*token == '\0' || *endptr != '\0' || val < INT32_MIN || val > INT32_MAX) {
++                                    (void)snprintf(response.message, sizeof(response.message),
++                                        "ERROR|Invalid position value: %s", token);
++                                    response.success = false;
++                                    goto send_response;
++                                }
++                                positions[count] = (int32_t)val;
++                                count++;
++                                token = strtok_r(NULL, " \t", &saveptr);
++                            }
++
++                            if (count == external_axis_count && count > 0) {
++                                /* 更新全局变量（加锁保护） */
++                                pthread_mutex_lock(&external_targets_mutex);
++                                memcpy((void*)external_target_positions, positions, count * sizeof(int32_t));
++                                external_targets_available = 1;
++                                pthread_mutex_unlock(&external_targets_mutex);
++                                (void)snprintf(response.message, sizeof(response.message),
++                                    "OK|Updated %zu external targets", count);
++                                response.success = true;
++                            } else {
++                                (void)snprintf(response.message, sizeof(response.message),
++                                    "ERROR|Wrong count: expected %zu, got %zu", external_axis_count, count);
++                                response.success = false;
++                            }
++                            break;
++                        }
++
+                         default:
+                             (void)snprintf(response.message, sizeof(response.message),
+                                 "unknown command type");
