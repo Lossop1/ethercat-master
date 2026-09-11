@@ -108,10 +108,6 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         uint8_t error_block[16];
         int wkc = ecx_FPRD(&session->context.port, configadr, 0x0300U, sizeof(error_block),
                           error_block, EC_TIMEOUTRET);
-        if (session->exchange == 1U)
-        {
-            fprintf(stderr, "[P4.4 DEBUG] Axis %zu: ecx_FPRD wkc=%d\n", axis, wkc);
-        }
         if (wkc > 0)
         {
             session->axes[axis].error_counters_read = true;
@@ -121,6 +117,22 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
             session->axes[axis].pdi_error_counter = error_block[13];
             session->axes[axis].pdi_error_code = error_block[14];
             /* 0x0310 lost_link_counter 是独立寄存器，当前跳过读取。后续可扩展。 */
+
+            /* 首周期输出解析后的错误计数器值 */
+            if (session->exchange == 1U)
+            {
+                uint16_t rx_p0 = ((uint16_t)error_block[0]) | (((uint16_t)error_block[1]) << 8);
+                uint16_t rx_p1 = ((uint16_t)error_block[2]) | (((uint16_t)error_block[3]) << 8);
+                uint16_t rx_p2 = ((uint16_t)error_block[4]) | (((uint16_t)error_block[5]) << 8);
+                uint16_t rx_p3 = ((uint16_t)error_block[6]) | (((uint16_t)error_block[7]) << 8);
+                fprintf(stderr, "[P4.4] 从站 %zu 错误计数器: "
+                        "RX[P0=%u P1=%u P2=%u P3=%u] "
+                        "FwdRX[P0=%u P1=%u P2=%u P3=%u] "
+                        "EPU=%u PDI=%u PDI_code=0x%02X\n",
+                        axis + 1U, rx_p0, rx_p1, rx_p2, rx_p3,
+                        error_block[8], error_block[9], error_block[10], error_block[11],
+                        error_block[12], error_block[13], error_block[14]);
+            }
         }
         else
         {

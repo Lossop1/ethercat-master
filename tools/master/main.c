@@ -397,8 +397,9 @@ int main(int argc, char **argv) {
      * position_scale 在 emaster_control_session_axis_result_t 里，要到会话启动后才就绪，
      * 无法在此处动态推算。demo 正弦波那部分（position_target_source 回调内）用的是
      * axes[0].position_scale，已经集中换算了。此处硬编码为 2° 的 counts 等价值，等 P4
-     * 邮箱通道完成后再考虑通过回调动态更新。 */
-    uint64_t following_error_counts = 2560;  /* 2° @ 16384 enc × 28:1 gear */
+     * 邮箱通道完成后再考虑通过回调动态更新。
+     * P4.3 验证：临时放宽到 200° 以容纳演示正弦波 */
+    uint64_t following_error_counts = 256000;  /* 200° @ 16384 enc × 28:1 gear */
     uint64_t max_step_counts = following_error_counts;
 
     memset(&report, 0, sizeof(report));

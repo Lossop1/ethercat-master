@@ -72,6 +72,11 @@ typedef struct {
     emaster_command_server_t *command_server;
     /* 外部目标双缓冲区：由上层注入，会话不拥有内存。 */
     emaster_external_target_buffer_t *external_target_buffer;
+    /* P4.3: SDO 慢速观测线程 */
+    pthread_t observer_thread;
+    bool observer_thread_created;
+    bool observer_running;
+    pthread_mutex_t observer_mutex;
 } emaster_soem_session_t;
 
 /* 原子更新会话状态并通知应用层；通知回调不得阻塞周期线程 */
@@ -132,5 +137,9 @@ emaster_control_session_status_t emaster_soem_session_switch_motion(
 /* P4.5: 线程安全的错误环访问包装。加锁后调用 ecx_poperror()，保护并发访问。
  * 返回值：true = 成功弹出错误，false = 错误环为空或互斥锁失败。 */
 bool emaster_soem_pop_error_safe(emaster_soem_session_t *session, ec_errort *error);
+
+/* P4.3: SDO 慢速观测线程管理 */
+bool emaster_soem_session_start_observer(emaster_soem_session_t *session);
+void emaster_soem_session_stop_observer(emaster_soem_session_t *session);
 
 #endif

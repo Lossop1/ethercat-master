@@ -120,6 +120,9 @@ static bool stop_process_data(emaster_soem_session_t *session) {
 void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     size_t axis_index;
 
+    /* P4.3: 停止 SDO 慢速观测线程 */
+    emaster_soem_session_stop_observer(session);
+
     if (!session->context_open) {
         return;
     }

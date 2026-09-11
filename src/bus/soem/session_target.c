@@ -35,11 +35,16 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
     }
     *updated = false;
 
-    /* 验证所有轴都在CSP模式 */
+    /* P5.2: 验证所有轴都在支持的模式（CSP/CSV/CST） */
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
-        if (session->plan->axes[axis_index].operation_mode == NULL ||
-            session->plan->axes[axis_index].operation_mode->value != INT8_C(8))
+        int8_t mode;
+        if (session->plan->axes[axis_index].operation_mode == NULL)
+        {
+            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+        }
+        mode = session->plan->axes[axis_index].operation_mode->value;
+        if (mode != INT8_C(8) && mode != INT8_C(9) && mode != INT8_C(10))
         {
             return EMASTER_CONTROL_SESSION_MOTION_INVALID;
         }

@@ -1,6 +1,7 @@
 #include "session_internal.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -370,6 +371,13 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
      * DC-Sync0 从站判定 SM2 输出事件丢失；模式显示直接使用已映射的 TxPDO，
      * 完整 SDO 诊断放在安全停机之后执行。
      */
+
+    /* P4.3: 启动 SDO 慢速观测线程 */
+    if (!emaster_soem_session_start_observer(session))
+    {
+        fprintf(stderr, "[P4.3] 警告：SDO 观测线程启动失败\n");
+    }
+
     return EMASTER_CONTROL_SESSION_OK;
 }
 

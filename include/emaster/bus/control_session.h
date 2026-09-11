@@ -190,6 +190,11 @@ typedef struct
     uint8_t pdi_error_counter;
     uint8_t pdi_error_code;
     uint8_t lost_link_counter[4];
+    /* P4.3: SDO 慢速通道观测数据（非 RT 线程周期读取） */
+    bool sdo_current_read;
+    int16_t sdo_current_6078h;
+    uint64_t sdo_read_count;
+    uint64_t sdo_read_time_us;
     emaster_dc_axis_result_t dc;
     /* 每个物理从站单独保存周期时序统计，传播延迟不能在多轴间混合。 */
     emaster_cyclic_timing_stats_t timing;
