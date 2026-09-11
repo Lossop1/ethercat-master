@@ -169,6 +169,63 @@ static bool write_position_scale(FILE *stream,
                scale->gear_motor_revolutions, scale->gear_shaft_revolutions) >= 0;
 }
 
+/*
+ * 输出一个分位点。落在量程外时不编造数值，只标记方向，让读者去看 ranges 的极值。
+ * 桶宽同时给出，因为分位点的分辨率就是桶宽，不是精确值。
+ */
+static bool write_quantile(FILE *stream, const char *name,
+                           const emaster_cyclic_histogram_t *histogram,
+                           uint64_t numerator, uint64_t denominator)
+{
+    emaster_cyclic_histogram_quantile_t quantile =
+        emaster_cyclic_histogram_quantile(histogram, numerator, denominator);
+
+    REQUIRE_WRITE(fprintf(stream, "\"%s\":", name) >= 0);
+    if (!quantile.present)
+    {
+        REQUIRE_WRITE(fputs("null", stream) != EOF);
+        return true;
+    }
+    if (quantile.below_range)
+    {
+        REQUIRE_WRITE(fputs("{\"below_range\":true}", stream) != EOF);
+        return true;
+    }
+    if (quantile.above_range)
+    {
+        REQUIRE_WRITE(fputs("{\"above_range\":true}", stream) != EOF);
+        return true;
+    }
+    REQUIRE_WRITE(fprintf(stream,
+                          "{\"lower_ns\":%" PRId64 ",\"upper_ns\":%" PRId64 "}",
+                          quantile.lower_bound_ns, quantile.upper_bound_ns) >= 0);
+    return true;
+}
+
+/* 一个指标的完整分布：四个分位点加量程统计，便于与 baseline 的阈值直接比较。 */
+static bool write_distribution(FILE *stream, const char *name,
+                               const emaster_cyclic_histogram_t *histogram)
+{
+    REQUIRE_WRITE(fprintf(stream, "\"%s\":{", name) >= 0);
+    REQUIRE_WRITE(write_quantile(stream, "p50", histogram, 500U, 1000U));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_quantile(stream, "p99", histogram, 990U, 1000U));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_quantile(stream, "p99_9", histogram, 9990U, 10000U));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_quantile(stream, "p99_999", histogram, 999990U, 1000000U));
+    REQUIRE_WRITE(fprintf(stream,
+                          ",\"bucket_width_ns\":%" PRId64
+                          ",\"origin_ns\":%" PRId64
+                          ",\"samples\":%" PRIu64
+                          ",\"underflow\":%" PRIu64
+                          ",\"overflow\":%" PRIu64 "}",
+                          histogram->bucket_width_ns, histogram->origin_ns,
+                          histogram->sample_count, histogram->underflow_count,
+                          histogram->overflow_count) >= 0);
+    return true;
+}
+
 static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timing)
 {
     REQUIRE_WRITE(fprintf(
@@ -198,7 +255,7 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         "\"last_phase_error_ns\":%" PRId64
         ",\"last_sync0_margin_ns\":%" PRId64
         ",\"last_dc_sample_valid\":%s,"
-        "\"sync0_late_count\":%" PRIu64 "}",
+        "\"sync0_late_count\":%" PRIu64 ",\"distribution\":{",
         timing->has_send_duration ? "true" : "false", timing->min_send_duration_ns,
         timing->max_send_duration_ns, timing->has_round_trip ? "true" : "false",
         timing->min_round_trip_ns, timing->max_round_trip_ns,
@@ -211,6 +268,25 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         timing->last_phase_error_ns, timing->last_sync0_margin_ns,
         timing->last_dc_sample_valid ? "true" : "false",
         timing->sync0_late_count) >= 0);
+    REQUIRE_WRITE(write_distribution(stream, "send_duration_ns",
+                                     &timing->send_duration_histogram));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_distribution(stream, "round_trip_ns",
+                                     &timing->round_trip_histogram));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_distribution(stream, "send_lateness_ns",
+                                     &timing->send_lateness_histogram));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_distribution(stream, "dc_arrival_phase_ns",
+                                     &timing->dc_arrival_phase_histogram));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_distribution(stream, "phase_error_ns",
+                                     &timing->phase_error_histogram));
+    REQUIRE_WRITE(fputc(',', stream) != EOF);
+    REQUIRE_WRITE(write_distribution(stream, "sync0_margin_ns",
+                                     &timing->sync0_margin_histogram));
+    /* close "distribution" and the timing object */
+    REQUIRE_WRITE(fputs("}}", stream) != EOF);
     return true;
 }
 

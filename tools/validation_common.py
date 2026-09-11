@@ -53,7 +53,9 @@ def validate_hex_value(
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    # utf-8-sig 同时接受带 BOM 与不带 BOM：Windows 编辑器默认写 BOM，
+    # 用 utf-8 会让配置文件被正常保存后就无法读取。
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(value, dict):
         raise ValueError(f"{path} 必须包含 JSON 对象")
     return value

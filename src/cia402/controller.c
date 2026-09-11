@@ -15,16 +15,18 @@ enum
     EMASTER_CIA402_STATUS_FAULT_REACTION_ACTIVE = 0x000FU,
     EMASTER_CIA402_STATUS_FAULT = 0x0008U,
     EMASTER_CIA402_CONTROL_DISABLE_VOLTAGE = 0x0000U,
+    EMASTER_CIA402_CONTROL_QUICK_STOP = 0x0002U,
     EMASTER_CIA402_CONTROL_SHUTDOWN = 0x0006U,
     EMASTER_CIA402_CONTROL_SWITCH_ON = 0x0007U,
     EMASTER_CIA402_CONTROL_ENABLE_OPERATION = 0x000FU,
-    EMASTER_CIA402_CONTROL_FAULT_RESET = 0x0080U
+    EMASTER_CIA402_CONTROL_FAULT_RESET = 0x0080U,
+    EMASTER_CIA402_CONTROL_HALT_BIT = 0x0100U
 };
 
 static bool goal_is_valid(emaster_cia402_goal_t goal)
 {
     return goal >= EMASTER_CIA402_GOAL_SAFE_STOP &&
-           goal <= EMASTER_CIA402_GOAL_OPERATION_ENABLED;
+           goal <= EMASTER_CIA402_GOAL_QUICK_STOP;
 }
 
 bool emaster_cia402_decode_status_word(uint16_t status_word,
@@ -103,6 +105,8 @@ static bool goal_reached(emaster_cia402_goal_t goal, emaster_cia402_state_t stat
             return state == EMASTER_CIA402_STATE_SWITCHED_ON;
         case EMASTER_CIA402_GOAL_OPERATION_ENABLED:
             return state == EMASTER_CIA402_STATE_OPERATION_ENABLED;
+        case EMASTER_CIA402_GOAL_QUICK_STOP:
+            return state == EMASTER_CIA402_STATE_QUICK_STOP_ACTIVE;
     }
     return false;
 }
@@ -122,6 +126,22 @@ static uint16_t control_word_for_goal(emaster_cia402_goal_t goal,
             return EMASTER_CIA402_CONTROL_SHUTDOWN;
         }
         return EMASTER_CIA402_CONTROL_DISABLE_VOLTAGE;
+    }
+    if (goal == EMASTER_CIA402_GOAL_QUICK_STOP)
+    {
+        /* Quick Stop：bit2=0 触发；驱动器自行减速并进入 Quick Stop Active。
+         * 目标达到后保持在此状态；恢复需由上层将目标改为 OPERATION_ENABLED。 */
+        if (state == EMASTER_CIA402_STATE_OPERATION_ENABLED)
+        {
+            return EMASTER_CIA402_CONTROL_QUICK_STOP;
+        }
+        if (state == EMASTER_CIA402_STATE_QUICK_STOP_ACTIVE)
+        {
+            /* 已到位，保持 Quick Stop Active */
+            return EMASTER_CIA402_CONTROL_QUICK_STOP;
+        }
+        /* 其它状态走正常上电路径，到 OPERATION_ENABLED 后再触发 */
+        return control_word_for_goal(EMASTER_CIA402_GOAL_OPERATION_ENABLED, state);
     }
     switch (state)
     {
@@ -220,5 +240,23 @@ bool emaster_cia402_controller_step(emaster_cia402_controller_t *controller,
     }
     controller->fault_reset_requested = false;
     output->control_word = control_word_for_goal(controller->goal, state);
+    /* Halt 叠加：只在 OPERATION_ENABLED 状态下有意义；其它状态由 control_word_for_goal
+     * 决定优先动作（上电或 Quick Stop），halt_active 不干预。 */
+    if (controller->halt_active &&
+        state == EMASTER_CIA402_STATE_OPERATION_ENABLED &&
+        controller->goal == EMASTER_CIA402_GOAL_OPERATION_ENABLED)
+    {
+        output->control_word = (uint16_t)(output->control_word |
+                                          EMASTER_CIA402_CONTROL_HALT_BIT);
+    }
     return true;
+}
+
+void emaster_cia402_controller_set_halt(emaster_cia402_controller_t *controller,
+                                        bool active)
+{
+    if (controller != NULL)
+    {
+        controller->halt_active = active;
+    }
 }

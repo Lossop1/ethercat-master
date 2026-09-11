@@ -300,7 +300,7 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
-    documents = [json.loads(path.read_text(encoding="utf-8")) for path in args.input]
+    documents = [json.loads(path.read_text(encoding="utf-8-sig")) for path in args.input]
     output = generate(documents)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(output, encoding="utf-8", newline="\n")

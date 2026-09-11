@@ -19,6 +19,11 @@ jobs:
       - name: 安装分析工具
         run: sudo apt-get update && sudo apt-get install -y cppcheck ninja-build
 
+      # 配置一致性门槛。放在构建之前：跨层引用错误比编译失败更廉价，应当快速失败。
+      # 悬空的 motion_profile_id 之类的错误不一定会让生成器报错，因此必须显式校验。
+      - name: 校验配置
+        run: python3 tools/validate_project.py
+
       - name: 配置
         run: cmake --preset linux-debug
 

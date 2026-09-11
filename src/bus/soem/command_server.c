@@ -227,6 +227,29 @@ static void *listen_thread(void *arg)
         {
             command.type = EMASTER_COMMAND_SHUTDOWN;
         }
+        else if (bytes_read >= 10 && strncmp(buffer, "quick_stop", 10) == 0 &&
+                 (buffer[10] == '\n' || buffer[10] == '\0'))
+        {
+            command.type = EMASTER_COMMAND_QUICK_STOP;
+        }
+        else if (bytes_read >= 5 && strncmp(buffer, "halt ", 5) == 0)
+        {
+            command.type = EMASTER_COMMAND_HALT;
+            size_t payload_start = 5U;
+            size_t payload_len = (size_t)bytes_read - payload_start;
+            if (payload_len >= sizeof(command.payload))
+            {
+                payload_len = sizeof(command.payload) - 1U;
+            }
+            memcpy(command.payload, buffer + payload_start, payload_len);
+            command.payload[payload_len] = '\0';
+            command.payload[strcspn(command.payload, "\n")] = '\0';
+        }
+        else if (bytes_read >= 11 && strncmp(buffer, "fault_reset", 11) == 0 &&
+                 (buffer[11] == '\n' || buffer[11] == '\0'))
+        {
+            command.type = EMASTER_COMMAND_FAULT_RESET;
+        }
         else
         {
             command.type = EMASTER_COMMAND_INVALID;

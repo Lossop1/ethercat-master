@@ -6,7 +6,7 @@ static bool controller_is_valid(const emaster_cia402_controller_t *controller)
 {
     return controller != NULL &&
            controller->goal >= EMASTER_CIA402_GOAL_SAFE_STOP &&
-           controller->goal <= EMASTER_CIA402_GOAL_OPERATION_ENABLED;
+           controller->goal <= EMASTER_CIA402_GOAL_QUICK_STOP;
 }
 
 static void clear_outputs(emaster_cia402_output_t *outputs, size_t axis_count)

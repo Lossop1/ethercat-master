@@ -24,7 +24,10 @@ typedef enum
     EMASTER_CIA402_GOAL_SAFE_STOP = 0,
     EMASTER_CIA402_GOAL_READY_TO_SWITCH_ON,
     EMASTER_CIA402_GOAL_SWITCHED_ON,
-    EMASTER_CIA402_GOAL_OPERATION_ENABLED
+    EMASTER_CIA402_GOAL_OPERATION_ENABLED,
+    /* 主动触发 Quick Stop：向驱动器发 0x0002，使其进入 Quick Stop Active 状态。
+     * 驱动器自行执行减速；恢复时将目标改回 OPERATION_ENABLED。 */
+    EMASTER_CIA402_GOAL_QUICK_STOP
 } emaster_cia402_goal_t;
 
 /* 状态机只保存单轴的确定性控制状态，不拥有任何配置或过程数据缓冲区。 */
@@ -32,6 +35,9 @@ typedef struct
 {
     emaster_cia402_goal_t goal;
     bool fault_reset_requested;
+    /* Halt 位（控制字 bit8）：置位时在 Enable Operation 控制字上叠加 0x0100，
+     * 驱动器减速至零后保持使能；清零后恢复跟随目标。持续有效，非单次脉冲。 */
+    bool halt_active;
 } emaster_cia402_controller_t;
 
 /* 每周期输出的控制字规划结果；调用者负责把控制字编码到已确认的 RxPDO。 */
@@ -69,6 +75,11 @@ bool emaster_cia402_controller_set_goal(emaster_cia402_controller_t *controller,
 /* 请求下一次观察到 Fault 时发送一个周期的标准故障复位脉冲。 */
 void emaster_cia402_controller_request_fault_reset(
     emaster_cia402_controller_t *controller);
+
+/* 设置或清除 Halt 位（控制字 bit8）。置位后驱动器减速至零并保持使能；
+ * 清零后恢复跟随目标。持续有效，非单次脉冲。 */
+void emaster_cia402_controller_set_halt(emaster_cia402_controller_t *controller,
+                                        bool active);
 
 /*
  * 按当前状态字规划一个周期的控制字。该函数不自动推进目标、不处理超时、不读取时钟，

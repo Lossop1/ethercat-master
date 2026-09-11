@@ -547,24 +547,73 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             response.success = true;
                             break;
 
+                        case EMASTER_COMMAND_QUICK_STOP: {
+                            size_t axis_idx;
+                            for (axis_idx = 0U; axis_idx < session->plan->axis_count; ++axis_idx)
+                            {
+                                emaster_cia402_controller_set_goal(
+                                    &session->controllers[axis_idx],
+                                    EMASTER_CIA402_GOAL_QUICK_STOP);
+                            }
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "quick stop requested for %zu axes",
+                                session->plan->axis_count);
+                            response.success = true;
+                            break;
+                        }
+
+                        case EMASTER_COMMAND_HALT: {
+                            bool activate = (command.payload[0] == '1');
+                            size_t axis_idx;
+                            for (axis_idx = 0U; axis_idx < session->plan->axis_count; ++axis_idx)
+                            {
+                                emaster_cia402_controller_set_halt(
+                                    &session->controllers[axis_idx], activate);
+                            }
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "halt %s for %zu axes",
+                                activate ? "set" : "cleared",
+                                session->plan->axis_count);
+                            response.success = true;
+                            break;
+                        }
+
+                        case EMASTER_COMMAND_FAULT_RESET: {
+                            size_t axis_idx;
+                            for (axis_idx = 0U; axis_idx < session->plan->axis_count; ++axis_idx)
+                            {
+                                emaster_cia402_controller_request_fault_reset(
+                                    &session->controllers[axis_idx]);
+                            }
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "fault reset requested for %zu axes",
+                                session->plan->axis_count);
+                            response.success = true;
+                            break;
+                        }
+
                         case EMASTER_COMMAND_SET_EXTERNAL_TARGET: {
-                            /* 外部位置目标命令：解析并更新全局外部目标 */
-                            extern int external_targets_available;
-                            extern int32_t external_target_positions[];
-                            extern size_t external_axis_count;
-                            extern pthread_mutex_t external_targets_mutex;
+                            /* 外部位置目标命令：解析并更新注入的目标缓冲区 */
+                            emaster_external_target_buffer_t *buf = session->external_target_buffer;
 
                             char *token;
                             char *saveptr;
                             char payload_copy[256];
                             size_t count = 0;
-                            int32_t positions[16];  /* 假设最多16轴 */
+                            int32_t positions[EMASTER_EXTERNAL_TARGET_MAX_AXES];
+
+                            if (buf == NULL) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "ERROR|No external target buffer configured");
+                                response.success = false;
+                                break;
+                            }
 
                             strncpy(payload_copy, command.payload, sizeof(payload_copy) - 1);
                             payload_copy[sizeof(payload_copy) - 1] = '\0';
 
                             token = strtok_r(payload_copy, " \t", &saveptr);
-                            while (token != NULL && count < 16) {
+                            while (token != NULL && count < EMASTER_EXTERNAL_TARGET_MAX_AXES) {
                                 char *endptr;
                                 long val = strtol(token, &endptr, 10);
                                 /* 检查转换错误：非空字符串、完全转换、范围有效 */
@@ -579,18 +628,24 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 token = strtok_r(NULL, " \t", &saveptr);
                             }
 
-                            if (count == external_axis_count && count > 0) {
-                                /* 更新全局变量（加锁保护） */
-                                pthread_mutex_lock(&external_targets_mutex);
-                                memcpy((void*)external_target_positions, positions, count * sizeof(int32_t));
-                                external_targets_available = 1;
-                                pthread_mutex_unlock(&external_targets_mutex);
+                            if (count == buf->axis_count && count > 0) {
+                                struct timespec ts_cmd;
+                                uint64_t cmd_time_ns = 0U;
+                                if (clock_gettime(CLOCK_MONOTONIC, &ts_cmd) == 0) {
+                                    cmd_time_ns = (uint64_t)ts_cmd.tv_sec * UINT64_C(1000000000) +
+                                                  (uint64_t)ts_cmd.tv_nsec;
+                                }
+                                pthread_mutex_lock(&buf->mutex);
+                                memcpy(buf->positions, positions, count * sizeof(int32_t));
+                                buf->available = 1;
+                                buf->last_update_ns = cmd_time_ns;
+                                pthread_mutex_unlock(&buf->mutex);
                                 (void)snprintf(response.message, sizeof(response.message),
                                     "OK|Updated %zu external targets", count);
                                 response.success = true;
                             } else {
                                 (void)snprintf(response.message, sizeof(response.message),
-                                    "ERROR|Wrong count: expected %zu, got %zu", external_axis_count, count);
+                                    "ERROR|Wrong count: expected %zu, got %zu", buf->axis_count, count);
                                 response.success = false;
                             }
                             break;

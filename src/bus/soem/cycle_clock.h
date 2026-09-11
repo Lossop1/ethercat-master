@@ -17,6 +17,7 @@ typedef struct
     int64_t integral_error_ns;
     int64_t correction_ns;
     int64_t phase_error_ns;
+    uint32_t consecutive_deadline_misses;
     bool initialized;
     bool dc_feedback_valid;
     bool deadline_missed;
@@ -46,5 +47,12 @@ bool emaster_cycle_clock_observe_dc(emaster_cycle_clock_t *clock,
 
 /* 返回最近一次有效 DC 样本相对目标相位的有符号误差。 */
 int64_t emaster_cycle_clock_phase_error_ns(const emaster_cycle_clock_t *clock);
+
+/*
+ * 从死区超时状态中恢复：清除 deadline_missed，将 deadline 前推至最近的未来周期边界。
+ * 仅在调用者确认连续超次数未超阈值后调用；consecutive_deadline_misses 保持不变，
+ * 由调用者在后续成功周期中通过 emaster_cycle_clock_wait 返回 true 时自动清零。
+ */
+bool emaster_cycle_clock_recover(emaster_cycle_clock_t *clock);
 
 #endif

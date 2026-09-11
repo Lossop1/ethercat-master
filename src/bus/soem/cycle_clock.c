@@ -147,8 +147,14 @@ bool emaster_cycle_clock_sample(emaster_cycle_clock_t *clock,
     if (*now_ns >= *deadline_ns)
     {
         clock->deadline_missed = true;
+        if (clock->consecutive_deadline_misses < UINT32_MAX)
+        {
+            ++clock->consecutive_deadline_misses;
+        }
         return false;
     }
+    /* 成功完成一个周期，清除连续超时计数。 */
+    clock->consecutive_deadline_misses = 0U;
     return true;
 }
 
@@ -202,4 +208,42 @@ bool emaster_cycle_clock_observe_dc(emaster_cycle_clock_t *clock,
 int64_t emaster_cycle_clock_phase_error_ns(const emaster_cycle_clock_t *clock)
 {
     return clock != NULL && clock->dc_feedback_valid ? clock->phase_error_ns : 0;
+}
+
+bool emaster_cycle_clock_recover(emaster_cycle_clock_t *clock)
+{
+    struct timespec now;
+    uint64_t now_ns;
+    uint64_t deadline_ns;
+    uint64_t elapsed_cycles;
+
+    if (clock == NULL || !clock->initialized || !clock->deadline_missed)
+    {
+        return false;
+    }
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
+        !timespec_to_ns(&now, &now_ns) ||
+        !timespec_to_ns(&clock->deadline, &deadline_ns))
+    {
+        return false;
+    }
+    /*
+     * 将 deadline 前推至 now 之后的最近周期边界。
+     * DC 积分误差和相位修正值保留，使 PI 环在恢复后不从零重建。
+     */
+    if (now_ns > deadline_ns)
+    {
+        elapsed_cycles = (now_ns - deadline_ns) / (uint64_t)clock->cycle_ns + 1U;
+        if (elapsed_cycles > UINT64_MAX / (uint64_t)clock->cycle_ns)
+        {
+            return false;
+        }
+        if (!timespec_add_ns(&clock->deadline,
+                             (int64_t)(elapsed_cycles * (uint64_t)clock->cycle_ns)))
+        {
+            return false;
+        }
+    }
+    clock->deadline_missed = false;
+    return true;
 }

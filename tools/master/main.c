@@ -1,5 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE
+#define _GNU_SOURCE
 
 #include "console.h"
 #include "emaster/audit/run_report.h"
@@ -7,14 +6,26 @@
 #include "emaster/bus/command_server.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/messages.h"
+#include "emaster/motion/relative_position.h"
 
 #include <math.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
+
+/*
+ * RT 参数：等 P1.4/P1.5 实测抖动数据后，考虑迁移到部署配置。
+ * 优先级 80 是 EtherCAT 主站的常见选择，高于驱动中断（通常 50-60），
+ * 低于看门狗（通常 90+）。绑核 0；如果 Orange Pi 有 CPU 隔离配置，改为隔离核。
+ */
+#define EMASTER_RT_PRIORITY  80
+#define EMASTER_RT_CPU_CORE  0
 
 static volatile sig_atomic_t stop_requested = 0;
 
@@ -29,24 +40,40 @@ static bool application_stop_requested(void *user_data) {
 }
 
 /*
- * 外部位置目标：通过命令服务器更新
- * 非static，允许session_control.c访问
- * 使用互斥锁保护，防止数据竞争
+ * 客户端失活超时：外部目标超过此时间未更新则切换到保持模式（HOLD）。
+ * 200ms = 200 个 1kHz 周期；P2.1 判据要求客户端断开后进入受控停止。
+ * 等 P1.4 长时数据后按需调整，可迁移到部署配置。
  */
-#define MAX_EXTERNAL_AXES 16
-int32_t external_target_positions[MAX_EXTERNAL_AXES] = {0};
-int external_targets_available = 0;
-size_t external_axis_count = 0;
-pthread_mutex_t external_targets_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define EMASTER_EXTERNAL_TARGET_TIMEOUT_NS  UINT64_C(200000000)
+
+/*
+ * 外部目标路径跟随误差上限：2° 输出轴（负载侧）。
+ * P2.2 要求此值非零，否则 session_control.c 中的检查被完全跳过。
+ * 当前硬编码为 2°，P3.3 完成后改为从 plan 的硬件比例参数动态推算。
+ */
+#define EMASTER_EXTERNAL_FOLLOWING_ERROR_DEGREES  2
+
+/*
+ * 外部目标路径单步限幅：相邻两条目标之间的最大增量。
+ * 取值与跟随误差上限相同：目标单步超过该值时驱动器无论如何无法在一个周期内跟上，
+ * 提前拒绝比事后触发 FOLLOWING_ERROR 更清晰。P3.3 完成后应改为从硬件比例参数推算。
+ */
+#define EMASTER_EXTERNAL_MAX_STEP_DEGREES  EMASTER_EXTERNAL_FOLLOWING_ERROR_DEGREES
+
+/* 外部目标双缓冲区：命令线程写入，周期回调读取，互斥锁保护。 */
+static emaster_external_target_buffer_t external_target_buffer = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER
+};
 
 /*
  * 实时位置目标源回调：每个周期被主站调用以获取位置目标。
  *
  * 模式：
- * - 如果 external_targets_available == 1：从 external_target_positions 读取
- * - 否则：生成正弦波（演示/测试模式）
+ * - 如果 buf->available == 1 且未超时：从 buf->positions 读取
+ * - 外部目标超时后：保持上一周期位置（HOLD）
+ * - 从未收到过外部目标：生成正弦波（演示/测试模式）
  *
- * 注意：外部目标由session_control.c中的命令处理代码更新
+ * user_data 指向 emaster_external_target_buffer_t，由 main 注入。
  */
 static emaster_position_target_source_result_t position_target_source(
     uint64_t cycle,
@@ -56,62 +83,150 @@ static emaster_position_target_source_result_t position_target_source(
     size_t target_capacity,
     void *user_data)
 {
+    emaster_external_target_buffer_t *buf = (emaster_external_target_buffer_t *)user_data;
     size_t i;
-    static int32_t initial_positions[16] = {0};
+    static int32_t initial_positions[EMASTER_EXTERNAL_TARGET_MAX_AXES] = {0};
     static int initialized = 0;
     static int last_mode = -1;
+    static uint64_t demo_start_cycle = 0;
+    static int demo_started = 0;
 
     (void)target_capacity;
-    (void)user_data;
 
     /* 首次调用：记录每个轴的初始位置 */
     if (!initialized) {
-        for (i = 0; i < axis_count && i < 16; i++) {
+        for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
             initial_positions[i] = axes[i].actual_position;
         }
         initialized = 1;
         fprintf(stderr, "[INIT] Initial positions:");
-        for (i = 0; i < axis_count && i < 16; i++) {
+        for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
             fprintf(stderr, " [%zu]=%d", i, initial_positions[i]);
         }
         fprintf(stderr, "\n");
     }
 
-    /* 检查是否有外部目标可用（加锁保护） */
-    pthread_mutex_lock(&external_targets_mutex);
-    int has_external_targets = external_targets_available;
-    if (has_external_targets) {
-        /* 从外部缓冲区读取目标 */
-        for (i = 0; i < axis_count && i < MAX_EXTERNAL_AXES; i++) {
-            target_positions[i] = external_target_positions[i];
+    /* 检查是否有外部目标可用（加锁保护），同时检查超时 */
+    int has_external_targets = 0;
+    if (buf != NULL) {
+        pthread_mutex_lock(&buf->mutex);
+        has_external_targets = buf->available;
+        if (has_external_targets) {
+            struct timespec now_ts;
+            if (clock_gettime(CLOCK_MONOTONIC, &now_ts) == 0) {
+                uint64_t now_ns = (uint64_t)now_ts.tv_sec * UINT64_C(1000000000) +
+                                  (uint64_t)now_ts.tv_nsec;
+                if (buf->last_update_ns > 0 &&
+                    now_ns - buf->last_update_ns > EMASTER_EXTERNAL_TARGET_TIMEOUT_NS) {
+                    buf->available = 0;
+                    has_external_targets = 0;
+                }
+            }
+            if (has_external_targets) {
+                for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
+                    target_positions[i] = buf->positions[i];
+                }
+            }
         }
+        pthread_mutex_unlock(&buf->mutex);
     }
-    pthread_mutex_unlock(&external_targets_mutex);
 
     if (has_external_targets) {
-        /* 模式切换日志 */
         if (last_mode != 1) {
             fprintf(stderr, "[MODE] Switched to EXTERNAL control\n");
             last_mode = 1;
         }
+    } else if (last_mode == 1) {
+        /* 刚从外部模式切出：超时或客户端断开，保持上一周期目标 */
+        fprintf(stderr, "[MODE] External target timeout — holding position\n");
+        last_mode = 2;
+        return EMASTER_POSITION_TARGET_SOURCE_HOLD;
+    } else if (last_mode == 2) {
+        /* 持续保持中 */
+        return EMASTER_POSITION_TARGET_SOURCE_HOLD;
     } else {
-        /* 模式切换日志 */
+        /* 从未收到过外部目标：演示正弦波。
+         * 时间基准从首次观察到 OPERATION_ENABLED 时开始，避免上电序列期间累积
+         * 相位偏移——到达 OPERATION_ENABLED 时约耗时 1.2s，sin 偏移已超跟随误差限。
+         * 未到 OPERATION_ENABLED 之前输出初始位置（偏移为零），接管瞬间误差为零。
+         *
+         * P3.3/P3.4：正弦幅值使用负载侧坐标（OUTPUT_SHAFT），与 README 口径一致。
+         * 调用 emaster_motion_angle_to_counts 集中换算，避免工具层硬编码。 */
         if (last_mode != 0) {
             fprintf(stderr, "[MODE] Running DEMO sine wave (no external input)\n");
             last_mode = 0;
         }
-
-        /* 演示模式：生成正弦波 */
-        double time_seconds = (double)cycle * 0.001;
-        double angle_degrees = 180.0 * sin(2.0 * 3.14159265358979323846 * time_seconds / 10.0);
-        int32_t offset_counts = (int32_t)(angle_degrees * 16384.0 / 360.0);
-
-        for (i = 0; i < axis_count && i < 16; i++) {
+        if (!demo_started) {
+            int all_enabled = (axis_count > 0);
+            for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
+                if (axes[i].cia402_state != EMASTER_CIA402_STATE_OPERATION_ENABLED) {
+                    all_enabled = 0;
+                    break;
+                }
+            }
+            if (all_enabled) {
+                demo_start_cycle = cycle;
+                demo_started = 1;
+                fprintf(stderr, "[DEMO] Drive enabled at cycle %llu, sine starts from t=0\n",
+                        (unsigned long long)cycle);
+            }
+        }
+        int32_t offset_counts = 0;
+        if (demo_started && axis_count > 0) {
+            /* 使用第一轴的 position_scale 换算 ±180° → counts（负载侧） */
+            double time_seconds = (double)(cycle - demo_start_cycle) * 0.001;
+            double angle_degrees = 180.0 * sin(2.0 * 3.14159265358979323846 * time_seconds / 10.0);
+            int32_t angle_millidegrees = (int32_t)(angle_degrees * 1000.0);
+            int64_t signed_counts;
+            if (emaster_motion_angle_to_counts(angle_millidegrees,
+                                              EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT,
+                                              &axes[0].position_scale,
+                                              &signed_counts)) {
+                offset_counts = (int32_t)signed_counts;
+            } else {
+                /* 换算失败（position_scale 未就绪或溢出），保持偏移为零 */
+                offset_counts = 0;
+            }
+        }
+        for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
             target_positions[i] = initial_positions[i] + offset_counts;
         }
+        return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
     }
 
     return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
+}
+
+/*
+ * P1.1/P1.2: 锁定内存页，并将调用线程切换到 SCHED_FIFO + 绑核。
+ * 必须在 emaster_soem_control_session 之前调用；失败则拒绝进入 OP。
+ * 优先级和绑核编号见文件顶部宏定义，等 P1.4/P1.5 实测数据后按需调整。
+ */
+static bool install_rt_primitives(void)
+{
+    struct sched_param param;
+    cpu_set_t cpuset;
+
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        perror("mlockall");
+        return false;
+    }
+
+    memset(&param, 0, sizeof(param));
+    param.sched_priority = EMASTER_RT_PRIORITY;
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &param) != 0) {
+        perror("pthread_setschedparam");
+        return false;
+    }
+
+    CPU_ZERO(&cpuset);
+    CPU_SET(EMASTER_RT_CPU_CORE, &cpuset);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset) != 0) {
+        perror("pthread_setaffinity_np");
+        return false;
+    }
+
+    return true;
 }
 
 static bool install_signal_handlers(void) {
@@ -256,7 +371,7 @@ int main(int argc, char **argv) {
     (void)fflush(stdout);
 
     /* 设置轴数量供命令处理使用 */
-    external_axis_count = plan.axis_count;
+    external_target_buffer.axis_count = plan.axis_count;
 
     /* 启动命令服务器 */
     char socket_path[256];
@@ -267,11 +382,40 @@ int main(int argc, char **argv) {
         fprintf(stderr, "命令服务器已启动：%s\n", socket_path);
     }
 
+    /* P1.1/P1.2: 在进入 OP 之前锁定内存并切换到实时调度策略。 */
+    if (!install_rt_primitives()) {
+        fputs("错误：RT 初始化失败（mlockall 或 SCHED_FIFO），拒绝进入 OP\n", stderr);
+        if (cmd_server != NULL) {
+            emaster_command_server_destroy(cmd_server);
+        }
+        free(plan_axes);
+        free(results);
+        return 1;
+    }
+
+    /* P3.3：从 plan 的第一个轴 position_scale 换算跟随误差限制（负载侧角度 → counts） */
+    uint64_t following_error_counts = 2560;  /* 后备值：假设 16384 enc × 28:1 gear */
+    uint64_t max_step_counts = following_error_counts;
+    if (plan.axis_count > 0 && plan_axes[0].position_scale.read_succeeded) {
+        int64_t temp_counts;
+        if (emaster_motion_angle_to_counts(
+                EMASTER_EXTERNAL_FOLLOWING_ERROR_DEGREES * 1000,
+                EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT,
+                &plan_axes[0].position_scale,
+                &temp_counts) && temp_counts > 0) {
+            following_error_counts = (uint64_t)temp_counts;
+            max_step_counts = following_error_counts;
+        }
+    }
+
     memset(&report, 0, sizeof(report));
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.stop_requested = application_stop_requested;
     callbacks.position_target_source = position_target_source;
-    callbacks.position_target_source_user_data = NULL;
+    callbacks.position_target_source_user_data = &external_target_buffer;
+    callbacks.external_target_buffer = &external_target_buffer;
+    callbacks.position_target_max_following_error_counts = following_error_counts;
+    callbacks.position_target_max_step_counts = max_step_counts;
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
                                                   &callbacks, &report);
 

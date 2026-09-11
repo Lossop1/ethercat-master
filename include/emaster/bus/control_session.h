@@ -8,6 +8,7 @@
 #include "emaster/motion/position_target.h"
 #include "emaster/session/session_plan.h"
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -347,6 +348,21 @@ typedef emaster_position_target_source_result_t (*emaster_control_session_positi
     size_t target_capacity,
     void *user_data);
 
+/*
+ * 外部位置目标双缓冲区：由上层（工具或应用）分配和初始化，
+ * 通过 callbacks 注入会话；总线层只持有指针，不拥有内存。
+ * 使用方负责互斥锁的 PTHREAD_MUTEX_INITIALIZER 初始化。
+ */
+#define EMASTER_EXTERNAL_TARGET_MAX_AXES 16U
+
+typedef struct {
+    pthread_mutex_t     mutex;
+    int32_t             positions[EMASTER_EXTERNAL_TARGET_MAX_AXES];
+    uint64_t            last_update_ns;
+    size_t              axis_count;
+    int                 available;
+} emaster_external_target_buffer_t;
+
 /* 应用层回调集中管理，不改变主会话函数签名。 */
 typedef struct
 {
@@ -365,6 +381,16 @@ typedef struct
      * 主站每周期以上一条已写入的目标为基准计算偏差，超限时触发 FOLLOWING_ERROR。
      */
     uint64_t position_target_max_following_error_counts;
+    /*
+     * 位置目标来源回调路径的可选单步限幅。限制相邻两条目标之间的最大增量（原始位置计数），
+     * 防止外部目标发生任意大跳变；0 表示不启用。超限时拒绝本条目标并触发 MOTION_INVALID。
+     */
+    uint64_t position_target_max_step_counts;
+    /*
+     * 外部目标双缓冲区：由调用方分配并用 PTHREAD_MUTEX_INITIALIZER 初始化，
+     * 生命期须覆盖整个会话；NULL 表示本次会话不使用外部目标通道。
+     */
+    emaster_external_target_buffer_t *external_target_buffer;
 } emaster_control_session_callbacks_t;
 
 /*

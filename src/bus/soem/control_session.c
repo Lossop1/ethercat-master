@@ -210,6 +210,9 @@ emaster_control_session_status_t emaster_soem_control_session(
         session->position_target_source_user_data = callbacks->position_target_source_user_data;
         session->position_target_max_following_error_counts =
             callbacks->position_target_max_following_error_counts;
+        session->position_target_max_step_counts =
+            callbacks->position_target_max_step_counts;
+        session->external_target_buffer = callbacks->external_target_buffer;
     }
     session->transition_cycles =
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /

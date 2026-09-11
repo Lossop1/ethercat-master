@@ -73,10 +73,29 @@ static void update_signed_range(bool *present, int64_t *minimum,
 
 void emaster_cyclic_timing_stats_init(emaster_cyclic_timing_stats_t *stats)
 {
-    if (stats != NULL)
+    if (stats == NULL)
     {
-        memset(stats, 0, sizeof(*stats));
+        return;
     }
+    memset(stats, 0, sizeof(*stats));
+    emaster_cyclic_histogram_init(&stats->send_duration_histogram,
+                                  EMASTER_TIMING_SEND_DURATION_ORIGIN_NS,
+                                  EMASTER_TIMING_SEND_DURATION_BUCKET_NS);
+    emaster_cyclic_histogram_init(&stats->round_trip_histogram,
+                                  EMASTER_TIMING_ROUND_TRIP_ORIGIN_NS,
+                                  EMASTER_TIMING_ROUND_TRIP_BUCKET_NS);
+    emaster_cyclic_histogram_init(&stats->send_lateness_histogram,
+                                  EMASTER_TIMING_SEND_LATENESS_ORIGIN_NS,
+                                  EMASTER_TIMING_SEND_LATENESS_BUCKET_NS);
+    emaster_cyclic_histogram_init(&stats->dc_arrival_phase_histogram,
+                                  EMASTER_TIMING_DC_PHASE_ORIGIN_NS,
+                                  EMASTER_TIMING_DC_PHASE_BUCKET_NS);
+    emaster_cyclic_histogram_init(&stats->phase_error_histogram,
+                                  EMASTER_TIMING_PHASE_ERROR_ORIGIN_NS,
+                                  EMASTER_TIMING_PHASE_ERROR_BUCKET_NS);
+    emaster_cyclic_histogram_init(&stats->sync0_margin_histogram,
+                                  EMASTER_TIMING_SYNC0_MARGIN_ORIGIN_NS,
+                                  EMASTER_TIMING_SYNC0_MARGIN_BUCKET_NS);
 }
 
 bool emaster_cyclic_timing_stats_record(
@@ -91,6 +110,7 @@ bool emaster_cyclic_timing_stats_record(
     int64_t arrival_phase_ns;
     int64_t sync0_phase_ns;
     int64_t sync0_margin_ns;
+    int64_t phase_error_ns;
 
     if (stats == NULL || observation == NULL || cycle_ns == 0U ||
         target_phase_ns >= cycle_ns || observation->exchange == 0U)
@@ -147,6 +167,15 @@ bool emaster_cyclic_timing_stats_record(
                               &stats->max_round_trip_ns, round_trip);
         update_signed_range(&stats->has_send_lateness, &stats->min_send_lateness_ns,
                             &stats->max_send_lateness_ns, send_lateness);
+        /*
+         * 两个耗时量在此处已保证不超过 INT64_MAX：它们由同一时基的差值得到，
+         * 且上面已拒绝了终点早于起点的样本。
+         */
+        emaster_cyclic_histogram_record(&stats->send_duration_histogram,
+                                        (int64_t)send_duration);
+        emaster_cyclic_histogram_record(&stats->round_trip_histogram,
+                                        (int64_t)round_trip);
+        emaster_cyclic_histogram_record(&stats->send_lateness_histogram, send_lateness);
     }
     if (!observation->dc_time_valid)
     {
@@ -170,15 +199,17 @@ bool emaster_cyclic_timing_stats_record(
      */
     sync0_margin_ns =
         centered_difference(sync0_phase_ns, arrival_phase_ns, cycle_ns);
+    phase_error_ns = centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns);
     update_signed_range(&stats->has_dc_phase, &stats->min_dc_arrival_phase_ns,
                         &stats->max_dc_arrival_phase_ns, arrival_phase_ns);
     update_signed_range(&stats->has_phase_error, &stats->min_phase_error_ns,
-                        &stats->max_phase_error_ns,
-                        centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns));
+                        &stats->max_phase_error_ns, phase_error_ns);
     update_signed_range(&stats->has_sync0_margin, &stats->min_sync0_margin_ns,
                         &stats->max_sync0_margin_ns, sync0_margin_ns);
-    stats->last_phase_error_ns =
-        centered_difference(arrival_phase_ns, target_phase_ns, cycle_ns);
+    emaster_cyclic_histogram_record(&stats->dc_arrival_phase_histogram, arrival_phase_ns);
+    emaster_cyclic_histogram_record(&stats->phase_error_histogram, phase_error_ns);
+    emaster_cyclic_histogram_record(&stats->sync0_margin_histogram, sync0_margin_ns);
+    stats->last_phase_error_ns = phase_error_ns;
     stats->last_sync0_margin_ns = sync0_margin_ns;
     stats->last_dc_sample_valid = true;
     if (sync0_margin_ns < 0 && stats->sync0_late_count != UINT64_MAX)

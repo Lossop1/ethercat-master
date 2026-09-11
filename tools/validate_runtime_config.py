@@ -609,9 +609,9 @@ def validate_deployments(
     operations: dict[str, dict[str, Any]],
     motions: dict[str, dict[str, Any]],
 ) -> None:
-    """校验物理部署引用、候选运行方案及同一网口的唯一占用。"""
+    """校验物理部署引用、候选运行方案及审计报告路径的唯一占用。"""
     deployment_ids: set[str] = set()
-    occupied_interfaces: set[tuple[str, str]] = set()
+    occupied_report_paths: set[str] = set()
     for deployment in deployments:
         deployment_id_value = deployment.get("deployment_id")
         hostname_value = deployment.get("hostname")
@@ -747,13 +747,15 @@ def validate_deployments(
                     f"部署 {deployment_id} 的运动方案必须完整覆盖拓扑中的全部轴",
                 )
 
-        # 网口名只在部署层有意义；用主机和接口组成物理资源唯一键。
-        occupancy = (hostname, interface)
+        # 同一主机和 EtherCAT 网口允许出现多条部署记录：它们是互斥的启动方案，
+        # 一次只能运行一个，物理独占由运行时抢占网卡自然保证，不是静态可判定的冲突。
+        # 静态可判定的风险是不同方案的审计报告互相覆盖，因此约束报告路径唯一。
+        report_path = run_report_path if non_empty_string(run_report_path) else ""
         check.require(
-            not hostname or not interface or occupancy not in occupied_interfaces,
-            f"主机 {hostname} 的接口 {interface} 被多个部署重复占用",
+            not report_path or report_path not in occupied_report_paths,
+            f"部署 {deployment_id} 的 run_report_path 与其它部署重复：{report_path}",
         )
         if deployment_id:
             deployment_ids.add(deployment_id)
-        if hostname and interface:
-            occupied_interfaces.add(occupancy)
+        if report_path:
+            occupied_report_paths.add(report_path)

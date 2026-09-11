@@ -17,12 +17,15 @@ typedef struct emaster_command_server emaster_command_server_t;
 /* 命令类型：定义主站运行期间支持的操作 */
 typedef enum {
     EMASTER_COMMAND_INVALID = 0,
-    EMASTER_COMMAND_QUERY_STATUS,      /* 查询当前状态 */
-    EMASTER_COMMAND_QUERY_TOPOLOGY,    /* 查询拓扑和参数 */
-    EMASTER_COMMAND_SWITCH_MOTION,     /* 切换运动轨迹 */
-    EMASTER_COMMAND_STOP_MOTION,       /* 停止运动 */
+    EMASTER_COMMAND_QUERY_STATUS,        /* 查询当前状态 */
+    EMASTER_COMMAND_QUERY_TOPOLOGY,      /* 查询拓扑和参数 */
+    EMASTER_COMMAND_SWITCH_MOTION,       /* 切换运动轨迹 */
+    EMASTER_COMMAND_STOP_MOTION,         /* 停止运动 */
     EMASTER_COMMAND_SET_EXTERNAL_TARGET, /* 设置外部位置目标 */
-    EMASTER_COMMAND_SHUTDOWN           /* 请求优雅关闭 */
+    EMASTER_COMMAND_SHUTDOWN,            /* 请求优雅关闭 */
+    EMASTER_COMMAND_QUICK_STOP,          /* 触发全轴 Quick Stop（控制字 0x0002） */
+    EMASTER_COMMAND_HALT,                /* 设置全轴 Halt 位（控制字 bit8），payload: "1"=置位 "0"=清零 */
+    EMASTER_COMMAND_FAULT_RESET,         /* 触发全轴 Fault Reset（控制字 0x0080） */
 } emaster_command_type_t;
 
 /* 命令结构：封装命令类型和参数 */

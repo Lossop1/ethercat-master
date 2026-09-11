@@ -71,17 +71,20 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
             return EMASTER_CONTROL_SESSION_MOTION_INVALID;
         }
 
-        /* 速率限制检查：防止过大跳变（可选，不阻止执行） */
-        if (session->report->cycle_count > 0U)
+        /* 单步限幅检查：拒绝相邻两条目标差超过阈值的命令。
+         * 必须与主站上一次写出的目标（607A 历史）比较，而非 PDO 读回的 6064。
+         * position_target_committed 为 false 时（首条目标尚未提交），target_positions
+         * 尚无有效历史基准，跳过检查；驱动器使能可能在任意周期才完成，
+         * 不能用 cycle_count > 0 代替。 */
+        if (session->position_target_max_step_counts > 0U &&
+            session->position_target_committed)
         {
             int64_t delta = (int64_t)target -
-                           (int64_t)session->axes[axis_index].target_position;
-            /* 启发式：允许10倍周期速度的跳变 */
-            int64_t max_jump = 16384; /* ~1圈，根据实际调整 */
-            if (delta > max_jump || delta < -max_jump)
+                            (int64_t)session->target_positions[axis_index];
+            uint64_t abs_delta = (uint64_t)(delta < 0 ? -delta : delta);
+            if (abs_delta > session->position_target_max_step_counts)
             {
-                /* 大跳变：记录但不阻止（可能是有意的） */
-                /* fprintf(stderr, "大跳变警告: 轴%zu delta=%lld\n", axis_index, delta); */
+                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
             }
         }
     }
@@ -101,6 +104,7 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
     /* 状态提交：仅在所有硬件写入成功后更新会话状态 */
     memcpy(session->target_positions, session->position_target_source_targets,
            session->plan->axis_count * sizeof(*session->target_positions));
+    session->position_target_committed = true;
 
     *updated = true;
     return EMASTER_CONTROL_SESSION_OK;

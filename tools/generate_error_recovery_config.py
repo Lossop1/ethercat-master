@@ -16,7 +16,7 @@ def c_string(value: str) -> str:
 
 def load_policy(path: Path) -> dict[str, Any]:
     """加载并验证错误恢复策略 JSON 文件。"""
-    with path.open("r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8-sig") as f:
         policy = json.load(f)
 
     # 基本验证

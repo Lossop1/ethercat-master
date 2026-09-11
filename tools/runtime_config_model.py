@@ -11,7 +11,7 @@ def load_documents(paths: list[Path], kind: str) -> list[dict[str, Any]]:
     """按传入顺序读取 JSON 对象，输入错误直接使构建失败。"""
     documents: list[dict[str, Any]] = []
     for path in paths:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(document, dict):
             raise ValueError(f"{kind}配置 {path} 必须是 JSON 对象")
         documents.append(document)

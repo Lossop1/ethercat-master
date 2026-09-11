@@ -1,6 +1,8 @@
 #ifndef EMASTER_CYCLIC_TIMING_H
 #define EMASTER_CYCLIC_TIMING_H
 
+#include "emaster/cyclic/histogram.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -19,9 +21,25 @@ typedef struct
     bool wkc_match;
 } emaster_cyclic_timing_observation_t;
 
+/* 各指标的直方图量程。桶宽按该指标的实际量级选，不按周期缩放。 */
+#define EMASTER_TIMING_SEND_DURATION_BUCKET_NS 250
+#define EMASTER_TIMING_SEND_DURATION_ORIGIN_NS 0
+#define EMASTER_TIMING_ROUND_TRIP_BUCKET_NS 1000
+#define EMASTER_TIMING_ROUND_TRIP_ORIGIN_NS 0
+#define EMASTER_TIMING_SEND_LATENESS_BUCKET_NS 1000
+#define EMASTER_TIMING_SEND_LATENESS_ORIGIN_NS (-256000)
+#define EMASTER_TIMING_DC_PHASE_BUCKET_NS 4000
+#define EMASTER_TIMING_DC_PHASE_ORIGIN_NS 0
+#define EMASTER_TIMING_PHASE_ERROR_BUCKET_NS 500
+#define EMASTER_TIMING_PHASE_ERROR_ORIGIN_NS (-128000)
+#define EMASTER_TIMING_SYNC0_MARGIN_BUCKET_NS 1000
+#define EMASTER_TIMING_SYNC0_MARGIN_ORIGIN_NS (-256000)
+
 /*
- * 周期统计只保留边界值和计数，不保存每周期数组。传播延迟用于估算指定从站看到
- * 同一帧的 DC 相位；该值来自 SOEM 的拓扑测量，不是从站 SM2 完成时间戳。
+ * 周期统计保留边界值、计数和定桶直方图，不保存每周期数组。直方图使得
+ * p50/p99/p99.9/p99.999 可在报告阶段推导，而记录本身仍是恒定时间。
+ * 传播延迟用于估算指定从站看到同一帧的 DC 相位；该值来自 SOEM 的拓扑测量，
+ * 不是从站 SM2 完成时间戳。
  */
 typedef struct
 {
@@ -59,6 +77,12 @@ typedef struct
     bool has_phase_error;
     bool has_sync0_margin;
     bool last_dc_sample_valid;
+    emaster_cyclic_histogram_t send_duration_histogram;
+    emaster_cyclic_histogram_t round_trip_histogram;
+    emaster_cyclic_histogram_t send_lateness_histogram;
+    emaster_cyclic_histogram_t dc_arrival_phase_histogram;
+    emaster_cyclic_histogram_t phase_error_histogram;
+    emaster_cyclic_histogram_t sync0_margin_histogram;
 } emaster_cyclic_timing_stats_t;
 
 void emaster_cyclic_timing_stats_init(emaster_cyclic_timing_stats_t *stats);

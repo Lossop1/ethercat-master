@@ -58,6 +58,10 @@ typedef struct {
     int32_t *position_target_source_targets;
     /* 0 表示调用者未启用跟随误差检查；非零时每周期对比实际位置与上一目标。 */
     uint64_t position_target_max_following_error_counts;
+    /* 0 表示调用者未启用单步限幅；非零时拒绝相邻目标差超过此值的命令。 */
+    uint64_t position_target_max_step_counts;
+    /* 至少已成功提交一条外部目标后置 true；用于单步限幅的基准有效性判断。 */
+    bool position_target_committed;
     /* 错误恢复策略配置：从部署配置加载，与业务逻辑解耦 */
     const emaster_error_recovery_policy_t *error_recovery_policy;
     /* WKC 错误恢复计数器 */
@@ -65,6 +69,8 @@ typedef struct {
     uint64_t wkc_total_errors;
     /* 实时命令服务器：运行期间接收外部命令（可选） */
     emaster_command_server_t *command_server;
+    /* 外部目标双缓冲区：由上层注入，会话不拥有内存。 */
+    emaster_external_target_buffer_t *external_target_buffer;
 } emaster_soem_session_t;
 
 /* 原子更新会话状态并通知应用层；通知回调不得阻塞周期线程 */

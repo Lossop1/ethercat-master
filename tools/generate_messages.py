@@ -224,7 +224,7 @@ def main() -> int:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    document = json.loads(args.input.read_text(encoding="utf-8"))
+    document = json.loads(args.input.read_text(encoding="utf-8-sig"))
     if not isinstance(document, dict):
         raise ValueError("消息资源必须是 JSON 对象")
     args.output.parent.mkdir(parents=True, exist_ok=True)
