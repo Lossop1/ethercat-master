@@ -68,7 +68,7 @@ IMU 不在 EtherCAT 链路上，本轮不纳入。
 | P0.2 | CI 不跑配置校验 | 校验进 CI | **已完成** |
 | P0.3 | 时序统计只有 min/max | 输出 p50/p99/p99.9/p99.999 + 直方图 | **已完成** |
 | P0.4 | 缺 `orangepi-stability-test` 部署配置；`orangepi_bench.json` 引用不存在的运动配置 | 配置入库且 validator 通过 | **已完成** |
-| P0.5 | CSP36° 基线只存在于游离提交 | 从当前 main 复现，或明确标注该基线作废 | 待做 |
+| P0.5 | CSP36° 基线只存在于游离提交 | 从当前 main 复现，或明确标注该基线作废 | **已完成（基线作废）** |
 
 ### P0 完成记录
 
@@ -95,6 +95,13 @@ IMU 不在 EtherCAT 链路上，本轮不纳入。
 仓库现为零测试，`tests/` 下只剩三个未跟踪 `.pyc`。该提交声称保留"资料一致性门槛"，
 但那个门槛就是被删的测试 —— 这是 HEAD 验证器失败潜伏 11 天的直接原因。
 按决定不重建夹具框架，`run_report_path` 规则目前无回归保护。
+
+**P0.5**：CSP36° 基线（游离提交 `957e9cd` 等）明确标注作废，不从 main 复现。三条独立原因：
+(1) 全部 sync0_margin 数据早于修复 `6c4ea9d`，旧公式存在回绕假象，修复后无任何新数据；
+(2) 测量时无 RT 保障（mlockall / SCHED_FIFO / CPU 亲和均缺失），抖动量无法归因于总线；
+(3) 产出 schema_version 6 报告的提交是游离提交，当前 main 只发 schema_version 3 且无
+   `tracking_error` 字段，无法复现。
+有效替代基线为 P1.4（2026-09-11，15分钟，deadline_missed=0），见 [[ethercat-csp36-timing-baseline]]。
 
 **P0.4**：`orangepi_bench.json` 的悬空引用随 P0.1 一并修复。
 `orangepi-stability-test` **不新增配置**：该报告生成于 9月9日 05:02，而覆盖同一场景的
