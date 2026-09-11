@@ -182,6 +182,14 @@ typedef struct
     emaster_sync_diagnostic_t sm2_diagnostic;
     emaster_sync_diagnostic_t sm3_diagnostic;
     emaster_position_scale_t position_scale;
+    /* P4.4: 错误计数器（0x0300-0x030F），周期内 FPRD 读取 */
+    bool error_counters_read;
+    uint8_t rx_error_counter[8];
+    uint16_t forwarded_rx_error_counter[4];
+    uint8_t ecat_processing_unit_error_counter;
+    uint8_t pdi_error_counter;
+    uint8_t pdi_error_code;
+    uint8_t lost_link_counter[4];
     emaster_dc_axis_result_t dc;
     /* 每个物理从站单独保存周期时序统计，传播延迟不能在多轴间混合。 */
     emaster_cyclic_timing_stats_t timing;

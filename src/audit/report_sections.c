@@ -396,6 +396,11 @@ static bool write_axis(FILE *stream,
         ",\"operation_enabled_seen\":%s,\"motion_final_position\":%" PRId32
         ",\"max_following_error_counts\":%" PRIu64
         ",\"max_observed_following_error_counts\":%" PRIu64
+        ",\"error_counters_read\":%s"
+        ",\"rx_error_counter\":[%u,%u,%u,%u,%u,%u,%u,%u]"
+        ",\"forwarded_rx_error_counter\":[%u,%u,%u,%u]"
+        ",\"ecat_processing_unit_error_counter\":%u"
+        ",\"pdi_error_counter\":%u,\"pdi_error_code\":%u"
         ",\"final_diagnostic_reads\":%zu,"
         "\"final_diagnostic_successes\":%zu}}",
         axis->safeop_mode_display_sdo_read ? "true" : "false",
@@ -433,6 +438,22 @@ static bool write_axis(FILE *stream,
         axis->operation_enabled_seen ? "true" : "false",
         axis->motion_final_position, axis->max_following_error_counts,
         axis->max_observed_following_error_counts,
+        axis->error_counters_read ? "true" : "false",
+        (unsigned int)axis->rx_error_counter[0],
+        (unsigned int)axis->rx_error_counter[1],
+        (unsigned int)axis->rx_error_counter[2],
+        (unsigned int)axis->rx_error_counter[3],
+        (unsigned int)axis->rx_error_counter[4],
+        (unsigned int)axis->rx_error_counter[5],
+        (unsigned int)axis->rx_error_counter[6],
+        (unsigned int)axis->rx_error_counter[7],
+        (unsigned int)axis->forwarded_rx_error_counter[0],
+        (unsigned int)axis->forwarded_rx_error_counter[1],
+        (unsigned int)axis->forwarded_rx_error_counter[2],
+        (unsigned int)axis->forwarded_rx_error_counter[3],
+        (unsigned int)axis->ecat_processing_unit_error_counter,
+        (unsigned int)axis->pdi_error_counter,
+        (unsigned int)axis->pdi_error_code,
         axis->final_diagnostic_read_count,
         axis->final_diagnostic_success_count) >= 0);
     return true;

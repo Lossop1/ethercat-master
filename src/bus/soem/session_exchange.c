@@ -97,6 +97,31 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED, false);
     }
     session->report->actual_wkc = ecx_receive_processdata(&session->context, EC_TIMEOUTRET);
+
+    /* P4.4: 周期内读取错误计数器（0x0300-0x030F）。
+     * FPRD(slave, address, length) 使用从站物理地址（position）；
+     * 0x0300 起始 16 字节覆盖全部计数器。每个从站独立读取。 */
+    for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
+    {
+        uint16_t slave_position = (uint16_t)(axis + 1U);
+        uint8_t error_block[16];
+        int wkc = ecx_FPRD(&session->context.port, slave_position, 0x0300U, sizeof(error_block),
+                          error_block, EC_TIMEOUTRET);
+        if (wkc > 0)
+        {
+            session->axes[axis].error_counters_read = true;
+            memcpy(session->axes[axis].rx_error_counter, &error_block[0], 8);
+            memcpy(session->axes[axis].forwarded_rx_error_counter, &error_block[8], 8);
+            session->axes[axis].ecat_processing_unit_error_counter = error_block[12];
+            session->axes[axis].pdi_error_counter = error_block[13];
+            session->axes[axis].pdi_error_code = error_block[14];
+            /* 0x0310 lost_link_counter 是独立寄存器，当前跳过读取。后续可扩展。 */
+        }
+        else
+        {
+            session->axes[axis].error_counters_read = false;
+        }
+    }
     if (clock_gettime(CLOCK_MONOTONIC, &receive_end) != 0)
     {
         return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED, true);
