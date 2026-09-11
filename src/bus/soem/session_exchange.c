@@ -107,6 +107,10 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         uint8_t error_block[16];
         int wkc = ecx_FPRD(&session->context.port, slave_position, 0x0300U, sizeof(error_block),
                           error_block, EC_TIMEOUTRET);
+        if (session->exchange == 1U)
+        {
+            fprintf(stderr, "[P4.4 DEBUG] Axis %zu: ecx_FPRD wkc=%d\n", axis, wkc);
+        }
         if (wkc > 0)
         {
             session->axes[axis].error_counters_read = true;
