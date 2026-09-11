@@ -45,6 +45,16 @@ bool emaster_soem_axis_set_target_value(const emaster_session_axis_plan_t *plan,
 /* 所有轴数组在网络周期之前建立，资源即使部分分配失败也由同一出口释放。 */
 static emaster_control_session_status_t allocate_session(emaster_soem_session_t *session) {
     emaster_control_session_status_t status;
+    pthread_mutexattr_t attr;
+
+    /* P4.5: 初始化错误环互斥锁，配置优先级继承以降低优先级反转风险 */
+    if (pthread_mutexattr_init(&attr) != 0 ||
+        pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT) != 0 ||
+        pthread_mutex_init(&session->error_ring_mutex, &attr) != 0) {
+        pthread_mutexattr_destroy(&attr);
+        return EMASTER_CONTROL_SESSION_CONTROLLER_FAILED;
+    }
+    pthread_mutexattr_destroy(&attr);
 
     session->images = calloc(session->plan->axis_count, sizeof(*session->images));
     session->controllers = calloc(session->plan->axis_count, sizeof(*session->controllers));
@@ -92,6 +102,8 @@ static emaster_control_session_status_t allocate_session(emaster_soem_session_t 
 }
 
 static void release_session(emaster_soem_session_t *session) {
+    /* P4.5: 销毁错误环互斥锁 */
+    (void)pthread_mutex_destroy(&session->error_ring_mutex);
     free(session->status_words);
     free(session->motion_axes);
     free(session->velocity_axes);

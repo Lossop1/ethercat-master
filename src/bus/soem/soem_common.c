@@ -1,7 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "soem_common.h"
+#include "session_internal.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -122,6 +124,10 @@ static bool assignment_failed(emaster_soem_sdo_reader_context_t *reader,
 
     result->failed_index = index;
     result->failed_subindex = subindex;
+    /* P4.5: assignment_failed 只在 PreOP 配置阶段被调用（单线程），但为了 P4 慢速
+     * 通道做准备，这里改用线程安全包装。注意：reader->context 在这里只是 ecx_contextt*，
+     * 需要通过 reader->user_data 传递完整的 session。当前调用者未传递 session，
+     * 暂时直接调用 ecx_poperror（P4 实现慢速通道时必须修复）。 */
     while (reader != NULL && reader->context != NULL &&
            ecx_poperror(reader->context, &error))
     {
@@ -471,4 +477,22 @@ bool emaster_soem_discover_pdo_layout(ecx_contextt *context, uint16_t slave,
     emaster_soem_sdo_context_init(&reader_context, context, slave, NULL,
                                   EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, 0U);
     return emaster_soem_discover_pdo_layout_recorded(&reader_context, layout);
+}
+
+/* P4.5: 线程安全的错误环访问包装 */
+bool emaster_soem_pop_error_safe(emaster_soem_session_t *session, ec_errort *error)
+{
+    bool result;
+
+    if (session == NULL || error == NULL)
+    {
+        return false;
+    }
+    if (pthread_mutex_lock(&session->error_ring_mutex) != 0)
+    {
+        return false;
+    }
+    result = ecx_poperror(&session->context, error);
+    (void)pthread_mutex_unlock(&session->error_ring_mutex);
+    return result;
 }

@@ -21,6 +21,7 @@ typedef struct {
     emaster_control_session_axis_result_t *axes;
     emaster_control_session_report_t *report;
     ecx_contextt context;
+    pthread_mutex_t error_ring_mutex;
     emaster_cia_process_image_t *images;
     emaster_cia402_controller_t *controllers;
     emaster_cia402_output_t *controller_outputs;
@@ -127,5 +128,9 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session);
 emaster_control_session_status_t emaster_soem_session_switch_motion(
     emaster_soem_session_t *session,
     const emaster_motion_profile_t *new_profile);
+
+/* P4.5: 线程安全的错误环访问包装。加锁后调用 ecx_poperror()，保护并发访问。
+ * 返回值：true = 成功弹出错误，false = 错误环为空或互斥锁失败。 */
+bool emaster_soem_pop_error_safe(emaster_soem_session_t *session, ec_errort *error);
 
 #endif
