@@ -393,20 +393,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* P3.3：从 plan 的第一个轴 position_scale 换算跟随误差限制（负载侧角度 → counts） */
-    uint64_t following_error_counts = 2560;  /* 后备值：假设 16384 enc × 28:1 gear */
+    /* P3.3：跟随误差限制（负载侧角度）。
+     * position_scale 在 emaster_control_session_axis_result_t 里，要到会话启动后才就绪，
+     * 无法在此处动态推算。demo 正弦波那部分（position_target_source 回调内）用的是
+     * axes[0].position_scale，已经集中换算了。此处硬编码为 2° 的 counts 等价值，等 P4
+     * 邮箱通道完成后再考虑通过回调动态更新。 */
+    uint64_t following_error_counts = 2560;  /* 2° @ 16384 enc × 28:1 gear */
     uint64_t max_step_counts = following_error_counts;
-    if (plan.axis_count > 0 && plan_axes[0].position_scale.read_succeeded) {
-        int64_t temp_counts;
-        if (emaster_motion_angle_to_counts(
-                EMASTER_EXTERNAL_FOLLOWING_ERROR_DEGREES * 1000,
-                EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT,
-                &plan_axes[0].position_scale,
-                &temp_counts) && temp_counts > 0) {
-            following_error_counts = (uint64_t)temp_counts;
-            max_step_counts = following_error_counts;
-        }
-    }
 
     memset(&report, 0, sizeof(report));
     memset(&callbacks, 0, sizeof(callbacks));
