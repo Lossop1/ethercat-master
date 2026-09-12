@@ -778,6 +778,14 @@ def deployment_values(
                 f"部署 {deployment_id} 的 error_recovery_policy_id 必须是非空字符串"
             )
 
+        # P2.5: 故障隔离策略，默认为 global_stop（向后兼容）
+        fault_policy_str = document.get("fault_policy", "global_stop")
+        if fault_policy_str not in ("global_stop", "axis_isolation"):
+            raise ValueError(
+                f"部署 {deployment_id} 的 fault_policy 必须是 'global_stop' 或 'axis_isolation'"
+            )
+        fault_policy_value = 0 if fault_policy_str == "global_stop" else 1
+
         values.append(
             {
                 "id": deployment_id,
@@ -795,6 +803,7 @@ def deployment_values(
                 "operation_profile_ids": operation_profile_ids,
                 "motion_profile_id": motion_profile_id,
                 "error_recovery_policy_id": error_recovery_policy_id,
+                "fault_policy": fault_policy_value,  # P2.5
             }
         )
     return sorted(values, key=lambda item: item["id"])

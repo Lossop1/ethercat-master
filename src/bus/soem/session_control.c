@@ -285,33 +285,38 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         axis_result->mode_command_sdo ==
                             session->plan->axes[axis_index].operation_mode->value;
                 }
-                if (!emaster_session_axis_mode_allows_control(&session->plan->axes[axis_index],
-                                                              mode_control_ready)) {
-                    all_modes_confirmed = false;
-                }
-
-                /* P2.5: 单轴故障检测和隔离 */
+                /* P2.5: 故障检测和处理 - 根据策略选择行为 */
                 bool should_isolate = false;
                 emaster_control_session_status_t axis_health_status =
                     check_axis_health(session, axis_index, &should_isolate);
 
                 if (should_isolate) {
-                    /* 隔离故障轴，但不停止全局运行 */
-                    handle_axis_fault(session, axis_index, axis_health_status);
+                    /* 根据部署配置的故障策略处理 */
+                    if (session->plan->fault_policy == EMASTER_FAULT_POLICY_AXIS_ISOLATION) {
+                        /* 单轴隔离：故障轴进入 Quick-Stop，其他轴继续运行 */
+                        handle_axis_fault(session, axis_index, axis_health_status);
 
-                    /* 第一次故障记录到全局状态（审计用） */
-                    if (safety_status == EMASTER_CONTROL_SESSION_OK) {
-                        safety_status = axis_health_status;
+                        /* 第一次故障记录到全局状态（审计用） */
+                        if (safety_status == EMASTER_CONTROL_SESSION_OK) {
+                            safety_status = axis_health_status;
+                        }
+
+                        /* 跳过此轴后续处理，继续其他轴 */
+                        continue;
+                    } else {
+                        /* 全局停止（默认）：任一轴故障 → 所有轴停止 */
+                        emaster_soem_session_note_runtime_failure(session, axis_health_status, &safety_status);
+                        safety_denied = true;
+                        /* 继续检查其他轴，收集所有故障信息 */
                     }
-
-                    /* 跳过此轴后续处理，继续其他轴 */
-                    continue;
                 }
 
-                /* 已隔离的轴：跳过使能检查 */
+                /* 已隔离的轴：只在 AXIS_ISOLATION 策略下处理恢复 */
                 if (session->axes[axis_index].fault_isolated) {
-                    /* 检查恢复进度 */
-                    check_recovery_progress(session, axis_index);
+                    if (session->plan->fault_policy == EMASTER_FAULT_POLICY_AXIS_ISOLATION) {
+                        /* 检查恢复进度 */
+                        check_recovery_progress(session, axis_index);
+                    }
                     continue;
                 }
 
@@ -364,8 +369,9 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         for (axis_index = 0U;
                              axis_index < session->plan->axis_count; ++axis_index)
                         {
-                            /* P2.5: 跳过已隔离的轴 */
-                            if (session->axes[axis_index].fault_isolated) {
+                            /* P2.5: 轴级隔离策略下跳过已隔离的轴 */
+                            if (session->plan->fault_policy == EMASTER_FAULT_POLICY_AXIS_ISOLATION &&
+                                session->axes[axis_index].fault_isolated) {
                                 continue;
                             }
 
@@ -505,7 +511,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 }
             }
 
-            /* P2.5: 检查是否所有轴都故障 */
+            /* P2.5: 只在轴级隔离策略下检查是否所有轴都故障 */
+            if (session->plan->fault_policy == EMASTER_FAULT_POLICY_AXIS_ISOLATION)
             {
                 size_t healthy_count = 0;
                 for (axis_index = 0; axis_index < session->plan->axis_count; ++axis_index) {

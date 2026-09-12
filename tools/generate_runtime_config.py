@@ -310,6 +310,8 @@ def render_deployments(
             + c_string(deployment["run_report_path"])
             + ", "
             + c_string(deployment["error_recovery_policy_id"])
+            + ", "
+            + f"{deployment['fault_policy']}"  # P2.5: fault_policy 枚举值
             + "}"
         )
     return "\n\n".join(pointer_arrays), ",\n".join(initializers)

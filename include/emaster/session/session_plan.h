@@ -57,6 +57,8 @@ typedef struct
     uint32_t process_data_phase_ns;
     uint32_t dc_startup_cycles;
     const emaster_motion_profile_t *motion_profile;
+    /* P2.5: 故障隔离策略 */
+    emaster_fault_policy_t fault_policy;
 } emaster_session_plan_t;
 
 /*

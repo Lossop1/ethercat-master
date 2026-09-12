@@ -52,6 +52,13 @@ typedef enum
     EMASTER_MOTION_TRAJECTORY_CONSTANT_VELOCITY
 } emaster_motion_trajectory_t;
 
+/* P2.5: 故障隔离策略 */
+typedef enum
+{
+    EMASTER_FAULT_POLICY_GLOBAL_STOP = 0,     /* 任一轴故障 → 全部停止（默认，最安全） */
+    EMASTER_FAULT_POLICY_AXIS_ISOLATION = 1   /* 单轴隔离，其他轴继续运行（实验性） */
+} emaster_fault_policy_t;
+
 typedef struct
 {
     uint16_t index;
@@ -185,6 +192,8 @@ typedef struct
     const char *run_report_path;
     /* 错误恢复策略 ID，引用独立的策略配置；NULL 时使用 "default"。 */
     const char *error_recovery_policy_id;
+    /* P2.5: 故障隔离策略，默认为 GLOBAL_STOP（向后兼容） */
+    emaster_fault_policy_t fault_policy;
 } emaster_deployment_config_t;
 
 /* 以下接口只返回生成目录中的只读对象，调用者不得释放或修改返回值。 */

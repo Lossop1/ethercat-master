@@ -324,6 +324,7 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
     result->process_data_phase_ns = process_data_phase_ns;
     result->dc_startup_cycles = dc_startup_cycles;
     result->motion_profile = deployment->motion_profile;
+    result->fault_policy = deployment->fault_policy;  /* P2.5: 传递故障策略 */
     return result->status;
 }
 
