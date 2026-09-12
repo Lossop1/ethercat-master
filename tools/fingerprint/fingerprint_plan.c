@@ -42,6 +42,16 @@ static const emaster_sdo_request_t common_requests[] = {
     {UINT16_C(0x60C2), UINT8_C(0x01), "interpolation_time_period", EMASTER_SDO_U8},
     {UINT16_C(0x60C2), UINT8_C(0x02), "interpolation_time_index", EMASTER_SDO_I8},
     {UINT16_C(0x6502), UINT8_C(0x00), "supported_drive_modes", EMASTER_SDO_U32},
+    /* 控制环增益参数 (2008h) */
+    {UINT16_C(0x2008), UINT8_C(0x01), "velocity_loop_kp", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x02), "velocity_loop_ki", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x03), "velocity_loop_kd", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x04), "position_loop_kp", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x05), "position_loop_ki", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x06), "position_loop_kd", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x07), "current_loop_kp", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x08), "current_loop_ki", EMASTER_SDO_U16},
+    {UINT16_C(0x2008), UINT8_C(0x09), "current_loop_kd", EMASTER_SDO_U16},
 };
 
 static bool append_request(emaster_sdo_request_t *requests, size_t capacity, size_t *count,

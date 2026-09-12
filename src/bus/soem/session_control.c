@@ -109,6 +109,14 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 {
                     session->axes[axis_index].motor_temperature = session->axes[axis_index].sdo_motor_temp_200b02h;
                 }
+                if (session->axes[axis_index].sdo_motor_speed_read)
+                {
+                    session->axes[axis_index].actual_velocity = session->axes[axis_index].sdo_motor_speed_200b08h;
+                }
+                if (session->axes[axis_index].sdo_speed_command_read)
+                {
+                    session->axes[axis_index].target_velocity = session->axes[axis_index].sdo_speed_command_200b09h;
+                }
                 pthread_mutex_unlock(&session->observer_mutex);
 
                 session->status_words[axis_index] = status_word;

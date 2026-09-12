@@ -212,6 +212,10 @@ typedef struct
     int16_t sdo_mosfet_temp_200b01h;  /* MOSFET temperature, 0.1°C */
     bool sdo_motor_temp_read;
     int16_t sdo_motor_temp_200b02h;   /* Motor temperature, 0.1°C */
+    bool sdo_motor_speed_read;
+    int32_t sdo_motor_speed_200b08h;  /* Actual motor speed, rpm */
+    bool sdo_speed_command_read;
+    int32_t sdo_speed_command_200b09h; /* Speed command, rpm */
     uint64_t sdo_read_count;
     uint64_t sdo_read_time_us;
     emaster_dc_axis_result_t dc;

@@ -49,11 +49,15 @@ static void *observer_thread_func(void *arg)
             uint32_t voltage_6079h = 0;
             int16_t mosfet_temp_200b01h = 0;
             int16_t motor_temp_200b02h = 0;
+            int32_t actual_motor_speed_200b08h = 0;
+            int32_t speed_command_200b09h = 0;
             int wkc_current = 0;
             int wkc_error = 0;
             int wkc_voltage = 0;
             int wkc_mosfet_temp = 0;
             int wkc_motor_temp = 0;
+            int wkc_motor_speed = 0;
+            int wkc_speed_command = 0;
             uint16_t slave_position = (uint16_t)(axis + 1U);
 
             /* 读取 6078h: 电流实际值 */
@@ -86,6 +90,18 @@ static void *observer_thread_func(void *arg)
                              FALSE, &size_motor_temp, &motor_temp_200b02h,
                              EC_TIMEOUTRXM);
 
+            /* 读取 200Bh:08h: 实际电机速度 (rpm) */
+            int size_motor_speed = (int)sizeof(actual_motor_speed_200b08h);
+            wkc_motor_speed = ecx_SDOread(&session->context, slave_position, 0x200BU, 0x08U,
+                             FALSE, &size_motor_speed, &actual_motor_speed_200b08h,
+                             EC_TIMEOUTRXM);
+
+            /* 读取 200Bh:09h: 速度指令 (rpm) */
+            int size_speed_command = (int)sizeof(speed_command_200b09h);
+            wkc_speed_command = ecx_SDOread(&session->context, slave_position, 0x200BU, 0x09U,
+                             FALSE, &size_speed_command, &speed_command_200b09h,
+                             EC_TIMEOUTRXM);
+
             /* 前3次读取始终打印以验证通道工作 */
             if (session->axes[axis].sdo_read_count < 3U)
             {
@@ -94,13 +110,17 @@ static void *observer_thread_func(void *arg)
                        "  603Fh(错误) wkc=%d val=0x%04X\n"
                        "  6079h(电压) wkc=%d val=%u mV\n"
                        "  200Bh:01h(MOSFET温度) wkc=%d val=%d (%.1f°C)\n"
-                       "  200Bh:02h(电机温度) wkc=%d val=%d (%.1f°C)\n",
+                       "  200Bh:02h(电机温度) wkc=%d val=%d (%.1f°C)\n"
+                       "  200Bh:08h(电机速度) wkc=%d val=%d rpm\n"
+                       "  200Bh:09h(速度指令) wkc=%d val=%d rpm\n",
                        axis, (unsigned long)(session->axes[axis].sdo_read_count + 1U),
                        wkc_current, current_6078h,
                        wkc_error, error_code_603f,
                        wkc_voltage, voltage_6079h,
                        wkc_mosfet_temp, mosfet_temp_200b01h, mosfet_temp_200b01h / 10.0,
-                       wkc_motor_temp, motor_temp_200b02h, motor_temp_200b02h / 10.0);
+                       wkc_motor_temp, motor_temp_200b02h, motor_temp_200b02h / 10.0,
+                       wkc_motor_speed, actual_motor_speed_200b08h,
+                       wkc_speed_command, speed_command_200b09h);
             }
 
             /* 加锁写入结果 */
@@ -143,6 +163,26 @@ static void *observer_thread_func(void *arg)
             else
             {
                 session->axes[axis].sdo_motor_temp_read = false;
+            }
+
+            if (wkc_motor_speed > 0)
+            {
+                session->axes[axis].sdo_motor_speed_read = true;
+                session->axes[axis].sdo_motor_speed_200b08h = actual_motor_speed_200b08h;
+            }
+            else
+            {
+                session->axes[axis].sdo_motor_speed_read = false;
+            }
+
+            if (wkc_speed_command > 0)
+            {
+                session->axes[axis].sdo_speed_command_read = true;
+                session->axes[axis].sdo_speed_command_200b09h = speed_command_200b09h;
+            }
+            else
+            {
+                session->axes[axis].sdo_speed_command_read = false;
             }
 
             /* P2.6: 更新运行期 603F 错误码 */
