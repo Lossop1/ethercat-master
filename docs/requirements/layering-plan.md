@@ -163,7 +163,7 @@ P2.1 是当前最危险的一条：真机上客户端崩溃即等于失控。
 | --- | --- | --- | --- |
 | P4.1 | `ecx_mbxhandler` 完全未用（92 个符号只用 16 个） | 周期内有界推进，limit 取值基于 P1.4 实测 round_trip 增量确定 | 已验证 |
 | P4.2 | 缺 `mbx_rl` 记录 ⇒ 无法估算帧时 | 进 fingerprint | 已验证 |
-| P4.3 | 电流/电压/温度报告字段恒为 0（死代码） | 走 SDO 慢速通道填充，或删除字段 | 已实现·未验证 |
+| P4.3 | 电流/电压/温度报告字段恒为 0（死代码） | 走 SDO 慢速通道填充，或删除字段 | 已验证 |
 | P4.4 | 错误计数器 SOEM 只清零不读回 | 应用侧 FPRD 读 0x0300-0x030F | 已验证 |
 | P4.5 | SOEM 错误环无互斥（RT push / 非 RT pop） | 加同步或换无锁结构 | 已验证 |
 
@@ -182,6 +182,18 @@ limit=8: 155~156   247~248    275~276    335~336 μs
 
 结论：三组数据差异 ±3 μs（测量噪声范围内），邮箱推进的阻塞往返极少发生。
 **采用 limit=4**：相比 limit=2 无性能损失，为 SDO 观测线程提供更多推进机会。
+
+**P4.3**（2026-09-12，电流通过 SDO 慢速通道填充）：
+
+问题：6078h (actual_current) 和 6079h (dc_link_voltage) 未映射进 TxPDO（ESI Fixed="true"），
+报告中 `actual_current` / `dc_link_voltage` 恒为 0。
+
+解决方案：
+- observer_thread 以 ~50ms 周期通过 SDO 读取 6078h，存储到 `sdo_current_6078h`
+- session_control 每周期从 observer 读取该值并填充到 `actual_current`（加锁保护）
+- 验证结果：报告中 actual_current = -28/10（双轴，不再为 0）
+
+dc_link_voltage 和温度字段未实现，保持为 0（低优先级监控数据）。
 
 ### P5 模式与能力扩展（L3）
 
