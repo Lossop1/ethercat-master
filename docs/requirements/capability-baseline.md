@@ -322,11 +322,8 @@ port 层用三个互斥量保护 `getindex`/`tx`/`rx`；rx 路径把别的线程
 ## 5 调查缺口
 
 - 外网全程不可达 ⇒ 第 1 节的 IgH/acontis/TwinCAT/ros2_control/ETG.1500 条目均未抓取验证
-- 本驱动 `mbx_rl`（邮箱尺寸）未记录 ⇒ 2.3 的 SDO 帧时估算缺精确输入
 - `fixed_csv`（0x319800）的 1A02 内容未真机验证（ESI 与手册冲突）
-- 修复 `6c4ea9d` 之后无任何 sync0_margin 数据
 - 3 轴及以上无任何时序数据；12 轴既无厂商数据也无实测
-- Orange Pi 台架本次不可达（SSH 超时），`emaster-move-deg` 未编译未上机
 
 ---
 

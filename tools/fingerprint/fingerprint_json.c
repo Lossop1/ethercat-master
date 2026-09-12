@@ -342,11 +342,12 @@ int emaster_fingerprint_write_json(FILE *output, const emaster_preop_report_t *r
         fprintf(output,
                 ",\"sii_identity\":{\"vendor_id\":%u,\"product_code\":%u,"
                 "\"revision\":%u},\"state\":%u,\"has_dc\":%s,\"has_coe\":%s,"
-                "\"target_profile_id\":",
+                "\"mbx_rl\":%u,\"target_profile_id\":",
                 (unsigned int)slave->identity.vendor_id,
                 (unsigned int)slave->identity.product_code,
                 (unsigned int)slave->identity.revision, (unsigned int)slave->state,
-                slave->has_dc ? "true" : "false", slave->has_coe ? "true" : "false");
+                slave->has_dc ? "true" : "false", slave->has_coe ? "true" : "false",
+                (unsigned int)slave->mbx_rl);
         json_string(output, expected->profile_id);
         fprintf(output, ",\"target_profile_match\":%s,\"target_pdo_match\":%s,"
                         "\"pdo_layout\":{\"status\":\"complete\",\"rx\":",

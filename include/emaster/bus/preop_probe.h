@@ -61,6 +61,8 @@ typedef struct
     uint16_t state;
     bool has_dc;
     bool has_coe;
+    /* P4.2: 记录从 SII 读取的 mailbox read length，用于判断 ecx_mbxhandler 推进上限 */
+    uint16_t mbx_rl;
     size_t sdo_read_count;
     emaster_sdo_read_t *sdo_reads;
     /* 当前生效 PDO 映射由分配对象逐层只读发现，不由设备配置预填。 */

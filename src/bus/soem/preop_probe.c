@@ -169,6 +169,7 @@ static bool capture_slave(ecx_contextt *context, uint16_t position,
     result->state = slave->state;
     result->has_dc = slave->hasdc != 0U;
     result->has_coe = (slave->mbx_proto & ECT_MBXPROT_COE) != 0U;
+    result->mbx_rl = slave->mbx_rl;
     result->sdo_read_count = request_count;
     /* 每个从站拥有独立结果数组，由报告析构函数统一释放。 */
     result->sdo_reads = calloc(request_count, sizeof(*result->sdo_reads));

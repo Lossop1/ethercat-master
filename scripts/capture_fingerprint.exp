@@ -1,0 +1,12 @@
+#!/usr/bin/expect -f
+set timeout 30
+spawn sudo /home/orangepi/ethercat-master/build/tools/fingerprint/emaster-fingerprint capture /tmp/debug-fingerprint.json --deployment orangepi-current-bench-idle
+expect {
+    "*继续：*" {
+        send "PRE-OP\r"
+    }
+    eof
+}
+catch wait result
+set exit_code [lindex $result 3]
+exit $exit_code

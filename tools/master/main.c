@@ -145,51 +145,14 @@ static emaster_position_target_source_result_t position_target_source(
         /* 持续保持中 */
         return EMASTER_POSITION_TARGET_SOURCE_HOLD;
     } else {
-        /* 从未收到过外部目标：演示正弦波。
-         * 时间基准从首次观察到 OPERATION_ENABLED 时开始，避免上电序列期间累积
-         * 相位偏移——到达 OPERATION_ENABLED 时约耗时 1.2s，sin 偏移已超跟随误差限。
-         * 未到 OPERATION_ENABLED 之前输出初始位置（偏移为零），接管瞬间误差为零。
-         *
-         * P3.3/P3.4：正弦幅值使用负载侧坐标（OUTPUT_SHAFT），与 README 口径一致。
-         * 调用 emaster_motion_angle_to_counts 集中换算，避免工具层硬编码。 */
+        /* 从未收到过外部目标：保持初始位置，不运行 demo。
+         * demo 正弦波需要通过外部客户端显式启动，避免主站启动时自动驱动电机。 */
         if (last_mode != 0) {
-            fprintf(stderr, "[MODE] Running DEMO sine wave (no external input)\n");
+            fprintf(stderr, "[MODE] Idle (no external input, holding initial position)\n");
             last_mode = 0;
         }
-        if (!demo_started) {
-            int all_enabled = (axis_count > 0);
-            for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
-                if (axes[i].cia402_state != EMASTER_CIA402_STATE_OPERATION_ENABLED) {
-                    all_enabled = 0;
-                    break;
-                }
-            }
-            if (all_enabled) {
-                demo_start_cycle = cycle;
-                demo_started = 1;
-                fprintf(stderr, "[DEMO] Drive enabled at cycle %llu, sine starts from t=0\n",
-                        (unsigned long long)cycle);
-            }
-        }
-        int32_t offset_counts = 0;
-        if (demo_started && axis_count > 0) {
-            /* 使用第一轴的 position_scale 换算 ±180° → counts（负载侧） */
-            double time_seconds = (double)(cycle - demo_start_cycle) * 0.001;
-            double angle_degrees = 180.0 * sin(2.0 * 3.14159265358979323846 * time_seconds / 10.0);
-            int32_t angle_millidegrees = (int32_t)(angle_degrees * 1000.0);
-            int64_t signed_counts;
-            if (emaster_motion_angle_to_counts(angle_millidegrees,
-                                              EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT,
-                                              &axes[0].position_scale,
-                                              &signed_counts)) {
-                offset_counts = (int32_t)signed_counts;
-            } else {
-                /* 换算失败（position_scale 未就绪或溢出），保持偏移为零 */
-                offset_counts = 0;
-            }
-        }
         for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
-            target_positions[i] = initial_positions[i] + offset_counts;
+            target_positions[i] = initial_positions[i];
         }
         return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
     }

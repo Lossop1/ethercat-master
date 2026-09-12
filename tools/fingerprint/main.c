@@ -131,6 +131,103 @@ static bool report_matches_topology(const emaster_preop_report_t *report,
     return true;
 }
 
+/*
+ * 拓扑不匹配时必须指出具体字段，否则现场只能看到一个笼统的拒绝。
+ * 这里只打印内存中的期望值与实测值，不访问总线。
+ */
+static void print_topology_mismatch(const emaster_preop_report_t *report,
+                                    const emaster_deployment_config_t *deployment)
+{
+    const emaster_topology_config_t *topology = deployment->topology;
+    size_t index;
+
+    if (topology == NULL || topology->slaves == NULL)
+    {
+        fprintf(stderr, "  部署未引用有效拓扑。\n");
+        return;
+    }
+    if (strcmp(report->interface_name, deployment->ethercat_interface) != 0)
+    {
+        fprintf(stderr, "  接口不一致：部署=%s 实测=%s\n", deployment->ethercat_interface,
+                report->interface_name);
+    }
+    if (report->slave_count != topology->slave_count)
+    {
+        fprintf(stderr, "  从站数量不一致：部署=%zu 实测=%zu\n", topology->slave_count,
+                report->slave_count);
+    }
+    for (index = 0U; index < report->slave_count; ++index)
+    {
+        const emaster_preop_slave_t *actual = &report->slaves[index];
+
+        if (index >= topology->slave_count)
+        {
+            fprintf(stderr,
+                    "  多余从站：位置 %u 名称=%s vendor=0x%08X product=0x%08X "
+                    "revision=0x%08X rx位长=%u tx位长=%u\n",
+                    (unsigned int)actual->position, actual->name,
+                    (unsigned int)actual->identity.vendor_id,
+                    (unsigned int)actual->identity.product_code,
+                    (unsigned int)actual->identity.revision,
+                    (unsigned int)actual->pdo_layout.rx.bit_length,
+                    (unsigned int)actual->pdo_layout.tx.bit_length);
+        }
+    }
+    for (index = 0U; index < topology->slave_count && index < report->slave_count; ++index)
+    {
+        const emaster_topology_slave_config_t *expected = &topology->slaves[index];
+        const emaster_preop_slave_t *actual = &report->slaves[index];
+        const emaster_slave_profile_t *profile =
+            emaster_slave_profile_by_id(expected->profile_id);
+
+        if (profile == NULL)
+        {
+            fprintf(stderr, "  位置 %u：部署引用的 profile_id %s 不在设备目录中\n",
+                    (unsigned int)expected->position, expected->profile_id);
+            continue;
+        }
+        if (actual->position != expected->position)
+        {
+            fprintf(stderr, "  位置不一致：部署=%u 实测=%u\n",
+                    (unsigned int)expected->position, (unsigned int)actual->position);
+        }
+        if (!emaster_slave_identity_matches(profile, &actual->identity))
+        {
+            fprintf(stderr,
+                    "  位置 %u 身份不一致（%s）：部署 vendor=0x%08X product=0x%08X "
+                    "revision=0x%08X，实测 vendor=0x%08X product=0x%08X revision=0x%08X\n",
+                    (unsigned int)expected->position, profile->profile_id,
+                    (unsigned int)profile->identity.vendor_id,
+                    (unsigned int)profile->identity.product_code,
+                    (unsigned int)profile->identity.revision,
+                    (unsigned int)actual->identity.vendor_id,
+                    (unsigned int)actual->identity.product_code,
+                    (unsigned int)actual->identity.revision);
+        }
+        if (!emaster_slave_pdo_layout_matches(profile, &actual->pdo_layout))
+        {
+            const emaster_pdo_set_profile_t *expected_set =
+                emaster_slave_reference_pdo_set(profile);
+            fprintf(stderr,
+                    "  位置 %u PDO 不一致（%s）：状态=%u 失败索引=0x%04X:%u "
+                    "rx位长=%u tx位长=%u",
+                    (unsigned int)expected->position, profile->profile_id,
+                    (unsigned int)actual->pdo_layout.status,
+                    (unsigned int)actual->pdo_layout.failed_index,
+                    (unsigned int)actual->pdo_layout.failed_subindex,
+                    (unsigned int)actual->pdo_layout.rx.bit_length,
+                    (unsigned int)actual->pdo_layout.tx.bit_length);
+            if (expected_set != NULL)
+            {
+                fprintf(stderr, "，期望 rx字节=%u tx字节=%u 方案=%s",
+                        (unsigned int)expected_set->rx_pdo_bytes,
+                        (unsigned int)expected_set->tx_pdo_bytes, expected_set->pdo_set_id);
+            }
+            fprintf(stderr, "\n");
+        }
+    }
+}
+
 static bool utc_timestamp(char *buffer, size_t capacity)
 {
     time_t now = time(NULL);
@@ -348,6 +445,7 @@ int main(int argc, char **argv)
             emaster_console_print_pdo_failure(&report.slaves[slave_index].pdo_layout,
                                               report.slaves[slave_index].position);
         }
+        print_topology_mismatch(&report, deployment);
         emaster_preop_report_destroy(&report);
         return 1;
     }

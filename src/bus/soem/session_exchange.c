@@ -99,6 +99,12 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     }
     session->report->actual_wkc = ecx_receive_processdata(&session->context, EC_TIMEOUTRET);
 
+    /* P4.1: 周期内有界邮箱推进。
+     * 在 receive 后调用，让 SDO 慢速通道（P4.3 的观察线程）与周期共存。
+     * limit=2 是保守初值，避免邮箱帧吃掉过多周期预算。
+     * 真实 limit 需根据 P1 完成后的实测抖动数据调优。 */
+    ecx_mbxhandler(&session->context, 0, 2);
+
     /* P4.4: 周期内读取错误计数器（0x0300-0x030F）。
      * FPRD 使用从站配置地址（configadr），不是位置序号。
      * 0x0300 起始 16 字节覆盖全部计数器。每个从站独立读取。 */
