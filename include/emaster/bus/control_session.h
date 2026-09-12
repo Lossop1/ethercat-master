@@ -159,6 +159,8 @@ typedef struct
     int16_t target_torque;
     int16_t actual_current;
     uint32_t dc_link_voltage;
+    int16_t mosfet_temperature;  /* 0.1°C, from 200Bh:01h */
+    int16_t motor_temperature;   /* 0.1°C, from 200Bh:02h */
     int32_t motion_final_position;
     int32_t motion_completion_actual_position;
     int64_t motion_actual_delta_counts;
