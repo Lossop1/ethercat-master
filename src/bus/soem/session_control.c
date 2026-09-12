@@ -86,13 +86,19 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 if (!emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
                                                     &session->axes[axis_index], actual_position))
                     feedback_valid = false;
-                /*
+
+                /* P4.3: 从 SDO 观测线程读取电流值（6078h）。
                  * 6078h (actual_current) 和 607Dh (dc_link_voltage) 未映射进 TxPDO
                  * （设备 ESI 将三个模块都声明为 Fixed="true"，且 supports_pdo_configuration=false）。
-                 * 主站从不写 0x1A00 配置对象，因此 tx_actual_current_ordinal 和 tx_dc_link_voltage_ordinal
-                 * 始终为 SIZE_MAX。通过 SDO 读取会挤占周期预算，因此 actual_current / dc_link_voltage
-                 * 字段保持为零。若将来需要，应在离线审计中单独 SDO 查询，而不是在此处每周期读取。
-                 */
+                 * observer_thread 以 ~50ms 周期通过 SDO 读取 6078h，加锁保护 sdo_current_6078h。
+                 * 此处周期线程读取该值填充到报告字段 actual_current，避免周期内 SDO 阻塞。 */
+                pthread_mutex_lock(&session->observer_mutex);
+                if (session->axes[axis_index].sdo_current_read)
+                {
+                    session->axes[axis_index].actual_current = session->axes[axis_index].sdo_current_6078h;
+                }
+                pthread_mutex_unlock(&session->observer_mutex);
+
                 session->status_words[axis_index] = status_word;
                 {
                     emaster_cia402_status_t decoded_status;
