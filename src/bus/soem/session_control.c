@@ -285,6 +285,11 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         axis_result->mode_command_sdo ==
                             session->plan->axes[axis_index].operation_mode->value;
                 }
+                if (!emaster_session_axis_mode_allows_control(&session->plan->axes[axis_index],
+                                                              mode_control_ready)) {
+                    all_modes_confirmed = false;
+                }
+
                 /* P2.5: 故障检测和处理 - 根据策略选择行为 */
                 bool should_isolate = false;
                 emaster_control_session_status_t axis_health_status =
