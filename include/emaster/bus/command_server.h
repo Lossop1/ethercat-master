@@ -26,6 +26,7 @@ typedef enum {
     EMASTER_COMMAND_QUICK_STOP,          /* 触发全轴 Quick Stop（控制字 0x0002） */
     EMASTER_COMMAND_HALT,                /* 设置全轴 Halt 位（控制字 bit8），payload: "1"=置位 "0"=清零 */
     EMASTER_COMMAND_FAULT_RESET,         /* 触发全轴 Fault Reset（控制字 0x0080） */
+    EMASTER_COMMAND_RECOVER_AXIS,        /* P2.5: 恢复单个故障轴，payload: 轴索引 */
 } emaster_command_type_t;
 
 /* 命令结构：封装命令类型和参数 */

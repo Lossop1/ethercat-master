@@ -45,7 +45,8 @@ typedef enum
     EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED,
     EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED,
     EMASTER_CONTROL_SESSION_AUDIT_FAILED,
-    EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED
+    EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED,
+    EMASTER_CONTROL_SESSION_ALL_AXES_FAULTED
 } emaster_control_session_status_t;
 
 /* 对外暴露稳定的产品生命周期，不要求调用者解析 SOEM 或 CiA 402 内部状态 */
@@ -60,6 +61,15 @@ typedef enum
     EMASTER_CONTROL_STATE_STOPPED,
     EMASTER_CONTROL_STATE_FAULTED
 } emaster_control_state_t;
+
+/* P2.5: 单轴状态，用于故障隔离和恢复 */
+typedef enum
+{
+    EMASTER_AXIS_STATUS_NORMAL = 0,     /* 正常运行 */
+    EMASTER_AXIS_STATUS_FAULTED,        /* 故障，已隔离 */
+    EMASTER_AXIS_STATUS_RECOVERING,     /* 恢复中 */
+    EMASTER_AXIS_STATUS_ISOLATED        /* 手动隔离（预留） */
+} emaster_axis_status_t;
 
 /* 每轴 DC 结果同时保存方案请求值、SOEM 生效状态和 ESC 寄存器读回值。 */
 typedef struct
@@ -218,6 +228,11 @@ typedef struct
     int32_t sdo_speed_command_200b09h; /* Speed command, rpm */
     uint64_t sdo_read_count;
     uint64_t sdo_read_time_us;
+    /* P2.5: 轴级故障恢复 */
+    emaster_axis_status_t axis_status;
+    bool fault_isolated;               /* 此轴已隔离，不影响其他轴 */
+    uint64_t fault_cycle;              /* 故障发生的周期号 */
+    emaster_control_session_status_t fault_reason; /* 故障原因 */
     emaster_dc_axis_result_t dc;
     /* 每个物理从站单独保存周期时序统计，传播延迟不能在多轴间混合。 */
     emaster_cyclic_timing_stats_t timing;

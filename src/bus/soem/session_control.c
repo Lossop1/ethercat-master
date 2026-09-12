@@ -13,6 +13,96 @@ static uint64_t absolute_position_difference(int32_t left, int32_t right) {
     return (uint64_t)(difference < 0 ? -difference : difference);
 }
 
+/* P2.5: 单轴故障处理 - 隔离故障轴，不影响其他轴 */
+static void handle_axis_fault(
+    emaster_soem_session_t *session,
+    size_t axis_index,
+    emaster_control_session_status_t fault_reason)
+{
+    emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
+
+    /* 标记故障 */
+    axis->axis_status = EMASTER_AXIS_STATUS_FAULTED;
+    axis->fault_isolated = true;
+    axis->fault_cycle = session->exchange;
+    axis->fault_reason = fault_reason;
+
+    /* 将该轴控制器目标设为 Quick-Stop */
+    emaster_cia402_controller_request_quick_stop(&session->controllers[axis_index]);
+
+    /* 记录到审计 */
+    fprintf(stderr, "[P2.5] 轴%zu 故障隔离: 原因=%d, 周期=%" PRIu64 "\n",
+            axis_index, fault_reason, session->exchange);
+}
+
+/* P2.5: 检查单轴健康状态 */
+static emaster_control_session_status_t check_axis_health(
+    emaster_soem_session_t *session,
+    size_t axis_index,
+    bool *should_isolate)
+{
+    emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
+
+    *should_isolate = false;
+
+    /* 跳过已隔离的轴 */
+    if (axis->fault_isolated) {
+        return EMASTER_CONTROL_SESSION_OK;
+    }
+
+    /* 检查故障条件 */
+    if (session->controller_outputs[axis_index].fault_present) {
+        *should_isolate = true;
+        return EMASTER_CONTROL_SESSION_DRIVE_FAULT;
+    }
+
+    if (!session->controller_outputs[axis_index].state_known) {
+        *should_isolate = true;
+        return EMASTER_CONTROL_SESSION_CONTROLLER_FAILED;
+    }
+
+    if (axis->internal_limit_active) {
+        *should_isolate = true;
+        return EMASTER_CONTROL_SESSION_INTERNAL_LIMIT_ACTIVE;
+    }
+
+    return EMASTER_CONTROL_SESSION_OK;
+}
+
+/* P2.5: 检查恢复进度 */
+static void check_recovery_progress(
+    emaster_soem_session_t *session,
+    size_t axis_index)
+{
+    emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
+    emaster_cia402_output_t *output = &session->controller_outputs[axis_index];
+
+    if (axis->axis_status != EMASTER_AXIS_STATUS_RECOVERING) {
+        return;
+    }
+
+    /* 检查是否已到达 Switch On Disabled */
+    if (output->state == EMASTER_CIA402_STATE_SWITCH_ON_DISABLED &&
+        !output->fault_present)
+    {
+        /* 恢复成功，重新启动轴 */
+        axis->axis_status = EMASTER_AXIS_STATUS_NORMAL;
+        axis->fault_isolated = false;
+
+        /* 请求上电 */
+        emaster_cia402_controller_request_operation_enabled(
+            &session->controllers[axis_index]);
+
+        fprintf(stderr, "[P2.5] 轴%zu 恢复成功，重新启动\n", axis_index);
+    }
+    else if (session->exchange - axis->fault_cycle > 5000U)
+    {
+        /* 超时（5秒），恢复失败 */
+        fprintf(stderr, "[P2.5] 轴%zu 恢复超时\n", axis_index);
+        axis->axis_status = EMASTER_AXIS_STATUS_FAULTED;
+    }
+}
+
 emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t *session) {
     size_t axis_index;
     bool motion_initialized = false;
@@ -197,24 +287,32 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                               mode_control_ready)) {
                     all_modes_confirmed = false;
                 }
-                if (session->controller_outputs[axis_index].fault_present) {
-                    status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;
-                    emaster_soem_session_note_runtime_failure(session, status, &safety_status);
-                    safety_denied = true;
+
+                /* P2.5: 单轴故障检测和隔离 */
+                bool should_isolate = false;
+                emaster_control_session_status_t axis_health_status =
+                    check_axis_health(session, axis_index, &should_isolate);
+
+                if (should_isolate) {
+                    /* 隔离故障轴，但不停止全局运行 */
+                    handle_axis_fault(session, axis_index, axis_health_status);
+
+                    /* 第一次故障记录到全局状态（审计用） */
+                    if (safety_status == EMASTER_CONTROL_SESSION_OK) {
+                        safety_status = axis_health_status;
+                    }
+
+                    /* 跳过此轴后续处理，继续其他轴 */
+                    continue;
                 }
-                if (!session->controller_outputs[axis_index].state_known)
-                {
-                    emaster_soem_session_note_runtime_failure(session, EMASTER_CONTROL_SESSION_CONTROLLER_FAILED,
-                                         &safety_status);
-                    safety_denied = true;
+
+                /* 已隔离的轴：跳过使能检查 */
+                if (session->axes[axis_index].fault_isolated) {
+                    /* 检查恢复进度 */
+                    check_recovery_progress(session, axis_index);
+                    continue;
                 }
-                if (axis_result->internal_limit_active)
-                {
-                    emaster_soem_session_note_runtime_failure(session,
-                                         EMASTER_CONTROL_SESSION_INTERNAL_LIMIT_ACTIVE,
-                                         &safety_status);
-                    safety_denied = true;
-                }
+
                 if (!operation_enabled) {
                     all_axes_enabled = false;
                 }
@@ -264,6 +362,11 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         for (axis_index = 0U;
                              axis_index < session->plan->axis_count; ++axis_index)
                         {
+                            /* P2.5: 跳过已隔离的轴 */
+                            if (session->axes[axis_index].fault_isolated) {
+                                continue;
+                            }
+
                             uint64_t following_error;
                             int64_t diff = (int64_t)session->axes[axis_index].actual_position -
                                            (int64_t)session->target_positions[axis_index];
@@ -399,6 +502,24 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 }
                 }
             }
+
+            /* P2.5: 检查是否所有轴都故障 */
+            {
+                size_t healthy_count = 0;
+                for (axis_index = 0; axis_index < session->plan->axis_count; ++axis_index) {
+                    if (!session->axes[axis_index].fault_isolated) {
+                        healthy_count++;
+                    }
+                }
+
+                if (healthy_count == 0) {
+                    /* 所有轴都故障了，停止整个会话 */
+                    status = EMASTER_CONTROL_SESSION_ALL_AXES_FAULTED;
+                    emaster_soem_session_note_runtime_failure(session, status, &safety_status);
+                    safety_denied = true;
+                }
+            }
+
             {
                 safety_status = emaster_soem_session_apply_safety(
                     session, feedback_valid, all_modes_confirmed, safety_status,
@@ -614,6 +735,51 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             (void)snprintf(response.message, sizeof(response.message),
                                 "fault reset requested for %zu axes",
                                 session->plan->axis_count);
+                            response.success = true;
+                            break;
+                        }
+
+                        case EMASTER_COMMAND_RECOVER_AXIS: {
+                            /* P2.5: 恢复单个故障轴 */
+                            char *endptr;
+                            long axis_idx_long;
+                            size_t axis_idx;
+
+                            if (command.payload[0] == '\0') {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "缺少轴索引参数");
+                                response.success = false;
+                                break;
+                            }
+
+                            axis_idx_long = strtol(command.payload, &endptr, 10);
+                            if (*endptr != '\0' || axis_idx_long < 0 ||
+                                (size_t)axis_idx_long >= session->plan->axis_count)
+                            {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "无效的轴索引: %s", command.payload);
+                                response.success = false;
+                                break;
+                            }
+
+                            axis_idx = (size_t)axis_idx_long;
+
+                            if (!session->axes[axis_idx].fault_isolated) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "轴%zu 未处于故障状态", axis_idx);
+                                response.success = false;
+                                break;
+                            }
+
+                            /* 标记为恢复中 */
+                            session->axes[axis_idx].axis_status = EMASTER_AXIS_STATUS_RECOVERING;
+
+                            /* 发送 Fault Reset */
+                            emaster_cia402_controller_request_fault_reset(
+                                &session->controllers[axis_idx]);
+
+                            (void)snprintf(response.message, sizeof(response.message),
+                                "轴%zu 恢复流程已启动", axis_idx);
                             response.success = true;
                             break;
                         }
