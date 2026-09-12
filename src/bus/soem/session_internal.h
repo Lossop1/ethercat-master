@@ -157,4 +157,3 @@ bool emaster_soem_session_map_topology(
     emaster_discovered_slave_t *discovered);
 
 #endif
-#endif
