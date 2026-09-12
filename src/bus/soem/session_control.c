@@ -87,15 +87,27 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                     &session->axes[axis_index], actual_position))
                     feedback_valid = false;
 
-                /* P4.3: 从 SDO 观测线程读取电流值（6078h）。
-                 * 6078h (actual_current) 和 607Dh (dc_link_voltage) 未映射进 TxPDO
+                /* P4.3: 从 SDO 观测线程读取监控数据。
+                 * 6078h (actual_current)、6079h (dc_link_voltage)、200Bh (温度) 未映射进 TxPDO
                  * （设备 ESI 将三个模块都声明为 Fixed="true"，且 supports_pdo_configuration=false）。
-                 * observer_thread 以 ~50ms 周期通过 SDO 读取 6078h，加锁保护 sdo_current_6078h。
-                 * 此处周期线程读取该值填充到报告字段 actual_current，避免周期内 SDO 阻塞。 */
+                 * observer_thread 以 ~50ms 周期通过 SDO 读取这些对象，加锁保护 sdo_* 字段。
+                 * 此处周期线程读取这些值填充到报告字段，避免周期内 SDO 阻塞。 */
                 pthread_mutex_lock(&session->observer_mutex);
                 if (session->axes[axis_index].sdo_current_read)
                 {
                     session->axes[axis_index].actual_current = session->axes[axis_index].sdo_current_6078h;
+                }
+                if (session->axes[axis_index].sdo_voltage_read)
+                {
+                    session->axes[axis_index].dc_link_voltage = session->axes[axis_index].sdo_voltage_6079h;
+                }
+                if (session->axes[axis_index].sdo_mosfet_temp_read)
+                {
+                    session->axes[axis_index].mosfet_temperature = session->axes[axis_index].sdo_mosfet_temp_200b01h;
+                }
+                if (session->axes[axis_index].sdo_motor_temp_read)
+                {
+                    session->axes[axis_index].motor_temperature = session->axes[axis_index].sdo_motor_temp_200b02h;
                 }
                 pthread_mutex_unlock(&session->observer_mutex);
 

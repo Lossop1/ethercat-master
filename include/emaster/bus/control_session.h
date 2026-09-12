@@ -193,6 +193,12 @@ typedef struct
     /* P4.3: SDO 慢速通道观测数据（非 RT 线程周期读取） */
     bool sdo_current_read;
     int16_t sdo_current_6078h;
+    bool sdo_voltage_read;
+    uint32_t sdo_voltage_6079h;       /* DC link voltage, mV */
+    bool sdo_mosfet_temp_read;
+    int16_t sdo_mosfet_temp_200b01h;  /* MOSFET temperature, 0.1°C */
+    bool sdo_motor_temp_read;
+    int16_t sdo_motor_temp_200b02h;   /* Motor temperature, 0.1°C */
     uint64_t sdo_read_count;
     uint64_t sdo_read_time_us;
     emaster_dc_axis_result_t dc;
