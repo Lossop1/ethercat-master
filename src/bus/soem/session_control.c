@@ -2,6 +2,7 @@
 
 #include "emaster/config/runtime_config.h"
 
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -28,7 +29,8 @@ static void handle_axis_fault(
     axis->fault_reason = fault_reason;
 
     /* 将该轴控制器目标设为 Quick-Stop */
-    emaster_cia402_controller_request_quick_stop(&session->controllers[axis_index]);
+    emaster_cia402_controller_set_goal(&session->controllers[axis_index],
+                                       EMASTER_CIA402_GOAL_QUICK_STOP);
 
     /* 记录到审计 */
     fprintf(stderr, "[P2.5] 轴%zu 故障隔离: 原因=%d, 周期=%" PRIu64 "\n",
@@ -82,7 +84,7 @@ static void check_recovery_progress(
     }
 
     /* 检查是否已到达 Switch On Disabled */
-    if (output->state == EMASTER_CIA402_STATE_SWITCH_ON_DISABLED &&
+    if (output->observed_state == EMASTER_CIA402_STATE_SWITCH_ON_DISABLED &&
         !output->fault_present)
     {
         /* 恢复成功，重新启动轴 */
@@ -90,8 +92,8 @@ static void check_recovery_progress(
         axis->fault_isolated = false;
 
         /* 请求上电 */
-        emaster_cia402_controller_request_operation_enabled(
-            &session->controllers[axis_index]);
+        emaster_cia402_controller_set_goal(&session->controllers[axis_index],
+                                           EMASTER_CIA402_GOAL_OPERATION_ENABLED);
 
         fprintf(stderr, "[P2.5] 轴%zu 恢复成功，重新启动\n", axis_index);
     }
