@@ -115,10 +115,25 @@ IMU 不在 EtherCAT 链路上，本轮不纳入。
 | P1.1 | 无 `mlockall` | 启动即锁定，失败则拒绝进入 OP | 已验证 |
 | P1.2 | 无 SCHED_FIFO / 无 CPU 亲和 | 周期线程 FIFO + 绑核，优先级可配 | 已验证 |
 | P1.3 | 死区超时永久锁存（`cycle_clock.c:147-151`），`deadline_recovery` 无消费者 | 可恢复，且恢复行为可配 | 已验证 |
-| P1.4 | 无长时运行证据（最长 14.9 秒） | 15 分钟连续运行报告，含 P0.3 的百分位；报告的 `samples × observed_cycle_ns ≥ 900s` | 证据不可复现 |
+| P1.4 | 无长时运行证据（最长 14.9 秒） | 15 分钟连续运行报告，含 P0.3 的百分位；报告的 `samples × observed_cycle_ns ≥ 900s` | 已验证 |
 | P1.5 | 修复 `6c4ea9d` 后无 sync0_margin 数据 | 重测，作废旧的 180us 说法 | 已验证 |
 
 **P1 完成后必须重测 P0.3 的全部时序量**，之前的数据只能作为无 RT 保障时的参照。
+
+**P1.4**（2026-09-12，双从站 idle 15 分钟）：
+
+- 报告：`runtime/reports/p14-dual-15min-verified.json`（78MB）
+- 配置：`orangepi-bench-dual`（拓扑 `bench-dual-slave`，2 个从站）
+- 模式：idle（保持初始位置，禁用自动正弦波）
+- samples = 919,912，observed_cycle_ns = 1,000,000（1ms）
+- 运行时长：919.9 秒 = 15.33 分钟
+- deadline_missed_count = 0（双轴）
+- wkc_mismatch_count = 0（双轴）
+- sync0_margin p99.9 = [202~204]μs（双轴，裕量充足）
+- round_trip p99.9 = 276~277μs，p99.999 = 336~337μs
+- send_lateness p99.999 = 36~37μs
+
+满足判据 `samples × observed_cycle_ns ≥ 900s`。P1.4 完成。
 
 ### P2 安全门禁（L4 的安全子集，先于功能）
 
