@@ -394,6 +394,10 @@ static bool write_axis(FILE *stream,
         ",\"actual_torque\":%d,\"target_torque\":%d"
         ",\"actual_current\":%d,\"dc_link_voltage\":%" PRIu32
         ",\"mosfet_temperature\":%d,\"motor_temperature\":%d"
+        ",\"gain_parameters_read\":%s"
+        ",\"velocity_loop_kp\":%u,\"velocity_loop_ki\":%u,\"velocity_loop_kd\":%u"
+        ",\"position_loop_kp\":%u,\"position_loop_ki\":%u,\"position_loop_kd\":%u"
+        ",\"current_loop_kp\":%u,\"current_loop_ki\":%u,\"current_loop_kd\":%u"
         ",\"operation_enabled_seen\":%s,\"motion_final_position\":%" PRId32
         ",\"max_following_error_counts\":%" PRIu64
         ",\"max_observed_following_error_counts\":%" PRIu64
@@ -438,6 +442,16 @@ static bool write_axis(FILE *stream,
         (unsigned long)axis->dc_link_voltage,
         (int)axis->mosfet_temperature,
         (int)axis->motor_temperature,
+        axis->gain_parameters_read ? "true" : "false",
+        (unsigned int)axis->velocity_loop_kp,
+        (unsigned int)axis->velocity_loop_ki,
+        (unsigned int)axis->velocity_loop_kd,
+        (unsigned int)axis->position_loop_kp,
+        (unsigned int)axis->position_loop_ki,
+        (unsigned int)axis->position_loop_kd,
+        (unsigned int)axis->current_loop_kp,
+        (unsigned int)axis->current_loop_ki,
+        (unsigned int)axis->current_loop_kd,
         axis->operation_enabled_seen ? "true" : "false",
         axis->motion_final_position, axis->max_following_error_counts,
         axis->max_observed_following_error_counts,

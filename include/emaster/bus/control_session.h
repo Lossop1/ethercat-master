@@ -161,6 +161,17 @@ typedef struct
     uint32_t dc_link_voltage;
     int16_t mosfet_temperature;  /* 0.1°C, from 200Bh:01h */
     int16_t motor_temperature;   /* 0.1°C, from 200Bh:02h */
+    /* 增益参数 (2008h) - 从 SAFE-OP 阶段读取 */
+    bool gain_parameters_read;
+    uint16_t velocity_loop_kp;   /* 2008h:01h, 0.01 unit */
+    uint16_t velocity_loop_ki;   /* 2008h:02h, 0.01 unit */
+    uint16_t velocity_loop_kd;   /* 2008h:03h, 0.01 unit */
+    uint16_t position_loop_kp;   /* 2008h:04h, 0.01 unit */
+    uint16_t position_loop_ki;   /* 2008h:05h, 0.01 unit */
+    uint16_t position_loop_kd;   /* 2008h:06h, 0.01 unit */
+    uint16_t current_loop_kp;    /* 2008h:07h, 0.01 unit */
+    uint16_t current_loop_ki;    /* 2008h:08h, 0.01 unit */
+    uint16_t current_loop_kd;    /* 2008h:09h, 0.01 unit */
     int32_t motion_final_position;
     int32_t motion_completion_actual_position;
     int64_t motion_actual_delta_counts;

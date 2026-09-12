@@ -451,6 +451,47 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             &sdo, UINT16_C(0x6061), UINT8_C(0), &session->axes[axis_index].safeop_mode_display_sdo);
         emaster_session_observer_read_drive(&sdo,
                                             &session->axes[axis_index].safeop_drive_diagnostic);
+
+        /* 读取增益参数 (2008h) - 记录控制环配置 */
+        session->axes[axis_index].gain_parameters_read = true;
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(1), &session->axes[axis_index].velocity_loop_kp);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(2), &session->axes[axis_index].velocity_loop_ki);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(3), &session->axes[axis_index].velocity_loop_kd);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(4), &session->axes[axis_index].position_loop_kp);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(5), &session->axes[axis_index].position_loop_ki);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(6), &session->axes[axis_index].position_loop_kd);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(7), &session->axes[axis_index].current_loop_kp);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(8), &session->axes[axis_index].current_loop_ki);
+        session->axes[axis_index].gain_parameters_read &= emaster_soem_read_u16(
+            &sdo, UINT16_C(0x2008), UINT8_C(9), &session->axes[axis_index].current_loop_kd);
+
+        if (session->axes[axis_index].gain_parameters_read) {
+            fprintf(stderr, "[2008h] 轴%zu 增益参数:\n"
+                   "  速度环: Kp=%u Ki=%u Kd=%u (单位 0.01)\n"
+                   "  位置环: Kp=%u Ki=%u Kd=%u (单位 0.01)\n"
+                   "  电流环: Kp=%u Ki=%u Kd=%u (单位 0.01)\n",
+                   axis_index,
+                   session->axes[axis_index].velocity_loop_kp,
+                   session->axes[axis_index].velocity_loop_ki,
+                   session->axes[axis_index].velocity_loop_kd,
+                   session->axes[axis_index].position_loop_kp,
+                   session->axes[axis_index].position_loop_ki,
+                   session->axes[axis_index].position_loop_kd,
+                   session->axes[axis_index].current_loop_kp,
+                   session->axes[axis_index].current_loop_ki,
+                   session->axes[axis_index].current_loop_kd);
+        } else {
+            fprintf(stderr, "[2008h] 警告：轴%zu 增益参数读取失败\n", axis_index);
+        }
+
         if (session->report->audit.allocation_failed) {
             status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
             return status;
