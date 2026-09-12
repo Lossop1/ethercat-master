@@ -61,6 +61,8 @@ static const char *session_status_text(emaster_control_session_status_t status) 
         return emaster_text(EMASTER_TEXT_PROBE_RESTORE_INIT_FAILED);
     case EMASTER_CONTROL_SESSION_INVALID_ARGUMENT:
         return emaster_text(EMASTER_TEXT_PROBE_INVALID_ARGUMENT);
+    case EMASTER_CONTROL_SESSION_ALL_AXES_FAULTED:
+        return "所有轴故障";
     case EMASTER_CONTROL_SESSION_OK:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUCCESS);
     }
