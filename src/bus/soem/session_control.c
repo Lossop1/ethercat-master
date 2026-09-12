@@ -365,11 +365,10 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     /*
                      * 先检查上一周期目标的跟随误差，再请求新目标。顺序与固定方案路径
                      * 一致：motion_step 先检查跟随误差，再计算下一周期目标。
-                     * 调用者通过 callbacks->position_target_max_following_error_counts
-                     * 设置上限；0 表示不启用此检查（不依赖固定方案时的向后兼容行为）。
+                     * 每个轴使用独立的误差阈值（来自运动配置的 max_following_error_millidegrees）。
+                     * 阈值为 0 表示该轴不启用跟随误差检查。
                      */
-                    if (motion_initialized &&
-                        session->position_target_max_following_error_counts > 0U)
+                    if (motion_initialized)
                     {
                         for (axis_index = 0U;
                              axis_index < session->plan->axis_count; ++axis_index)
@@ -378,6 +377,12 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             if (session->plan->fault_policy == EMASTER_FAULT_POLICY_AXIS_ISOLATION &&
                                 session->axes[axis_index].fault_isolated) {
                                 continue;
+                            }
+
+                            /* 动态误差检测：每轴独立阈值 */
+                            uint64_t max_error = session->axes[axis_index].max_following_error_counts;
+                            if (max_error == 0U) {
+                                continue;  /* 该轴未启用跟随误差检查 */
                             }
 
                             uint64_t following_error;
@@ -390,8 +395,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 session->axes[axis_index].max_observed_following_error_counts =
                                     following_error;
                             }
-                            if (following_error >
-                                session->position_target_max_following_error_counts)
+                            if (following_error > max_error)
                             {
                                 status = EMASTER_CONTROL_SESSION_FOLLOWING_ERROR;
                                 emaster_soem_session_note_runtime_failure(
