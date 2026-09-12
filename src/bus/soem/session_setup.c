@@ -5,20 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* 拓扑映射：在 topology_mapper.c 中实现 */
-typedef struct {
-    uint16_t bus_position;
-    uint32_t vendor_id;
-    uint32_t product_code;
-    uint32_t revision;
-    bool assigned;
-} emaster_discovered_slave_t;
-
-extern bool emaster_soem_session_map_topology(
-    emaster_soem_session_t *session,
-    int slave_count,
-    emaster_discovered_slave_t *discovered);
-
 /*
  * 按配置声明的精确类型写入并立即读回，避免对象宽度由调用点猜测。
  * 返回成功只表示邮箱事务成功且读回值与配置值一致。

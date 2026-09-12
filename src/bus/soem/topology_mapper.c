@@ -12,14 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
-    uint16_t bus_position;       /* EtherCAT 总线位置（SOEM slavelist 索引） */
-    uint32_t vendor_id;
-    uint32_t product_code;
-    uint32_t revision;
-    bool assigned;               /* 是否已分配给某个配置轴 */
-} emaster_discovered_slave_t;
-
 /*
  * 在未分配的从站中查找与设备profile匹配的第一个。
  * 返回从站在discovered数组中的索引，未找到返回-1。

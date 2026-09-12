@@ -142,4 +142,19 @@ bool emaster_soem_pop_error_safe(emaster_soem_session_t *session, ec_errort *err
 bool emaster_soem_session_start_observer(emaster_soem_session_t *session);
 void emaster_soem_session_stop_observer(emaster_soem_session_t *session);
 
+/* 拓扑映射：动态从站发现和轴匹配 */
+typedef struct {
+    uint16_t bus_position;
+    uint32_t vendor_id;
+    uint32_t product_code;
+    uint32_t revision;
+    bool assigned;
+} emaster_discovered_slave_t;
+
+bool emaster_soem_session_map_topology(
+    emaster_soem_session_t *session,
+    int slave_count,
+    emaster_discovered_slave_t *discovered);
+
+#endif
 #endif

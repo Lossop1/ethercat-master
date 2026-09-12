@@ -88,9 +88,8 @@ static emaster_position_target_source_result_t position_target_source(
     static int32_t initial_positions[EMASTER_EXTERNAL_TARGET_MAX_AXES] = {0};
     static int initialized = 0;
     static int last_mode = -1;
-    static uint64_t demo_start_cycle = 0;
-    static int demo_started = 0;
 
+    (void)cycle;
     (void)target_capacity;
 
     /* 首次调用：记录每个轴的初始位置 */
