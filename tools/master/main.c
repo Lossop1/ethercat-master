@@ -355,12 +355,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* P6.3：跟随误差和单步限幅从 plan 的硬件参数推算，不再硬编码为测试值。
+    /* P6.3：跟随误差和单步限幅从 plan 的硬件参数和配置字段推算，不再硬编码为测试值。
      * 取第一轴的硬件参数作为全轴统一值（当前台架双轴同型号）。
      * 公式：counts_per_degree = (encoder_increments / encoder_motor_revolutions)
      *                          × (gear_motor_revolutions / gear_shaft_revolutions) / 360
-     * max_following_error_millidegrees 来自 motion_axis_config，或默认为 2000 (2°)。
-     * 当前取 2° 作为限幅值，与外部控制路径的安全要求一致。 */
+     * max_following_error_millidegrees 来自 motion_axis_config，若为 0 则默认为 2000 (2°)。 */
     uint64_t following_error_counts = 0;
     uint64_t max_step_counts = 0;
     if (plan.axis_count > 0 && plan.axes[0].motion_axis != NULL) {
@@ -371,19 +370,23 @@ int main(int argc, char **argv) {
         double gear_ratio = (double)motion_axis->expected_gear_motor_revolutions /
                            (double)motion_axis->expected_gear_shaft_revolutions;
         double counts_per_degree = counts_per_motor_rev * gear_ratio / 360.0;
-        /* 限幅值：2° 负载侧 */
-        uint32_t limit_millidegrees = 2000;  /* 2° */
+        /* 限幅值：从配置读取，0 时默认 2° 负载侧 */
+        uint32_t limit_millidegrees = motion_axis->max_following_error_millidegrees;
+        if (limit_millidegrees == 0) {
+            limit_millidegrees = 2000;  /* 默认 2° */
+        }
         following_error_counts = (uint64_t)(counts_per_degree * (double)limit_millidegrees / 1000.0);
         max_step_counts = following_error_counts;
-        fprintf(stderr, "[P6.3] 跟随误差限幅: %.2f°= %lu counts "
-                        "(enc=%u/%u, gear=%u:%u, %.2f counts/deg)\n",
+        fprintf(stderr, "[P6.3] 跟随误差限幅: %.2f° = %lu counts "
+                        "(enc=%u/%u, gear=%u:%u, %.2f counts/deg)%s\n",
                 (double)limit_millidegrees / 1000.0,
                 (unsigned long)following_error_counts,
                 motion_axis->expected_encoder_increments,
                 motion_axis->expected_encoder_motor_revolutions,
                 motion_axis->expected_gear_motor_revolutions,
                 motion_axis->expected_gear_shaft_revolutions,
-                counts_per_degree);
+                counts_per_degree,
+                motion_axis->max_following_error_millidegrees == 0 ? " (default)" : "");
     } else {
         /* 兜底：无 motion_axis 配置时仍给一个保守值 */
         following_error_counts = 6400;  /* 约 2° @ 16384 enc × 28:1 gear */
