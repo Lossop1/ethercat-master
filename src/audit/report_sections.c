@@ -398,6 +398,16 @@ static bool write_axis(FILE *stream,
     REQUIRE_WRITE(fprintf(stream,
         ",\"shutdown_al\":{\"state\":%u,\"status_code\":%u}",
         (unsigned int)axis->shutdown_al_state, (unsigned int)axis->shutdown_al_status_code) >= 0);
+    /* 停机序言的两个坐标：entry 在周期回路刚退出时读，pre_stop 在发出第一个安全
+     * 停机帧之前读。两点相同说明序言没有让驱动器掉出 OP。 */
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"shutdown_al_entry\":{\"state\":%u,\"status_code\":%u}",
+        (unsigned int)axis->shutdown_entry_al_state,
+        (unsigned int)axis->shutdown_entry_al_status_code) >= 0);
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"shutdown_al_pre_stop\":{\"state\":%u,\"status_code\":%u}",
+        (unsigned int)axis->shutdown_pre_stop_al_state,
+        (unsigned int)axis->shutdown_pre_stop_al_status_code) >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
         ",\"safeop_mode_readback\":{\"read_succeeded\":%s,\"mode_display\":%d,"
@@ -734,7 +744,8 @@ bool emaster_run_report_write(FILE *stream,
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
         "\"safe_state_reached\":%s,\"sync0_disabled\":%s,"
-        "\"restore_init_succeeded\":%s},",
+        "\"restore_init_succeeded\":%s,"
+        "\"shutdown_observer_join_ns\":%" PRIu64 "},",
         (unsigned int)report->status, (unsigned int)report->state, report->io_map_size,
         (unsigned int)report->expected_wkc, report->actual_wkc,
         report->cycle_count, report->process_data_exchange_count,
@@ -753,7 +764,8 @@ bool emaster_run_report_write(FILE *stream,
         report->safe_output_sent ? "true" : "false",
         report->safe_state_reached ? "true" : "false",
         report->sync0_disabled ? "true" : "false",
-        report->restore_init_succeeded ? "true" : "false") >= 0);
+        report->restore_init_succeeded ? "true" : "false",
+        report->shutdown_observer_join_ns) >= 0);
     REQUIRE_WRITE(fputs("\"first_cycle_failure\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_failure(stream, &report->first_cycle_failure));
     REQUIRE_WRITE(fputs(",\"first_runtime_failure\":", stream) != EOF);

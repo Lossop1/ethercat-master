@@ -19,6 +19,59 @@
  * 线程安全：使用 observer_mutex 保护共享数据
  */
 
+/*
+ * 停机序言里观测线程的收尾（pthread_join）是唯一的长阻塞，而主线程在 join 期间
+ * 不发送任何过程数据。驱动器靠过程数据的持续性维持 OP：一次迭代原本是 21 次邮箱
+ * 往返加 50ms 睡眠，最坏上百毫秒，足以触发驱动器的同步监督（AL status code 0x1A）
+ * 让三个驱动器一起掉出 OP。2026-09-14 台架证据：停机入口三轴 AL=8 / 0x0000，
+ * 安全停机前（join 之后、第一个停机帧之前）三轴 AL=20 / 0x001A。
+ *
+ * 因此停止标志在每次读之前检查一次，把 join 的等待上限压到单次 SDO 往返；
+ * 观测读的邮箱超时也从 EC_TIMEOUTRXM（700ms）收紧到 OBSERVER_MAILBOX_TIMEOUT_US，
+ * 让这个上限真正有界。正常往返约 3ms，30ms 已有约十倍裕量；诊断样本读不到就按
+ * 未读到记（sdo_*_read=false），不值得拿驱动器掉出 OP 去换。
+ */
+#define OBSERVER_MAILBOX_TIMEOUT_US 30000
+
+static int observer_sdo_read(emaster_soem_session_t *session, uint16_t slave, uint16_t index,
+                             uint8_t subindex, int *size, void *value)
+{
+    if (!session->observer_running)
+    {
+        return 0; /* 与读失败同义：调用者只按 wkc > 0 判断，不会写入样本。 */
+    }
+    return ecx_SDOread(&session->context, slave, index, subindex, FALSE, size, value,
+                       OBSERVER_MAILBOX_TIMEOUT_US);
+}
+
+/* 50ms 睡眠同样要可中断，否则 join 还要多等一个完整睡眠周期。 */
+static void observer_sleep(emaster_soem_session_t *session, const struct timespec *interval)
+{
+    const struct timespec slice = {0, 1000000}; /* 1ms */
+    struct timespec remaining = *interval;
+
+    while (session->observer_running && (remaining.tv_sec > 0 || remaining.tv_nsec > 0))
+    {
+        if (nanosleep(&slice, NULL) != 0)
+        {
+            return;
+        }
+        if (remaining.tv_nsec >= slice.tv_nsec)
+        {
+            remaining.tv_nsec -= slice.tv_nsec;
+        }
+        else
+        {
+            if (remaining.tv_sec == 0)
+            {
+                return;
+            }
+            remaining.tv_sec -= 1;
+            remaining.tv_nsec += 1000000000L - slice.tv_nsec;
+        }
+    }
+}
+
 static void *observer_thread_func(void *arg)
 {
     emaster_soem_session_t *session = (emaster_soem_session_t *)arg;
@@ -62,45 +115,38 @@ static void *observer_thread_func(void *arg)
 
             /* 读取 6078h: 电流实际值 */
             int size_current = (int)sizeof(current_6078h);
-            wkc_current = ecx_SDOread(&session->context, slave_position, 0x6078U, 0x00U,
-                             FALSE, &size_current, &current_6078h,
-                             EC_TIMEOUTRXM);
+            wkc_current = observer_sdo_read(session, slave_position, 0x6078U, 0x00U,
+                                            &size_current, &current_6078h);
 
             /* P2.6: 读取 603Fh: CiA402 错误码 */
             int size_error = (int)sizeof(error_code_603f);
-            wkc_error = ecx_SDOread(&session->context, slave_position, 0x603FU, 0x00U,
-                             FALSE, &size_error, &error_code_603f,
-                             EC_TIMEOUTRXM);
+            wkc_error = observer_sdo_read(session, slave_position, 0x603FU, 0x00U,
+                                          &size_error, &error_code_603f);
 
             /* 读取 6079h: 母线电压 (mV) */
             int size_voltage = (int)sizeof(voltage_6079h);
-            wkc_voltage = ecx_SDOread(&session->context, slave_position, 0x6079U, 0x00U,
-                             FALSE, &size_voltage, &voltage_6079h,
-                             EC_TIMEOUTRXM);
+            wkc_voltage = observer_sdo_read(session, slave_position, 0x6079U, 0x00U,
+                                            &size_voltage, &voltage_6079h);
 
             /* 读取 200Bh:01h: MOSFET 温度 (0.1°C) */
             int size_mosfet_temp = (int)sizeof(mosfet_temp_200b01h);
-            wkc_mosfet_temp = ecx_SDOread(&session->context, slave_position, 0x200BU, 0x01U,
-                             FALSE, &size_mosfet_temp, &mosfet_temp_200b01h,
-                             EC_TIMEOUTRXM);
+            wkc_mosfet_temp = observer_sdo_read(session, slave_position, 0x200BU, 0x01U,
+                                                &size_mosfet_temp, &mosfet_temp_200b01h);
 
             /* 读取 200Bh:02h: 电机温度 (0.1°C) */
             int size_motor_temp = (int)sizeof(motor_temp_200b02h);
-            wkc_motor_temp = ecx_SDOread(&session->context, slave_position, 0x200BU, 0x02U,
-                             FALSE, &size_motor_temp, &motor_temp_200b02h,
-                             EC_TIMEOUTRXM);
+            wkc_motor_temp = observer_sdo_read(session, slave_position, 0x200BU, 0x02U,
+                                               &size_motor_temp, &motor_temp_200b02h);
 
             /* 读取 200Bh:08h: 实际电机速度 (rpm) */
             int size_motor_speed = (int)sizeof(actual_motor_speed_200b08h);
-            wkc_motor_speed = ecx_SDOread(&session->context, slave_position, 0x200BU, 0x08U,
-                             FALSE, &size_motor_speed, &actual_motor_speed_200b08h,
-                             EC_TIMEOUTRXM);
+            wkc_motor_speed = observer_sdo_read(session, slave_position, 0x200BU, 0x08U,
+                                                &size_motor_speed, &actual_motor_speed_200b08h);
 
             /* 读取 200Bh:09h: 速度指令 (rpm) */
             int size_speed_command = (int)sizeof(speed_command_200b09h);
-            wkc_speed_command = ecx_SDOread(&session->context, slave_position, 0x200BU, 0x09U,
-                             FALSE, &size_speed_command, &speed_command_200b09h,
-                             EC_TIMEOUTRXM);
+            wkc_speed_command = observer_sdo_read(session, slave_position, 0x200BU, 0x09U,
+                                                 &size_speed_command, &speed_command_200b09h);
 
             /* 前3次读取始终打印以验证通道工作 */
             if (session->axes[axis].sdo_read_count < 3U)
@@ -210,7 +256,7 @@ static void *observer_thread_func(void *arg)
             pthread_mutex_unlock(&session->observer_mutex);
         }
 
-        nanosleep(&interval, NULL);
+        observer_sleep(session, &interval);
     }
 
     fprintf(stderr, "[P4.3] SDO 观测线程已退出\n");

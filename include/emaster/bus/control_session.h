@@ -239,6 +239,15 @@ typedef struct
     /* 退出周期后、切换诊断状态前的 AL 快照，不冒充故障发生瞬间的状态。 */
     uint16_t shutdown_al_state;
     uint16_t shutdown_al_status_code;
+    /*
+     * 停机序言的两个附加 AL 坐标：刚进入停机（应力来自周期运行）与发出第一个安全
+     * 停机帧之前（应力来自序言阻塞）。只靠第三个坐标无法区分"周期运行中掉出 OP"和
+     * "序言里停机数据流中断导致掉出 OP"，而两者的修法完全相反。
+     */
+    uint16_t shutdown_entry_al_state;
+    uint16_t shutdown_entry_al_status_code;
+    uint16_t shutdown_pre_stop_al_state;
+    uint16_t shutdown_pre_stop_al_status_code;
 } emaster_control_session_axis_result_t;
 
 /* 首次周期失败只写一次，后续停机交换不能改变其 WKC、阶段和交换号。 */
@@ -326,6 +335,12 @@ typedef struct
     bool sync0_disabled;
     bool restore_init_succeeded;
     bool diagnostic_preop_reached;
+    /*
+     * 停机序言里停止 SDO 观测线程（pthread_join）的耗时。该窗口内不发送任何过程
+     * 数据，超过驱动器的同步容差即触发 AL 0x1A 掉出 OP（2026-09-14 台架证据）。
+     * 记录成数值才能判断"序言阻塞"这个解释是否留有裕量。
+     */
+    uint64_t shutdown_observer_join_ns;
     emaster_cycle_failure_t first_cycle_failure;
     emaster_runtime_failure_t first_runtime_failure;
     emaster_run_audit_t audit;

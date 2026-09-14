@@ -79,7 +79,9 @@ typedef struct {
     /* P4.3: SDO 慢速观测线程 */
     pthread_t observer_thread;
     bool observer_thread_created;
-    bool observer_running;
+    /* 跨线程停止标志：观测线程每次邮箱读之前都查它，停机序言的 join 延迟因此有界。
+     * 用 volatile 而不是普通 bool，避免这个检查被优化掉后 join 又等满一次完整迭代。 */
+    volatile bool observer_running;
     pthread_mutex_t observer_mutex;
 } emaster_soem_session_t;
 

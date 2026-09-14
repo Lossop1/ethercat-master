@@ -2,13 +2,18 @@
 
 #include <limits.h>
 #include <stdio.h>
+#include <time.h>
 
 /*
  * 停机路径上的 AL 快照。停机结束后读到的 AL 状态（SAFE-OP + 0x1A）只能说明
  * 退出时驱动器不在 OP，无法区分三种来源：周期运行中掉出、停机序言阻塞期间掉出、
  * 或者被安全停机帧打掉。在两个时刻各读一次，把时间坐标补上。
+ *
+ * 同时写进报告：判据必须留在报告里，否则"序言阻塞导致掉出 OP"这条结论只能靠
+ * 日志复述，报告本身仍然只有停机后的一个坐标。
  */
-static void print_al_snapshot(emaster_soem_session_t *session, const char *label)
+static void snapshot_al_states(emaster_soem_session_t *session, const char *label,
+                               bool at_entry)
 {
     size_t axis_index;
 
@@ -19,10 +24,21 @@ static void print_al_snapshot(emaster_soem_session_t *session, const char *label
     ecx_readstate(&session->context);
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
+        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+
         printf("[SHUTDOWN] %s 轴%zu: AL state=%u, status_code=0x%04X\n", label,
-               axis_index + 1U,
-               (unsigned int)session->context.slavelist[axis_index + 1U].state,
-               (unsigned int)session->context.slavelist[axis_index + 1U].ALstatuscode);
+               axis_index + 1U, (unsigned int)slave->state,
+               (unsigned int)slave->ALstatuscode);
+        if (at_entry)
+        {
+            session->axes[axis_index].shutdown_entry_al_state = slave->state;
+            session->axes[axis_index].shutdown_entry_al_status_code = slave->ALstatuscode;
+        }
+        else
+        {
+            session->axes[axis_index].shutdown_pre_stop_al_state = slave->state;
+            session->axes[axis_index].shutdown_pre_stop_al_status_code = slave->ALstatuscode;
+        }
     }
 }
 
@@ -157,11 +173,28 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     /* 进入停机时的 AL 快照：此时周期回路已经退出，但一个停机帧都还没发。 */
     if (session->context_open)
     {
-        print_al_snapshot(session, "停机入口");
+        snapshot_al_states(session, "停机入口", true);
     }
 
-    /* P4.3: 停止 SDO 慢速观测线程 */
-    emaster_soem_session_stop_observer(session);
+    /* P4.3: 停止 SDO 慢速观测线程。这是停机序言里唯一的阻塞点，计时留证。 */
+    {
+        struct timespec join_start;
+        struct timespec join_end;
+
+        (void)clock_gettime(CLOCK_MONOTONIC, &join_start);
+        emaster_soem_session_stop_observer(session);
+        if (clock_gettime(CLOCK_MONOTONIC, &join_end) == 0)
+        {
+            uint64_t start_ns = (uint64_t)join_start.tv_sec * UINT64_C(1000000000) +
+                                (uint64_t)join_start.tv_nsec;
+            uint64_t end_ns = (uint64_t)join_end.tv_sec * UINT64_C(1000000000) +
+                              (uint64_t)join_end.tv_nsec;
+
+            session->report->shutdown_observer_join_ns = end_ns - start_ns;
+            printf("[SHUTDOWN] 停止观测线程耗时 %.3f ms（该窗口内不发送过程数据）\n",
+                   (double)(end_ns - start_ns) / 1000000.0);
+        }
+    }
 
     if (!session->context_open) {
         return;
@@ -171,7 +204,7 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
      * 第一次在 OP、第二次掉出 → 掉出发生在停机序言（观测线程收尾等）阻塞期间，
      * 与安全停机帧无关。这正是 WKC 从 9 掉到 3 的两种互斥解释。
      */
-    print_al_snapshot(session, "安全停机前");
+    snapshot_al_states(session, "安全停机前", false);
     /*
      * 审计在周期阶段是封顶的（超出预算的样本只计数不保存）。若在这里才解封，
      * 则安全停机阶段——恰恰是故障发生的阶段——一个样本都留不下。
