@@ -819,6 +819,16 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 break;
                             }
 
+                            /* P6.2: 只在 RUNNING 状态下接受外部目标，防止 OP 前注入导致首周期跳变。
+                             * 客户端应先查询 status 确认 state=4 (RUNNING) 后再发送 set_external_target。 */
+                            if (session->report->state != EMASTER_CONTROL_STATE_RUNNING) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                    "ERROR|Not ready: state=%d (need RUNNING=4)",
+                                    (int)session->report->state);
+                                response.success = false;
+                                break;
+                            }
+
                             strncpy(payload_copy, command.payload, sizeof(payload_copy) - 1);
                             payload_copy[sizeof(payload_copy) - 1] = '\0';
 

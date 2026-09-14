@@ -91,13 +91,25 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     {
         return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED, false);
     }
+
+    /*
+     * 帧级超时：取周期的 1/4，限制在 [50, 500] µs。
+     * EC_TIMEOUTRET=2000µs 超过 1ms 周期；一次接收失败会直接把当前周期
+     * 拖延 2ms，连同每个从站的 FPRD 等待（各 2ms）累计超过 deadline，
+     * 在非实时内核上极易触发连续 deadline miss 直至阈值终止会话。
+     * 缩短后单次帧丢失最多占用 1/4 周期预算，recovery 有足够空间追回。
+     */
+    int frame_timeout_us = (int)((session->plan->cycle_ns / 4U) / 1000U);
+    if (frame_timeout_us < 50)  { frame_timeout_us = 50; }
+    if (frame_timeout_us > 500) { frame_timeout_us = 500; }
+
     ++session->exchange;
     (void)ecx_send_processdata(&session->context);
     if (clock_gettime(CLOCK_MONOTONIC, &send_end) != 0)
     {
         return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED, false);
     }
-    session->report->actual_wkc = ecx_receive_processdata(&session->context, EC_TIMEOUTRET);
+    session->report->actual_wkc = ecx_receive_processdata(&session->context, frame_timeout_us);
 
     /* P4.1: 周期内有界邮箱推进。
      * 在 receive 后调用，让 SDO 慢速通道（P4.3 的观察线程）与周期共存。
@@ -113,7 +125,7 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         uint16_t configadr = session->context.slavelist[axis + 1U].configadr;
         uint8_t error_block[16];
         int wkc = ecx_FPRD(&session->context.port, configadr, 0x0300U, sizeof(error_block),
-                          error_block, EC_TIMEOUTRET);
+                          error_block, frame_timeout_us);
         if (wkc > 0)
         {
             session->axes[axis].error_counters_read = true;

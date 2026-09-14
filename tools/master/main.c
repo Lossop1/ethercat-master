@@ -355,14 +355,42 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* P3.3：跟随误差限制（负载侧角度）。
-     * position_scale 在 emaster_control_session_axis_result_t 里，要到会话启动后才就绪，
-     * 无法在此处动态推算。demo 正弦波那部分（position_target_source 回调内）用的是
-     * axes[0].position_scale，已经集中换算了。此处硬编码为 2° 的 counts 等价值，等 P4
-     * 邮箱通道完成后再考虑通过回调动态更新。
-     * P4.3 验证：临时放宽到 200° 以容纳演示正弦波 */
-    uint64_t following_error_counts = 256000;  /* 200° @ 16384 enc × 28:1 gear */
-    uint64_t max_step_counts = following_error_counts;
+    /* P6.3：跟随误差和单步限幅从 plan 的硬件参数推算，不再硬编码为测试值。
+     * 取第一轴的硬件参数作为全轴统一值（当前台架双轴同型号）。
+     * 公式：counts_per_degree = (encoder_increments / encoder_motor_revolutions)
+     *                          × (gear_motor_revolutions / gear_shaft_revolutions) / 360
+     * max_following_error_millidegrees 来自 motion_axis_config，或默认为 2000 (2°)。
+     * 当前取 2° 作为限幅值，与外部控制路径的安全要求一致。 */
+    uint64_t following_error_counts = 0;
+    uint64_t max_step_counts = 0;
+    if (plan.axis_count > 0 && plan.axes[0].motion_axis != NULL) {
+        const emaster_motion_axis_config_t *motion_axis = plan.axes[0].motion_axis;
+        /* 编码器分辨率（counts/motor_rev）× 减速比（motor_rev/shaft_rev）/ 360° */
+        double counts_per_motor_rev = (double)motion_axis->expected_encoder_increments /
+                                      (double)motion_axis->expected_encoder_motor_revolutions;
+        double gear_ratio = (double)motion_axis->expected_gear_motor_revolutions /
+                           (double)motion_axis->expected_gear_shaft_revolutions;
+        double counts_per_degree = counts_per_motor_rev * gear_ratio / 360.0;
+        /* 限幅值：2° 负载侧 */
+        uint32_t limit_millidegrees = 2000;  /* 2° */
+        following_error_counts = (uint64_t)(counts_per_degree * (double)limit_millidegrees / 1000.0);
+        max_step_counts = following_error_counts;
+        fprintf(stderr, "[P6.3] 跟随误差限幅: %.2f°= %lu counts "
+                        "(enc=%u/%u, gear=%u:%u, %.2f counts/deg)\n",
+                (double)limit_millidegrees / 1000.0,
+                (unsigned long)following_error_counts,
+                motion_axis->expected_encoder_increments,
+                motion_axis->expected_encoder_motor_revolutions,
+                motion_axis->expected_gear_motor_revolutions,
+                motion_axis->expected_gear_shaft_revolutions,
+                counts_per_degree);
+    } else {
+        /* 兜底：无 motion_axis 配置时仍给一个保守值 */
+        following_error_counts = 6400;  /* 约 2° @ 16384 enc × 28:1 gear */
+        max_step_counts = following_error_counts;
+        fprintf(stderr, "[P6.3] 警告：无 motion_axis 配置，使用兜底限幅 %lu counts\n",
+                (unsigned long)following_error_counts);
+    }
 
     memset(&report, 0, sizeof(report));
     memset(&callbacks, 0, sizeof(callbacks));
