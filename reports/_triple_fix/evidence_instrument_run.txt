@@ -1,0 +1,78 @@
+仪表批次复跑证据（2026-09-14，commit e4d36ed / 修正 ab97341）
+============================================================================
+本轮加的是仪表，不改行为：周期尾部分段计时、64 周期现场环、极值交换号坐标、
+首次 WKC 不符的 AL 快照进报告。目的：回答 evidence_424s_run.txt 第六节留下的
+"待查 1"——异常落在哪个周期、周期的哪一步。
+
+一、运行参数
+  部署          orangepi-bench-triple-30deg（3 轴，1 ms 周期，WKC 期望 9）
+  入口          motion_client.py -> 命令套接字 -> set_external_target
+                -> position_target_source -> CSP 目标（最终场景同款）
+  客户端 2086 条目标全部被接受，0 条被拒
+  会话时长      47608 个周期后终止（客户端在服务端关闭连接后退出）
+  结果          status=16(WKC_MISMATCH) fault_latched=true control_state=7
+                safe_output_sent=false（一帧停机帧都没发）
+                WKC 期望 9 / 最后 7，wkc_error_count=6，max_consecutive=5
+
+二、故障现场（核心）
+  交换号 47602：
+    actual_wkc                     -1        <-- SOEM 的 EC_NOFRAME，整帧没回来
+    flags                          WKC_MISMATCH | ERROR_COUNTER_READ_FAILED
+    send_duration_ns               2,090     （正常）
+    receive_duration_ns            269,023   （正常 p50 五万；= 250 µs 帧超时）
+    mailbox_duration_ns            70
+    error_counter_duration_ns      808,561   （3 次 FPRD 全部超时；正常 p50 149 µs）
+    轴1/轴2/轴3 AL 快照             8/8/8，status_code 全 0x0000
+  该周期总耗时 2.1+269+0.07+809 ≈ 1080 µs，是整个会话**唯一**超过 1 ms 的周期
+  （over_budget_cycle_count=1，first_over_budget_exchange=47602）。
+
+  交换号 47603：完全正常（WKC 9，收包 64.6 µs）。
+  交换号 47604：WKC 7，此时轴 3 已经是 AL 20 / 0x001A，轴 1、2 仍在 8。
+  之后 5 次连续不符（47604..47608）按阈值 5 终止会话。
+
+三、本轮回答了 evidence_424s_run.txt 的"待查 1"
+  1. 异常周期不是"帧回来了但计数器短"，而是**这一周期没收到任何回帧**：
+     actual_wkc = -1（EC_NOFRAME），收包段耗时正好等于配置的 250 µs 帧超时。
+     424 s 那轮第一次失败时 first_cycle_failure.wkc=5（帧回来了但短），两轮形态不同。
+  2. 因果方向：丢帧那一刻三轴**都还在 OP**，两个周期后轴 3 才掉到 SAFE-OP。
+     即"帧先丢、驱动器后掉"，与 424 s 轮的结论一致，但这次有周期级坐标。
+  3. 那个反复出现在两轮报告里的 round_trip 极值（1.0763 / 1.0769 ms）现在有坐标：
+     max_round_trip = 1,079,794 ns，其交换号**就是 47602**。它不是离群怪现象，
+     它就是故障周期本身。
+  4. 丢帧前约 20 个周期（47582 起）收包段从 39–41 µs 抬到 50–125 µs 并反复出现，
+     有前兆；但只有一轮数据，不足以作结论。
+  5. 周期尾部三段量级（健康 34 s 跑 + 本轮）：收包 p50 50 µs / 最坏 269 µs；
+     邮箱推进 p50 70 ns；**3×FPRD 错误计数器 p50 149 µs / 最坏 808 µs**。
+     最后一段是周期尾部最大的一块，正常占 15%，异常时占 75% 以上。
+
+四、顺带修正的一条旧结论
+  424 s 轮用"ESC 错误计数器（0x0300-0x030F）全零"推出"线缆/物理层没有可见错误"。
+  本轮 error_counter_read_fail_count=3，三次全部落在 47602 这个故障周期上：
+  **恰恰在故障那一刻，这些计数器读不出来**。因此"计数器为零"只在读成功时成立，
+  那条结论比看上去弱；它只能说明故障前的那些周期在 ESC 层面没有累积错误。
+
+五、仪表自身的两处缺陷（已在 ab97341 修，修正后未再跑）
+  1. first_mismatch 被后来的"连续段第一次"覆盖：连续计数在任何一个正常周期上清零，
+     本轮因此记了两次现场（47602 三轴全 OP、47604 轴 3 已掉）。报告里留下的是后一份。
+     现在整个会话只认第一次。
+  2. 死区超时有三个记账点（交换函数两处、控制循环一处），第三处没记交换号，
+     于是 deadline_missed_count=1 而 first_deadline_missed_exchange=0。已补。
+
+六、仍未回答
+  1. 驱动器自己的 SM2 事件丢失计数在丢帧那一刻是多少（0 还是已接近 6）。读它只能走
+     邮箱(1C32:11)，本台架一次邮箱往返约 2.7 ms，三轴两次读约 16 ms 过程数据静默，
+     超过把驱动器推出 OP 所需的 6 次事件——仪表会制造它正在观测的掉出，故未做。
+     观测线程改用 50 轮一次的低频探针是同一个理由。
+  2. 一次整帧丢失为什么足以让驱动器在 2 个周期内计满并掉出（若阈值是 6）。
+  3. 丢帧前 20 个周期的收包段抬高是前兆还是巧合（需要重复观察）。
+  4. 主站为什么没有收到回帧：驱动器的 ESC 没回、交换机/线缆丢了、还是本机
+     （非 PREEMPT_RT、无 isolcpus）在这个窗口没被调度到而错过了 250 µs 内的回帧。
+     三种可能的修法完全不同，是下一批要分辨的。
+
+七、证据清单
+  reports/_triple_fix/run_47s_no_frame.log                 本轮主站日志（全）
+  Pi: runtime/reports/archive/20260914-run-instr.json      本轮报告（76 MB，含新字段）
+  Pi: runtime/reports/archive/20260914-run424144-wkc-dropout.json   424 s 轮报告
+  Pi: runtime/reports/archive/20260914-run683748-safestop-dropout.json  683 s 轮报告
+  健康参考（34 s 短跑，同样是新二进制）：over_budget=0、error_counter_read_fail=0、
+  无 WKC 不符、34136 周期 WKC 9/9
