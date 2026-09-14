@@ -112,6 +112,11 @@ void emaster_soem_session_note_runtime_failure(
 emaster_control_session_status_t emaster_soem_session_publish_feedback(
     emaster_soem_session_t *session,
     emaster_control_session_status_t status);
+/* 周期超时处理：先记账（每轴 deadline_missed_count），再按容错策略尝试重新对齐。
+ * 交换函数末尾与循环顶部的同名检查是同一个条件，必须共用这两个入口，否则同一次
+ * 超时会因检出位置不同而结局相反（一处可恢复、另一处直接终止且不留现场）。 */
+void emaster_soem_session_note_deadline_missed(emaster_soem_session_t *session);
+bool emaster_soem_session_try_deadline_recovery(emaster_soem_session_t *session);
 emaster_control_session_status_t emaster_soem_session_position_target_step(
     emaster_soem_session_t *session,
     bool *updated);

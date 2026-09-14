@@ -9,7 +9,7 @@
  * 配置策略在 config/error_recovery_policies/ 中定义，部署配置引用具体策略。
  */
 
-static void note_deadline_missed(emaster_soem_session_t *session)
+void emaster_soem_session_note_deadline_missed(emaster_soem_session_t *session)
 {
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
     {
@@ -22,7 +22,7 @@ static void note_deadline_missed(emaster_soem_session_t *session)
  * 若策略允许：重置时钟 deadline 至最近未来边界，清除 deadline_missed，返回 true。
  * 若策略不允许或时钟重置失败：返回 false，调用者负责锁存失败。
  */
-static bool try_deadline_recovery(emaster_soem_session_t *session)
+bool emaster_soem_session_try_deadline_recovery(emaster_soem_session_t *session)
 {
     if (session->error_recovery_policy == NULL ||
         !session->error_recovery_policy->deadline_recovery.enabled)
@@ -70,8 +70,8 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         session->report->cycle_deadline_missed |= session->clock.deadline_missed;
         if (session->clock.deadline_missed)
         {
-            note_deadline_missed(session);
-            if (try_deadline_recovery(session))
+            emaster_soem_session_note_deadline_missed(session);
+            if (emaster_soem_session_try_deadline_recovery(session))
             {
                 /* 连续超次数在阈值内，重新对齐 deadline，跳过本周期交换继续运行。 */
                 return EMASTER_CONTROL_SESSION_OK;
@@ -256,12 +256,12 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         session->report->cycle_deadline_missed |= session->clock.deadline_missed;
         if (session->clock.deadline_missed)
         {
-            note_deadline_missed(session);
+            emaster_soem_session_note_deadline_missed(session);
             /*
              * 帧已收发完毕，仅周期末尾检查超限。本周期控制输出已写入，
              * 允许按策略恢复而不丢弃本次成果。
              */
-            if (try_deadline_recovery(session))
+            if (emaster_soem_session_try_deadline_recovery(session))
             {
                 return EMASTER_CONTROL_SESSION_OK;
             }

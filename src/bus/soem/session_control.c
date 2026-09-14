@@ -137,6 +137,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
         }
     }
     {
+        /*
+         * 循环顶部超时被恢复时，本周期不做协调器推进（deadline_ns 已失效）。
+         * 这个计数给"持续超时导致每周期都跳过"设上限：否则会话既不推进也不
+         * 终止，比直接停机更糟。任何一个正常推进的周期都会把它清零。
+         */
+        uint32_t consecutive_deadline_skips = 0U;
+        uint32_t deadline_skip_limit = 0U;
+        if (session->error_recovery_policy != NULL) {
+            deadline_skip_limit =
+                session->error_recovery_policy->deadline_recovery.consecutive_error_threshold;
+        }
         while (true) {
             emaster_multiaxis_frame_t frame;
             uint64_t now_ns;
@@ -233,10 +244,34 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
             }
 
             if (!emaster_cycle_clock_sample(&session->clock, &now_ns, &deadline_ns)) {
-                return session->clock.deadline_missed
-                           ? EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED
-                           : EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
+                session->report->cycle_deadline_missed |= session->clock.deadline_missed;
+                if (session->clock.deadline_missed) {
+                    /*
+                     * 与交换函数末尾那次检查是同一个条件、同一个 deadline，只是晚
+                     * 了几十微秒（本次输入解码与审计的开销）。因此必须与那里同样
+                     * 处理：先记账，再交给容错策略。原先直接返回会让同一次超时因
+                     * 检出位置不同而结局相反——交换函数内检出按策略可恢复，这里却
+                     * 直接终止会话，且不留现场（deadline_missed_count 停在 0，与
+                     * cycle_deadline_missed=true 自相矛盾）。
+                     */
+                    emaster_soem_session_note_deadline_missed(session);
+                    if (consecutive_deadline_skips < deadline_skip_limit &&
+                        emaster_soem_session_try_deadline_recovery(session)) {
+                        /* 本周期不再推进协调器：deadline_ns 已经过期，喂给协调器会
+                         * 被判为整帧逾期并清空输出。重新对齐后回到循环顶部，下一
+                         * 周期按新边界发包。 */
+                        ++consecutive_deadline_skips;
+                        continue;
+                    }
+                    emaster_soem_session_latch_failure(
+                        session, EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED);
+                }
+                return emaster_soem_session_publish_feedback(
+                    session, session->clock.deadline_missed
+                                 ? EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED
+                                 : EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED);
             }
+            consecutive_deadline_skips = 0U;
             frame.sequence = session->report->cycle_count;
             frame.deadline_ns = deadline_ns;
             frame.axis_count = session->plan->axis_count;
