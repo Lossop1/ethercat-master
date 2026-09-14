@@ -204,6 +204,23 @@ typedef struct
     emaster_drive_diagnostic_t drive_diagnostic;
     emaster_sync_diagnostic_t sm2_diagnostic;
     emaster_sync_diagnostic_t sm3_diagnostic;
+    /*
+     * 运行期周期性探测的 1C32/1C33 结果。上面两个 sm2/sm3_diagnostic 只在停机后读一次，
+     * 可能包含退出期间的事件，回答不了"驱动器是在运行期就已经带上同步错误，还是丢失只出现在
+     * 停机瞬间"。这里记运行期首次读到非零的交换号（0 = 全程未出现）与最后一次读到的值，
+     * 用来和 first_cycle_failure 的时间坐标对齐。
+     */
+    uint64_t sm_sync_probe_count;
+    uint64_t sm2_first_error_exchange;
+    uint16_t sm2_first_error_missed;
+    bool sm2_first_error_sync_error;
+    uint16_t sm2_last_missed;
+    bool sm2_last_sync_error;
+    uint64_t sm3_first_error_exchange;
+    uint16_t sm3_first_error_missed;
+    bool sm3_first_error_sync_error;
+    uint16_t sm3_last_missed;
+    bool sm3_last_sync_error;
     emaster_position_scale_t position_scale;
     /* P4.4: 错误计数器（0x0300-0x030F），周期内 FPRD 读取 */
     bool error_counters_read;
@@ -341,6 +358,13 @@ typedef struct
      * 记录成数值才能判断"序言阻塞"这个解释是否留有裕量。
      */
     uint64_t shutdown_observer_join_ns;
+    /*
+     * 停机序言里过程数据中断的总窗口：最后一条周期帧的发送结束时刻 → 第一条安全停机帧的
+     * 发送结束时刻（同一 CLOCK_MONOTONIC 时基）。join 只是这个窗口里的一个分项，两次 AL
+     * 快照、观测线程收尾与审计解封同样在其中，只量 join 会低估驱动器真正看到的缺口。
+     * 0 表示未测到（没有成功的周期交换，或停机路径整个没走）。
+     */
+    uint64_t shutdown_prologue_gap_ns;
     emaster_cycle_failure_t first_cycle_failure;
     emaster_runtime_failure_t first_runtime_failure;
     emaster_run_audit_t audit;

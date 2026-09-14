@@ -190,6 +190,33 @@ static bool write_sync_diagnostic(FILE *stream,
 }
 
 /*
+ * 运行期周期性探针的结果。上面那个 sm*_diagnostic 是停机后的一次性读数，
+ * 这里回答的是另一个问题：驱动器是什么时候第一次带上同步错误的。
+ * first_error_exchange 为 0 表示全程没读到非零（probe_count 说明确实一直在读）。
+ */
+static bool write_sync_probe(FILE *stream, uint64_t probe_count,
+                             uint64_t sm2_first_exchange, uint16_t sm2_first_missed,
+                             bool sm2_first_sync_error, uint16_t sm2_last_missed,
+                             bool sm2_last_sync_error, uint64_t sm3_first_exchange,
+                             uint16_t sm3_first_missed, bool sm3_first_sync_error,
+                             uint16_t sm3_last_missed, bool sm3_last_sync_error)
+{
+    return fprintf(stream,
+                   "{\"probe_count\":%" PRIu64 ","
+                   "\"sm2\":{\"first_error_exchange\":%" PRIu64
+                   ",\"first_error_missed\":%u,\"first_error_sync_error\":%s,"
+                   "\"last_missed\":%u,\"last_sync_error\":%s},"
+                   "\"sm3\":{\"first_error_exchange\":%" PRIu64
+                   ",\"first_error_missed\":%u,\"first_error_sync_error\":%s,"
+                   "\"last_missed\":%u,\"last_sync_error\":%s}}",
+                   probe_count, sm2_first_exchange, (unsigned int)sm2_first_missed,
+                   sm2_first_sync_error ? "true" : "false", (unsigned int)sm2_last_missed,
+                   sm2_last_sync_error ? "true" : "false", sm3_first_exchange,
+                   (unsigned int)sm3_first_missed, sm3_first_sync_error ? "true" : "false",
+                   (unsigned int)sm3_last_missed, sm3_last_sync_error ? "true" : "false") >= 0;
+}
+
+/*
  * 输出一个分位点。落在量程外时不编造数值，只标记方向，让读者去看 ranges 的极值。
  * 桶宽同时给出，因为分位点的分辨率就是桶宽，不是精确值。
  */
@@ -395,6 +422,13 @@ static bool write_axis(FILE *stream,
     REQUIRE_WRITE(write_sync_diagnostic(stream, &axis->sm2_diagnostic));
     REQUIRE_WRITE(fputs(",\"sm3_diagnostic\":", stream) != EOF);
     REQUIRE_WRITE(write_sync_diagnostic(stream, &axis->sm3_diagnostic));
+    REQUIRE_WRITE(fputs(",\"sm_sync_probe\":", stream) != EOF);
+    REQUIRE_WRITE(write_sync_probe(stream, axis->sm_sync_probe_count,
+                                   axis->sm2_first_error_exchange, axis->sm2_first_error_missed,
+                                   axis->sm2_first_error_sync_error, axis->sm2_last_missed,
+                                   axis->sm2_last_sync_error, axis->sm3_first_error_exchange,
+                                   axis->sm3_first_error_missed, axis->sm3_first_error_sync_error,
+                                   axis->sm3_last_missed, axis->sm3_last_sync_error));
     REQUIRE_WRITE(fprintf(stream,
         ",\"shutdown_al\":{\"state\":%u,\"status_code\":%u}",
         (unsigned int)axis->shutdown_al_state, (unsigned int)axis->shutdown_al_status_code) >= 0);
@@ -745,7 +779,8 @@ bool emaster_run_report_write(FILE *stream,
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
         "\"safe_state_reached\":%s,\"sync0_disabled\":%s,"
         "\"restore_init_succeeded\":%s,"
-        "\"shutdown_observer_join_ns\":%" PRIu64 "},",
+        "\"shutdown_observer_join_ns\":%" PRIu64
+        ",\"shutdown_prologue_gap_ns\":%" PRIu64 "},",
         (unsigned int)report->status, (unsigned int)report->state, report->io_map_size,
         (unsigned int)report->expected_wkc, report->actual_wkc,
         report->cycle_count, report->process_data_exchange_count,
@@ -765,7 +800,8 @@ bool emaster_run_report_write(FILE *stream,
         report->safe_state_reached ? "true" : "false",
         report->sync0_disabled ? "true" : "false",
         report->restore_init_succeeded ? "true" : "false",
-        report->shutdown_observer_join_ns) >= 0);
+        report->shutdown_observer_join_ns,
+        report->shutdown_prologue_gap_ns) >= 0);
     REQUIRE_WRITE(fputs("\"first_cycle_failure\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_failure(stream, &report->first_cycle_failure));
     REQUIRE_WRITE(fputs(",\"first_runtime_failure\":", stream) != EOF);

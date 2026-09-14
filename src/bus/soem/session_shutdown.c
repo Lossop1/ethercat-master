@@ -122,6 +122,20 @@ static bool stop_process_data(emaster_soem_session_t *session) {
          */
         if (session->exchange > exchange_before) {
             session->report->safe_output_sent = true;
+            /*
+             * 序言缺口只记一次：起点是停机入口抓的最后一条周期帧发送时刻，终点是这里——
+             * 第一条真正发出去的安全停机帧。两者同为 CLOCK_MONOTONIC 的发送结束时刻，
+             * 差值就是驱动器在这段停机序言里没收到任何过程数据的窗口。
+             */
+            if (session->report->shutdown_prologue_gap_ns == 0U &&
+                session->shutdown_prologue_start_ns != 0U) {
+                uint64_t send_end_ns = session->axes[0].timing.last_host_send_end_ns;
+
+                if (send_end_ns > session->shutdown_prologue_start_ns) {
+                    session->report->shutdown_prologue_gap_ns =
+                        send_end_ns - session->shutdown_prologue_start_ns;
+                }
+            }
         }
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
@@ -169,6 +183,15 @@ static bool stop_process_data(emaster_soem_session_t *session) {
 
 void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     size_t axis_index;
+
+    /*
+     * 缺口测量的起点：最后一条周期帧的发送结束时刻。此刻 timing 里的最后一条样本就是
+     * 周期回路的最后一条帧，安全停机帧还没发（下面的 join 与快照都在窗口之内）。
+     */
+    if (session->plan != NULL && session->plan->axis_count > 0U)
+    {
+        session->shutdown_prologue_start_ns = session->axes[0].timing.last_host_send_end_ns;
+    }
 
     /* 进入停机时的 AL 快照：此时周期回路已经退出，但一个停机帧都还没发。 */
     if (session->context_open)
@@ -228,6 +251,12 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
          */
         if (communication_usable) {
             session->report->safe_state_reached = stop_process_data(session);
+            if (session->report->shutdown_prologue_gap_ns != 0U)
+            {
+                printf("[SHUTDOWN] 停机序言过程数据缺口 %.3f ms"
+                       "（最后一条周期帧 → 第一条安全停机帧）\n",
+                       (double)session->report->shutdown_prologue_gap_ns / 1000000.0);
+            }
         }
         if (communication_usable && !session->report->safe_state_reached &&
             session->report->status == EMASTER_CONTROL_SESSION_OK) {

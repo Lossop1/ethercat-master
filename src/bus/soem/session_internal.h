@@ -43,6 +43,9 @@ typedef struct {
     emaster_cycle_clock_t clock;
     uint8_t *io_map;
     uint64_t exchange;
+    /* 停机序言缺口的起点：最后一条周期帧的发送结束时刻（CLOCK_MONOTONIC ns）。
+     * 在停机入口抓取，第一条安全停机帧发出后与终点相减，得到驱动器实际经历的数据中断窗口。 */
+    uint64_t shutdown_prologue_start_ns;
     uint64_t transition_cycles;
     uint64_t op_transition_cycles;
     bool context_open;
