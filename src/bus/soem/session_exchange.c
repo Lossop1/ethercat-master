@@ -1,5 +1,6 @@
 #include "session_internal.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -164,6 +165,21 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     ++session->report->cycle_count;
     matched = session->report->actual_wkc == (int)session->report->expected_wkc;
     if (!matched) {
+        /*
+         * 连续段的第一个不符是唯一能定因果的时刻：此前的报告只有 WKC 数值，
+         * 无法区分"驱动器先掉出 OP 导致 WKC 少计"和"帧本身出问题导致 WKC 少计"。
+         * 这里读一次 AL 状态（三轴 FPRD，约几十微秒）并留下现场；只在连续段
+         * 首次触发，周期预算不受常态影响。
+         */
+        if (session->wkc_consecutive_errors == 0U) {
+            ecx_readstate(&session->context);
+            for (size_t axis = 0U; axis < session->plan->axis_count; ++axis) {
+                printf("[WKC] 首次不符 交换号=%" PRIu64 " 轴%zu: AL state=%u, status_code=0x%04X\n",
+                       session->exchange, axis + 1U,
+                       (unsigned int)session->context.slavelist[axis + 1U].state,
+                       (unsigned int)session->context.slavelist[axis + 1U].ALstatuscode);
+            }
+        }
         ++session->wkc_consecutive_errors;
         ++session->wkc_total_errors;
         ++session->report->wkc_error_count;

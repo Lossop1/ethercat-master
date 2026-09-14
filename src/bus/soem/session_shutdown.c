@@ -1,6 +1,30 @@
 #include "session_internal.h"
 
 #include <limits.h>
+#include <stdio.h>
+
+/*
+ * 停机路径上的 AL 快照。停机结束后读到的 AL 状态（SAFE-OP + 0x1A）只能说明
+ * 退出时驱动器不在 OP，无法区分三种来源：周期运行中掉出、停机序言阻塞期间掉出、
+ * 或者被安全停机帧打掉。在两个时刻各读一次，把时间坐标补上。
+ */
+static void print_al_snapshot(emaster_soem_session_t *session, const char *label)
+{
+    size_t axis_index;
+
+    if (session == NULL || session->plan == NULL)
+    {
+        return;
+    }
+    ecx_readstate(&session->context);
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+    {
+        printf("[SHUTDOWN] %s 轴%zu: AL state=%u, status_code=0x%04X\n", label,
+               axis_index + 1U,
+               (unsigned int)session->context.slavelist[axis_index + 1U].state,
+               (unsigned int)session->context.slavelist[axis_index + 1U].ALstatuscode);
+    }
+}
 
 static void disable_sync0(ecx_contextt *context, emaster_cia_process_image_t *runtime,
                           size_t count) {
@@ -130,12 +154,29 @@ static bool stop_process_data(emaster_soem_session_t *session) {
 void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     size_t axis_index;
 
+    /* 进入停机时的 AL 快照：此时周期回路已经退出，但一个停机帧都还没发。 */
+    if (session->context_open)
+    {
+        print_al_snapshot(session, "停机入口");
+    }
+
     /* P4.3: 停止 SDO 慢速观测线程 */
     emaster_soem_session_stop_observer(session);
 
     if (!session->context_open) {
         return;
     }
+    /*
+     * 安全停机帧之前再读一次。两次快照相同 → 驱动器是在周期运行期间掉出 OP；
+     * 第一次在 OP、第二次掉出 → 掉出发生在停机序言（观测线程收尾等）阻塞期间，
+     * 与安全停机帧无关。这正是 WKC 从 9 掉到 3 的两种互斥解释。
+     */
+    print_al_snapshot(session, "安全停机前");
+    /*
+     * 审计在周期阶段是封顶的（超出预算的样本只计数不保存）。若在这里才解封，
+     * 则安全停机阶段——恰恰是故障发生的阶段——一个样本都留不下。
+     */
+    emaster_run_audit_end_cyclic(&session->report->audit);
     if (session->process_map_ready && session->cycle_output_active) {
         bool communication_usable =
             session->report->status != EMASTER_CONTROL_SESSION_WKC_MISMATCH &&
@@ -183,8 +224,13 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         disable_sync0(&session->context, session->images, session->plan->axis_count);
         session->report->sync0_disabled = true;
     }
-    emaster_run_audit_end_cyclic(&session->report->audit);
-    if (session->report->diagnostic_preop_reached) {
+    /*
+     * 停机诊断此前只在 PRE-OP 到达后执行。驱动器掉出 OP（SAFE-OP + 0x1A）会让
+     * PRE-OP 切换超时，于是"最需要诊断的那次运行"里，全部停机 SDO 诊断一起被跳过：
+     * 报告中的 read_succeeded=false 分不清"没尝试"和"读失败"，SM 同步计数器
+     * （1C32/1C33）就是这样一轮都没读到。邮箱在 SAFE-OP 下仍然可用，会话还在就能读。
+     */
+    if (session->report->diagnostic_preop_reached || session->report->safe_op_reached) {
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
             emaster_soem_sdo_reader_context_t sdo;
