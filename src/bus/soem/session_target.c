@@ -71,7 +71,9 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
         int32_t target = session->position_target_source_targets[axis_index];
 
         /* 软件限位检查 */
-        if (!target_within_limits(&session->axes[axis_index], target))
+        if (session->plan->axes[axis_index].operation_mode != NULL &&
+            session->plan->axes[axis_index].operation_mode->value == INT8_C(8) &&
+            !target_within_limits(&session->axes[axis_index], target))
         {
             return EMASTER_CONTROL_SESSION_MOTION_INVALID;
         }
