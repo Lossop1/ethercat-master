@@ -161,6 +161,18 @@ bool emaster_cyclic_timing_stats_record(
         stats->last_host_send_start_ns = observation->host_send_start_ns;
         stats->last_host_send_end_ns = observation->host_send_end_ns;
         stats->last_host_receive_end_ns = observation->host_receive_end_ns;
+        /*
+         * 极值坐标要在更新范围之前判定：has_* 为假时这次更新同时设定 min 和 max，
+         * 更新之后再比较就分不出"首次"和"刷新"。
+         */
+        if (!stats->has_round_trip || round_trip > stats->max_round_trip_ns)
+        {
+            stats->max_round_trip_exchange = observation->exchange;
+        }
+        if (!stats->has_send_lateness || send_lateness > stats->max_send_lateness_ns)
+        {
+            stats->max_send_lateness_exchange = observation->exchange;
+        }
         update_unsigned_range(&stats->has_send_duration, &stats->min_send_duration_ns,
                               &stats->max_send_duration_ns, send_duration);
         update_unsigned_range(&stats->has_round_trip, &stats->min_round_trip_ns,
@@ -204,6 +216,10 @@ bool emaster_cyclic_timing_stats_record(
                         &stats->max_dc_arrival_phase_ns, arrival_phase_ns);
     update_signed_range(&stats->has_phase_error, &stats->min_phase_error_ns,
                         &stats->max_phase_error_ns, phase_error_ns);
+    if (!stats->has_sync0_margin || sync0_margin_ns < stats->min_sync0_margin_ns)
+    {
+        stats->min_sync0_margin_exchange = observation->exchange;
+    }
     update_signed_range(&stats->has_sync0_margin, &stats->min_sync0_margin_ns,
                         &stats->max_sync0_margin_ns, sync0_margin_ns);
     emaster_cyclic_histogram_record(&stats->dc_arrival_phase_histogram, arrival_phase_ns);

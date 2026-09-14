@@ -76,6 +76,15 @@ typedef struct
      */
     uint64_t first_sync0_late_exchange;
     uint64_t last_sync0_late_exchange;
+    /*
+     * 极值出现的交换号（0 = 未出现）。极值本身回答不了"它是不是落在掉出 OP 的那几个
+     * 周期里"：两轮的 round_trip 最大值几乎相同（1.0763 / 1.0769 ms），一轮掉出、一轮
+     * 没有，只比数值无法继续。坐标才能把极值和故障时刻对齐。
+     */
+    uint64_t max_round_trip_exchange;
+    uint64_t max_send_lateness_exchange;
+    /* sync0 裕量取最小值一侧：裕量越小越危险。 */
+    uint64_t min_sync0_margin_exchange;
     bool has_send_duration;
     bool has_round_trip;
     bool has_send_lateness;

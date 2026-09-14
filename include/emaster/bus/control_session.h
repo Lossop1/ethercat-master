@@ -221,6 +221,15 @@ typedef struct
     bool sm3_first_error_sync_error;
     uint16_t sm3_last_missed;
     bool sm3_last_sync_error;
+    /*
+     * 第一个 WKC 不符当下的 AL 快照，回答"驱动器此刻还在不在 OP"。更进一步的问法是
+     * 驱动器自己的 SM2 事件丢失计数此刻是多少（帧异常在前则接近 0，驱动器监督在前则
+     * 已接近阈值），但那只能走邮箱读 1C32:11，而在周期里发邮箱本身就是推出 OP 的
+     * 原因之一（见 session_exchange.c 现场函数的说明），故不在此处取。
+     */
+    bool first_mismatch_al_read;
+    uint16_t first_mismatch_al_state;
+    uint16_t first_mismatch_al_status_code;
     emaster_position_scale_t position_scale;
     /* P4.4: 错误计数器（0x0300-0x030F），周期内 FPRD 读取 */
     bool error_counters_read;
@@ -266,6 +275,49 @@ typedef struct
     uint16_t shutdown_pre_stop_al_state;
     uint16_t shutdown_pre_stop_al_status_code;
 } emaster_control_session_axis_result_t;
+
+/* 周期现场环的容量。64 条约等于 64 ms，够覆盖一次掉出 OP 前后的窗口。 */
+#define EMASTER_CYCLE_TRACE_CAPACITY 64U
+
+/* 周期现场样本的标志位。截止超时不在其中：它由报告里带交换号的标量单独记录。 */
+#define EMASTER_CYCLE_TRACE_FLAG_WKC_MISMATCH 0x0001U
+#define EMASTER_CYCLE_TRACE_FLAG_ERROR_COUNTER_READ_FAILED 0x0002U
+
+/*
+ * 一个周期的一条现场记录。报告此前只有整段运行的极值和直方图：1.077 ms 的往返、
+ * 103 µs 的发送迟到、45 µs 的 SYNC0 裕量都没有交换号坐标，周期尾部也没有分成
+ * 收包 / 邮箱推进 / 3×FPRD(0x0300) 三段（而 timing 的 round_trip 正好把后两段
+ * 都算了进去）。于是"驱动器在那几个周期里到底有没有按时拿到数据"无法从报告回答。
+ */
+typedef struct
+{
+    uint64_t exchange;
+    int32_t wkc;
+    uint32_t flags;
+    uint32_t send_duration_ns;
+    uint32_t receive_duration_ns;
+    uint32_t mailbox_duration_ns;
+    uint32_t error_counter_duration_ns;
+    int32_t send_lateness_ns;
+    int32_t sync0_margin_ns;
+} emaster_cycle_trace_sample_t;
+
+/*
+ * 环形覆盖的周期现场。会话结束时环里就是最后 64 个周期（故障窗口本身）；
+ * 第一个 WKC 不符当下另冻结一份副本，那份记录的是不符之前的 64 个周期——
+ * 环会被后续周期覆盖，不冻结就没有异常之前的历史。
+ */
+typedef struct
+{
+    emaster_cycle_trace_sample_t samples[EMASTER_CYCLE_TRACE_CAPACITY];
+    size_t sample_count;
+    size_t write_index;
+    bool mismatch_present;
+    uint64_t mismatch_exchange;
+    int mismatch_wkc;
+    size_t mismatch_sample_count;
+    emaster_cycle_trace_sample_t mismatch_samples[EMASTER_CYCLE_TRACE_CAPACITY];
+} emaster_cycle_trace_t;
 
 /* 首次周期失败只写一次，后续停机交换不能改变其 WKC、阶段和交换号。 */
 typedef struct
@@ -365,6 +417,27 @@ typedef struct
      * 0 表示未测到（没有成功的周期交换，或停机路径整个没走）。
      */
     uint64_t shutdown_prologue_gap_ns;
+    /*
+     * 周期尾部各段的耗时上限。host_receive_end_ns 在错误计数器读取之后才取，
+     * 所以 timing 里的 round_trip 已经把邮箱推进与 3 次 FPRD(0x0300) 算进去了；
+     * 只给合计值区分不出"收包慢""邮箱慢"和"FPRD 超时"，而三者的修法不同。
+     */
+    uint64_t tail_max_receive_ns;
+    uint64_t tail_max_mailbox_ns;
+    uint64_t tail_max_error_counter_ns;
+    /* FPRD(0x0300) 返回 wkc<=0 的次数与首次交换号（每次读取各带 250 µs 超时）。 */
+    uint64_t error_counter_read_fail_count;
+    uint64_t first_error_counter_read_fail_exchange;
+    /* 从定时点到周期尾部结束的总耗时超过一个周期的次数与首次交换号。 */
+    uint64_t over_budget_cycle_count;
+    uint64_t first_over_budget_exchange;
+    /* 首次 WKC 不符的整体坐标；逐轴现场在 axes[] 的 first_mismatch_* 里。 */
+    bool first_mismatch_present;
+    uint64_t first_mismatch_exchange;
+    int first_mismatch_wkc;
+    /* 首次截止超时对应的周期号（0 = 未出现）。 */
+    uint64_t first_deadline_missed_exchange;
+    emaster_cycle_trace_t cycle_trace;
     emaster_cycle_failure_t first_cycle_failure;
     emaster_runtime_failure_t first_runtime_failure;
     emaster_run_audit_t audit;

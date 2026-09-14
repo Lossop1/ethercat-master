@@ -304,7 +304,14 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         ",\"last_dc_sample_valid\":%s,"
         "\"sync0_late_count\":%" PRIu64 ","
         "\"first_sync0_late_exchange\":%" PRIu64 ","
-        "\"last_sync0_late_exchange\":%" PRIu64 ",\"distribution\":{",
+        "\"last_sync0_late_exchange\":%" PRIu64 ","
+        /*
+         * 极值自己的交换号。有了坐标才能回答"1.077 ms 的往返是不是就落在 WKC 不符
+         * 的那几个周期里"，否则只能跟另一轮的极值比对，而两轮极值几乎相同。
+         */
+        "\"extreme_exchanges\":{\"max_round_trip\":%" PRIu64
+        ",\"max_send_lateness\":%" PRIu64 ",\"min_sync0_margin\":%" PRIu64 "},"
+        "\"distribution\":{",
         timing->has_send_duration ? "true" : "false", timing->min_send_duration_ns,
         timing->max_send_duration_ns, timing->has_round_trip ? "true" : "false",
         timing->min_round_trip_ns, timing->max_round_trip_ns,
@@ -317,7 +324,8 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         timing->last_phase_error_ns, timing->last_sync0_margin_ns,
         timing->last_dc_sample_valid ? "true" : "false",
         timing->sync0_late_count, timing->first_sync0_late_exchange,
-        timing->last_sync0_late_exchange) >= 0);
+        timing->last_sync0_late_exchange, timing->max_round_trip_exchange,
+        timing->max_send_lateness_exchange, timing->min_sync0_margin_exchange) >= 0);
     REQUIRE_WRITE(write_distribution(stream, "send_duration_ns",
                                      &timing->send_duration_histogram));
     REQUIRE_WRITE(fputc(',', stream) != EOF);
@@ -442,6 +450,17 @@ static bool write_axis(FILE *stream,
         ",\"shutdown_al_pre_stop\":{\"state\":%u,\"status_code\":%u}",
         (unsigned int)axis->shutdown_pre_stop_al_state,
         (unsigned int)axis->shutdown_pre_stop_al_status_code) >= 0);
+    /*
+     * 首个 WKC 不符当下的逐轴 AL 快照，是全报告中唯一一次"帧已经不对、而驱动器
+     * 尚未被任何停机流程碰过"的读数：轴若此刻仍在 OP（8），说明帧异常在前；若已到
+     * SAFE-OP（20 / 0x001A），说明驱动器侧监督在前。
+     */
+    REQUIRE_WRITE(fprintf(
+        stream,
+        ",\"first_mismatch\":{\"al_read\":%s,\"al_state\":%u,\"al_status_code\":%u}",
+        axis->first_mismatch_al_read ? "true" : "false",
+        (unsigned int)axis->first_mismatch_al_state,
+        (unsigned int)axis->first_mismatch_al_status_code) >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
         ",\"safeop_mode_readback\":{\"read_succeeded\":%s,\"mode_display\":%d,"
@@ -740,6 +759,64 @@ static bool write_runtime_failure(FILE *stream, const emaster_runtime_failure_t 
     return fputs("]}", stream) != EOF;
 }
 
+/* 单周期现场。无 DC 样本时 sync0_margin 输出 null，不编造数值。 */
+static bool write_cycle_trace_sample(FILE *stream,
+                                     const emaster_cycle_trace_sample_t *sample)
+{
+    REQUIRE_WRITE(fprintf(
+        stream,
+        "{\"exchange\":%" PRIu64 ",\"wkc\":%d,\"flags\":%" PRIu32
+        ",\"send_duration_ns\":%" PRIu32
+        ",\"receive_duration_ns\":%" PRIu32
+        ",\"mailbox_duration_ns\":%" PRIu32
+        ",\"error_counter_duration_ns\":%" PRIu32
+        ",\"send_lateness_ns\":%" PRId32 ",\"sync0_margin_ns\":",
+        sample->exchange, sample->wkc, sample->flags, sample->send_duration_ns,
+        sample->receive_duration_ns, sample->mailbox_duration_ns,
+        sample->error_counter_duration_ns, sample->send_lateness_ns) >= 0);
+    if (sample->sync0_margin_ns == INT32_MIN)
+    {
+        REQUIRE_WRITE(fputs("null", stream) != EOF);
+    }
+    else
+    {
+        REQUIRE_WRITE(fprintf(stream, "%" PRId32, sample->sync0_margin_ns) >= 0);
+    }
+    return fputc('}', stream) != EOF;
+}
+
+/*
+ * 周期现场环的两份记录：最近 64 个周期（环形，需按时间顺序展开），
+ * 以及第一个 WKC 不符之前冻结的那 64 个周期（冻结时已展开）。
+ */
+static bool write_cycle_trace(FILE *stream, const emaster_cycle_trace_t *trace)
+{
+    size_t start = (trace->write_index + EMASTER_CYCLE_TRACE_CAPACITY -
+                    trace->sample_count) %
+                   EMASTER_CYCLE_TRACE_CAPACITY;
+
+    REQUIRE_WRITE(fprintf(stream,
+        "{\"capacity\":%u,\"live\":{\"count\":%zu,\"samples\":[",
+        (unsigned int)EMASTER_CYCLE_TRACE_CAPACITY, trace->sample_count) >= 0);
+    for (size_t index = 0U; index < trace->sample_count; ++index)
+    {
+        REQUIRE_WRITE(fputs(index == 0U ? "" : ",", stream) != EOF);
+        REQUIRE_WRITE(write_cycle_trace_sample(
+            stream, &trace->samples[(start + index) % EMASTER_CYCLE_TRACE_CAPACITY]));
+    }
+    REQUIRE_WRITE(fprintf(stream,
+        "]},\"mismatch\":{\"present\":%s,\"exchange\":%" PRIu64
+        ",\"wkc\":%d,\"count\":%zu,\"samples\":[",
+        trace->mismatch_present ? "true" : "false", trace->mismatch_exchange,
+        trace->mismatch_wkc, trace->mismatch_sample_count) >= 0);
+    for (size_t index = 0U; index < trace->mismatch_sample_count; ++index)
+    {
+        REQUIRE_WRITE(fputs(index == 0U ? "" : ",", stream) != EOF);
+        REQUIRE_WRITE(write_cycle_trace_sample(stream, &trace->mismatch_samples[index]));
+    }
+    return fputs("]}}", stream) != EOF;
+}
+
 bool emaster_run_report_write(FILE *stream,
                               const emaster_session_plan_t *plan,
                               const emaster_control_session_report_t *report,
@@ -806,6 +883,31 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(write_cycle_failure(stream, &report->first_cycle_failure));
     REQUIRE_WRITE(fputs(",\"first_runtime_failure\":", stream) != EOF);
     REQUIRE_WRITE(write_runtime_failure(stream, &report->first_runtime_failure));
+    /*
+     * 周期尾部的三个分段耗时极值。round_trip 把"收包/邮箱推进/3×FPRD"算成一个数，
+     * 因此 1.077 ms 的往返极值此前无法归因；over_budget 是主站自己吃掉超过一个
+     * 周期的次数，直接对应"发得出去但发得不及时"的候选。
+     */
+    REQUIRE_WRITE(fprintf(
+        stream,
+        ",\"process_data_delivery\":{\"tail_max_receive_ns\":%" PRIu64
+        ",\"tail_max_mailbox_ns\":%" PRIu64
+        ",\"tail_max_error_counter_ns\":%" PRIu64
+        ",\"error_counter_read_fail_count\":%" PRIu64
+        ",\"first_error_counter_read_fail_exchange\":%" PRIu64
+        ",\"over_budget_cycle_count\":%" PRIu64
+        ",\"first_over_budget_exchange\":%" PRIu64
+        ",\"first_deadline_missed_exchange\":%" PRIu64
+        ",\"first_mismatch_present\":%s,\"first_mismatch_exchange\":%" PRIu64
+        ",\"first_mismatch_wkc\":%d},",
+        report->tail_max_receive_ns, report->tail_max_mailbox_ns,
+        report->tail_max_error_counter_ns, report->error_counter_read_fail_count,
+        report->first_error_counter_read_fail_exchange, report->over_budget_cycle_count,
+        report->first_over_budget_exchange, report->first_deadline_missed_exchange,
+        report->first_mismatch_present ? "true" : "false", report->first_mismatch_exchange,
+        report->first_mismatch_wkc) >= 0);
+    REQUIRE_WRITE(fputs("\"cycle_trace\":", stream) != EOF);
+    REQUIRE_WRITE(write_cycle_trace(stream, &report->cycle_trace));
     REQUIRE_WRITE(fprintf(stream,
         ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64 "},"
         "\"diagnostic_preop_reached\":%s,",
