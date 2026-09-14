@@ -4,6 +4,8 @@
   "messages": {
     "control_session_first_failure_line": "首次周期异常：交换号=%llu，原因=%s，WKC取得=%s，WKC=%d\n",
     "control_session_audit_truncated": "审计记录空间已用完，未保存的 PDO 字段样本=%llu；控制结果与审计完整性分别记录\n",
+    "control_session_runtime_failure_line": "运行时故障现场：周期=%llu，交换号=%llu，原因=%s，协调器判定=%d（-1=未调用，0=通过，非零=拒绝整帧），轴数=%u\n",
+    "control_session_runtime_failure_axis_line": "  轴 %u：状态字=0x%04X，控制字=0x%04X，解码状态=%u，状态字可解=%s，驱动器故障=%s\n",
     "command_interfaces": "interfaces",
     "command_deployments": "deployments",
     "command_capture": "capture",

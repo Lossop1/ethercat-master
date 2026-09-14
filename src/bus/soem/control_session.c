@@ -134,6 +134,55 @@ void emaster_soem_session_set_state(
     }
 }
 
+/*
+ * 首次锁存时保留故障瞬间的现场。这里是全部运行时失败的汇聚点，在此抓快照可以覆盖
+ * 协调器拒绝整帧、轴健康检查和使能确认三类来源，不必在十几处调用点各写一遍。
+ *
+ * 只写一次：后续失败（含停机阶段）不得改变现场。控制器数组在 allocate_session
+ * 成功前为 NULL，那时只记录计数、交换号和协调器判定。
+ */
+static void capture_runtime_failure(
+    emaster_soem_session_t *session,
+    emaster_control_session_status_t status)
+{
+    emaster_runtime_failure_t *failure = &session->report->first_runtime_failure;
+    size_t axis_index;
+    size_t axis_count;
+
+    if (failure->present)
+    {
+        return;
+    }
+    failure->present = true;
+    failure->status = status;
+    failure->cycle_count = session->report->cycle_count;
+    failure->exchange = session->exchange;
+    failure->coordinator_status = session->last_coordinator_status;
+    if (session->plan == NULL || session->status_words == NULL ||
+        session->controller_outputs == NULL)
+    {
+        return;
+    }
+    axis_count = session->plan->axis_count;
+    if (axis_count > EMASTER_RUNTIME_FAILURE_MAX_AXES)
+    {
+        axis_count = EMASTER_RUNTIME_FAILURE_MAX_AXES;
+    }
+    failure->axis_count = axis_count;
+    for (axis_index = 0U; axis_index < axis_count; ++axis_index)
+    {
+        failure->status_words[axis_index] = session->status_words[axis_index];
+        failure->control_words[axis_index] =
+            session->controller_outputs[axis_index].control_word;
+        failure->observed_states[axis_index] =
+            session->controller_outputs[axis_index].observed_state;
+        failure->state_known[axis_index] =
+            session->controller_outputs[axis_index].state_known;
+        failure->fault_present[axis_index] =
+            session->controller_outputs[axis_index].fault_present;
+    }
+}
+
 void emaster_soem_session_latch_failure(
     emaster_soem_session_t *session,
     emaster_control_session_status_t status)
@@ -145,6 +194,7 @@ void emaster_soem_session_latch_failure(
     {
         return;
     }
+    capture_runtime_failure(session, status);
     switch (status)
     {
         case EMASTER_CONTROL_SESSION_TOPOLOGY_MISMATCH:
@@ -208,6 +258,8 @@ emaster_control_session_status_t emaster_soem_control_session(
     memset(session, 0, sizeof(*session));
     memset(report, 0, sizeof(*report));
     memset(axis_storage, 0, plan->axis_count * sizeof(*axis_storage));
+    /* -1 而不是 0：0 是 MULTIAXIS_OK，"还没调用过"不能伪装成"协调器通过了" */
+    session->last_coordinator_status = -1;
     session->plan = plan;
     session->axes = axis_storage;
     session->report = report;

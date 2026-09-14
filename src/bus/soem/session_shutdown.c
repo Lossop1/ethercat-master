@@ -16,7 +16,19 @@ static void disable_sync0(ecx_contextt *context, emaster_cia_process_image_t *ru
     }
 }
 
-/* 停机仍使用相同的控制器和过程映像；任何一次交换失败都不能当作停用确认。 */
+/*
+ * 停机仍使用相同的控制器和过程映像；任何一次交换失败都不能当作停用确认。
+ *
+ * 这里刻意不经过多轴协调器。协调器会重新解码状态字，解不出来就拒绝整帧并返回
+ * 错误——而"状态字解不出来"恰恰是最需要发出停用命令的情形。早退会让安全输出一次
+ * 都发不出去：现场表现是报告里 safe_output_sent=false，而主站的失败消息却声称
+ * "已尝试发送安全输出"。目标在进入本函数前已固定为 SAFE_STOP，控制器对未知状态
+ * 只会产生 Disable Voltage（0x0000），逐轴直接计算不会产生任何使能位；跨轴一致性
+ * 在此也没有意义，每轴独立撤销使能就是想要的终点。
+ *
+ * 被放弃的只有协调器的两项检查：序号单调和帧截止时间。两者都是为"继续驱动轴"
+ * 服务的，在撤销使能的路径上没有对应风险。
+ */
 static bool stop_process_data(emaster_soem_session_t *session) {
     uint64_t timeout_ns;
     uint64_t max_cycles;
@@ -37,26 +49,18 @@ static bool stop_process_data(emaster_soem_session_t *session) {
     }
 
     for (cycle_index = 0U; cycle_index < max_cycles; ++cycle_index) {
-        emaster_multiaxis_frame_t frame;
         bool all_axes_safe = true;
-        uint64_t now_ns;
-        uint64_t deadline_ns;
+        uint64_t exchange_before = session->exchange;
 
-        if (!emaster_cycle_clock_sample(&session->clock, &now_ns, &deadline_ns)) {
-            return false;
-        }
-        frame.sequence = session->report->cycle_count + UINT64_C(1);
-        frame.deadline_ns = deadline_ns;
-        frame.axis_count = session->plan->axis_count;
-        frame.status_words = session->status_words;
-        frame.outputs = session->controller_outputs;
-        if (emaster_multiaxis_coordinator_step(&session->coordinator, &frame, now_ns) !=
-            EMASTER_MULTIAXIS_OK) {
-            return false;
-        }
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
 
+            /* 失败时 controller_outputs 保持上周期值，此时直接返回不发帧。 */
+            if (!emaster_cia402_controller_step(&session->controllers[axis_index],
+                                                session->status_words[axis_index],
+                                                &session->controller_outputs[axis_index])) {
+                return false;
+            }
             session->axes[axis_index].control_word =
                 session->controller_outputs[axis_index].control_word;
             if (!emaster_cia_process_image_update_output(
@@ -72,7 +76,13 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             EMASTER_CONTROL_SESSION_OK) {
             return false;
         }
-        session->report->safe_output_sent = true;
+        /*
+         * 只有真正发出过帧才算"已发送安全输出"。周期时钟恢复会把本周期整帧跳过
+         * （session_exchange.c 的 deadline_recovery 分支），那时交换号不变，不算数。
+         */
+        if (session->exchange > exchange_before) {
+            session->report->safe_output_sent = true;
+        }
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
             emaster_control_session_axis_result_t *axis = &session->axes[axis_index];

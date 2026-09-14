@@ -253,6 +253,37 @@ typedef struct
     int64_t dc_time_ns;
 } emaster_cycle_failure_t;
 
+/* 运行时故障现场记录的轴数上限，与过程映像和外部目标缓冲保持一致。 */
+#define EMASTER_RUNTIME_FAILURE_MAX_AXES 16U
+
+/*
+ * 首次运行时故障现场。first_cycle_failure 只覆盖周期交换自身的失败；多轴协调器、
+ * 轴健康检查和使能确认发现的故障走 latch_failure 那条路径，此前不留下任何现场，
+ * 事后只能从一句笼统的失败消息反推。这里在首次锁存时抓一次快照。
+ *
+ * coordinator_status 是判据的核心：非零（非 MULTIAXIS_OK）表示故障由协调器拒绝整帧
+ * 引起，此时协调器已把全部输出清零，所以所有轴的 state_known 都为假；为零则说明
+ * 故障来自其后的轴健康检查（该轴 state_known 为假）或使能确认（voltage_enabled 为假）。
+ * status_words 是喂给协调器的原始状态字，不被清零，据此可以定位是哪一轴解不出来。
+ *
+ * 这些数组只在前 axis_count 项有效，超出部分保持零值。
+ */
+typedef struct
+{
+    bool present;
+    emaster_control_session_status_t status;
+    uint64_t cycle_count;
+    uint64_t exchange;
+    /* 多轴协调器的最后一次判定，取值见 emaster_multiaxis_status_t。 */
+    int coordinator_status;
+    size_t axis_count;
+    uint16_t status_words[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    uint16_t control_words[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    emaster_cia402_state_t observed_states[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    bool state_known[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    bool fault_present[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+} emaster_runtime_failure_t;
+
 typedef struct
 {
     emaster_control_session_status_t status;
@@ -296,6 +327,7 @@ typedef struct
     bool restore_init_succeeded;
     bool diagnostic_preop_reached;
     emaster_cycle_failure_t first_cycle_failure;
+    emaster_runtime_failure_t first_runtime_failure;
     emaster_run_audit_t audit;
 } emaster_control_session_report_t;
 

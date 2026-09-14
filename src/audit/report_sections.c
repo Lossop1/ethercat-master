@@ -630,6 +630,45 @@ static bool write_cycle_failure(FILE *stream, const emaster_cycle_failure_t *fai
     return fputs("}", stream) != EOF;
 }
 
+/*
+ * 运行时故障现场：故障瞬间主站看到的原始状态字、解码结果和已生成的控制字。
+ * 与 first_cycle_failure（交换本身失败）互补，覆盖协调器拒绝、健康检查和使能确认。
+ * coordinator_status 为 -1 表示故障发生时协调器还没被调用过。
+ */
+static bool write_runtime_failure(FILE *stream, const emaster_runtime_failure_t *failure)
+{
+    size_t axis_index;
+    size_t axis_count;
+
+    if (!failure->present)
+    {
+        return fputs("null", stream) != EOF;
+    }
+    axis_count = failure->axis_count;
+    if (axis_count > EMASTER_RUNTIME_FAILURE_MAX_AXES)
+    {
+        axis_count = EMASTER_RUNTIME_FAILURE_MAX_AXES;
+    }
+    REQUIRE_WRITE(fprintf(stream,
+        "{\"status_code\":%u,\"cycle_count\":%" PRIu64 ",\"exchange\":%" PRIu64
+        ",\"coordinator_status\":%d,\"axis_count\":%zu,\"axes\":[",
+        (unsigned int)failure->status, failure->cycle_count, failure->exchange,
+        failure->coordinator_status, axis_count) >= 0);
+    for (axis_index = 0U; axis_index < axis_count; ++axis_index)
+    {
+        REQUIRE_WRITE(fprintf(stream,
+            "%s{\"status_word\":\"0x%04X\",\"control_word\":\"0x%04X\","
+            "\"observed_state\":%u,\"state_known\":%s,\"fault_present\":%s}",
+            axis_index == 0U ? "" : ",",
+            (unsigned int)failure->status_words[axis_index],
+            (unsigned int)failure->control_words[axis_index],
+            (unsigned int)failure->observed_states[axis_index],
+            failure->state_known[axis_index] ? "true" : "false",
+            failure->fault_present[axis_index] ? "true" : "false") >= 0);
+    }
+    return fputs("]}", stream) != EOF;
+}
+
 bool emaster_run_report_write(FILE *stream,
                               const emaster_session_plan_t *plan,
                               const emaster_control_session_report_t *report,
@@ -690,6 +729,8 @@ bool emaster_run_report_write(FILE *stream,
         report->restore_init_succeeded ? "true" : "false") >= 0);
     REQUIRE_WRITE(fputs("\"first_cycle_failure\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_failure(stream, &report->first_cycle_failure));
+    REQUIRE_WRITE(fputs(",\"first_runtime_failure\":", stream) != EOF);
+    REQUIRE_WRITE(write_runtime_failure(stream, &report->first_runtime_failure));
     REQUIRE_WRITE(fprintf(stream,
         ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64 "},"
         "\"diagnostic_preop_reached\":%s,",

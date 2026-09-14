@@ -168,6 +168,32 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                 (unsigned long long)failure->exchange, session_status_text(failure->status),
                 result_text(failure->wkc_available), failure->wkc_available ? failure->wkc : -1);
     }
+    if (report->first_runtime_failure.present) {
+        /* 变量名刻意与外层循环的 axis_index 区分，避免 -Wshadow。 */
+        const emaster_runtime_failure_t *runtime_failure = &report->first_runtime_failure;
+        size_t runtime_axis_index;
+        size_t runtime_axis_count = runtime_failure->axis_count;
+
+        if (runtime_axis_count > EMASTER_RUNTIME_FAILURE_MAX_AXES) {
+            runtime_axis_count = EMASTER_RUNTIME_FAILURE_MAX_AXES;
+        }
+        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_RUNTIME_FAILURE_LINE),
+                (unsigned long long)runtime_failure->cycle_count,
+                (unsigned long long)runtime_failure->exchange,
+                session_status_text(runtime_failure->status),
+                runtime_failure->coordinator_status, (unsigned int)runtime_axis_count);
+        for (runtime_axis_index = 0U; runtime_axis_index < runtime_axis_count;
+             ++runtime_axis_index) {
+            fprintf(stdout,
+                    emaster_text(EMASTER_TEXT_CONTROL_SESSION_RUNTIME_FAILURE_AXIS_LINE),
+                    (unsigned int)(runtime_axis_index + 1U),
+                    (unsigned int)runtime_failure->status_words[runtime_axis_index],
+                    (unsigned int)runtime_failure->control_words[runtime_axis_index],
+                    (unsigned int)runtime_failure->observed_states[runtime_axis_index],
+                    result_text(runtime_failure->state_known[runtime_axis_index]),
+                    result_text(runtime_failure->fault_present[runtime_axis_index]));
+        }
+    }
     if (report->audit.omitted_pdo_samples > 0U) {
         fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_TRUNCATED),
                 (unsigned long long)report->audit.omitted_pdo_samples);

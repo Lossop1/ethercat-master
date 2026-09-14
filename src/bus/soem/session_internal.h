@@ -36,6 +36,10 @@ typedef struct {
     emaster_velocity_motion_t velocity_motion;
     bool velocity_motion_prepared;
     emaster_multiaxis_coordinator_t coordinator;
+    /* 协调器的最后一次判定（emaster_multiaxis_status_t）。故障锁存时记入报告现场：
+     * 非零说明是协调器拒绝了整帧，为零说明故障出在其后的健康检查或使能确认。
+     * -1 表示协调器还没被调用过（配置或使能前就失败了），不是"通过"。 */
+    int last_coordinator_status;
     emaster_cycle_clock_t clock;
     uint8_t *io_map;
     uint64_t exchange;

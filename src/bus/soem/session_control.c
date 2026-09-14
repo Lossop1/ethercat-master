@@ -242,8 +242,10 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
             frame.axis_count = session->plan->axis_count;
             frame.status_words = session->status_words;
             frame.outputs = session->controller_outputs;
-            if (emaster_multiaxis_coordinator_step(&session->coordinator, &frame, now_ns) !=
-                EMASTER_MULTIAXIS_OK) {
+            /* 判定先落盘再判断：故障现场要能区分"协调器拒绝整帧"和"其后才失败" */
+            session->last_coordinator_status =
+                (int)emaster_multiaxis_coordinator_step(&session->coordinator, &frame, now_ns);
+            if (session->last_coordinator_status != (int)EMASTER_MULTIAXIS_OK) {
                 status = EMASTER_CONTROL_SESSION_CONTROLLER_FAILED;
                 emaster_soem_session_latch_failure(session, status);
                 return emaster_soem_session_publish_feedback(session, status);
