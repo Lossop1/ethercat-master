@@ -27,7 +27,13 @@
 - **超时行为**: 主站关闭连接，释放套接字，允许新客户端连接
 - **外部目标失效**: 超过 200ms 未更新的外部目标自动切换为 HOLD 模式
 
-**重连方法**: 客户端检测到连接关闭（`recv()` 返回 0 或 `EPIPE`）后，等待至少 100ms 再重新 `connect()`。
+**这意味着交互式客户端无法在两分钟内思考。** 只要两条命令间隔超过 5 秒，连接就被
+服务端单方面关闭，下一次 `send` 拿到 `EPIPE`。客户端必须处理：要么保持发送
+（空闲时也周期性发 `status`），要么捕获 `EPIPE` 后重连重试。轮询式客户端还需要在
+每次发送前检查连接闲置时长，主动重连以避免撞上超时。
+
+**重连方法**: 客户端检测到连接关闭（`recv()` 返回 0、`EPIPE` 或 `ECONNRESET`）后，
+关闭套接字，等待至少 100ms 再重新 `connect()`，然后重新执行就绪检查（第 2.3 节）。
 
 ### 2.3 主站就绪信号（P6.2）
 
@@ -124,10 +130,12 @@ ERROR|<message>\n
 
 **请求**: `topology\n`
 
-**响应**: `OK|axes=<n>|a<i>:bus=<b>,enc=<e>,gear=<gm>/<gs>,torque=<rt>|...\n`
+**响应**: `OK|axes=<n>,max_step=<s>|a<i>:bus=<b>,enc=<e>,gear=<gm>/<gs>,torque=<rt>|...\n`
 
 **字段说明**:
 - `axes`: 轴数量
+- `max_step`: 相邻两条目标允许的最大增量（**原始 counts**，全轴统一值）。
+  客户端必须按此值把大角度目标拆成小步流式发送，见第 7.2 节。`0` 表示未启用单步限幅。
 - `bus`: EtherCAT 总线位置（1-based，与物理链路顺序一致）
 - `enc`: 编码器分辨率（increments per motor revolution）
 - `gear`: 减速比（`motor_revolutions / shaft_revolutions`）
@@ -136,7 +144,7 @@ ERROR|<message>\n
 **示例**:
 ```
 请求: topology
-响应: OK|axes=2|a1:bus=1,enc=16384,gear=28/1,torque=0|a2:bus=2,enc=16384,gear=28/1,torque=0
+响应: OK|axes=2,max_step=6400|a1:bus=1,enc=16384,gear=28/1,torque=0|a2:bus=2,enc=16384,gear=28/1,torque=0
 ```
 
 ---
@@ -154,7 +162,7 @@ ERROR|<message>\n
 
 **前置条件**:
 - 主站必须处于 `RUNNING` 状态（`state=4`），否则返回 `ERROR|Not ready`
-- 目标与上一目标的增量不得超过配置的 `max_step`（当前默认 ~2° 输出轴），否则返回 `ERROR|Step limit exceeded`
+- 目标与上一条**已提交**目标的增量不得超过 `topology` 返回的 `max_step`
 
 **响应**: 
 - 成功: `OK|Updated <n> external targets\n`
@@ -162,6 +170,12 @@ ERROR|<message>\n
   - `Not ready: state=X (need RUNNING=4)` — 主站未进入 RUNNING 状态
   - `Wrong count: expected X, got Y` — 参数个数不匹配
   - `Invalid position value: <token>` — 参数格式错误或超出 int32 范围
+
+**注意**：单步超限**不在此响应中体现**。限幅在周期线程里检查
+（`session_target.c`），超限会经 `note_runtime_failure` 判定为
+`MOTION_INVALID` 并**中止整个会话**，而不是返回一条错误响应。
+命令返回 `OK` 只说明目标已入队，不代表它通过了限幅检查。
+详见第 7.2 节。
 
 **超时行为**: 若超过 200ms 未收到新的 `set_external_target`，主站自动切换为 HOLD 模式（保持最后一次目标），不会停机或报错。
 
@@ -266,14 +280,21 @@ ERROR|<message>\n
 
 **换算公式**（输出轴角度 → counts）:
 ```
-counts = (angle_degrees * encoder_increments * gear_motor_revolutions) / (360 * gear_shaft_revolutions)
+counts_per_degree = (encoder_increments / encoder_motor_revolutions)
+                  × (gear_motor_revolutions / gear_shaft_revolutions) / 360
+counts = angle_degrees × counts_per_degree
 ```
 
 **示例**（16384 inc/rev 编码器，28:1 减速比）:
-- 输出轴 1° = 12,743.11 counts（电机侧）
-- 输出轴 36° = 458,752 counts
+- `counts_per_degree` = 16384 × 28 / 360 = **1274.31 counts / 度**
+- 输出轴 1° = 1,274 counts
+- 输出轴 36° = 45,875 counts
+- 输出轴 360°（整圈）= 458,752 counts
 
 **原因**: L3 层只处理原始 counts，单位换算由 L4 层负责。协议暴露的是 L3 边界。
+
+**注意**：`topology` 返回的 `enc` 和 `gear` 就是上式的输入，客户端应现场换算而不是
+硬编码。不同部署的减速比可能不同。
 
 ### 5.2 速度与力矩单位
 
@@ -318,9 +339,19 @@ counts = (angle_degrees * encoder_increments * gear_motor_revolutions) / (360 * 
 
 ### 7.2 单步限幅（P6.3）
 
-相邻两次 `set_external_target` 的位置增量不得超过 `max_step`（与 `max_following_error` 相同）。超限命令会被拒绝并返回 `ERROR|Step limit exceeded`。
+相邻两次 `set_external_target` 的位置增量不得超过 `topology` 返回的 `max_step`。
 
-**原因**: 防止客户端错误或网络延迟导致的突变指令损坏设备。
+**超限的后果是会话中止，不是命令被拒。** 限幅在周期线程里检查：
+`session_target.c` 返回 `MOTION_INVALID`，`session_control.c` 随即调用
+`note_runtime_failure` 并置 `safety_denied`，整个控制会话终止、轴失能。
+客户端不会从 `set_external_target` 的响应中看出任何异常——那条命令早已返回 `OK`。
+
+**客户端必须做的事**：把大角度目标拆成小步流式发送，单步增量不超过 `max_step`。
+发送频率需高于主站 200ms 的外部目标看门狗。
+
+**原因**: 防止客户端错误或网络延迟导致的突变指令损坏设备。单步限幅的取值来源：
+若部署引用了运动方案，取该轴 `max_following_error_millidegrees` 换算；否则回退到
+6400 counts（16384 enc × 28:1 下约 5.02°，不是 2°）。
 
 ### 7.3 外部目标看门狗（P2.1）
 
@@ -332,44 +363,79 @@ counts = (angle_degrees * encoder_increments * gear_motor_revolutions) / (360 * 
 
 ## 8 客户端实现示例
 
-### 8.1 Python 最小客户端
+### 8.1 参考实现
+
+`tools/interactive_control.py` 是一个可用的参考客户端，覆盖了本协议三个最容易踩的坑：
+连接复用与超时重连、从 `topology` 读取 `max_step`、以及把大角度目标拆成小步流式发送。
+对接前建议先读它。
+
+### 8.2 最小骨架
 
 ```python
-import socket
-import time
+import socket, time
 
-def send_command(sock_path, cmd):
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(5.0)
-    s.connect(sock_path)
-    s.sendall((cmd + '\n').encode('utf-8'))
-    resp = s.recv(1024).decode('utf-8').strip()
-    s.close()
-    return resp
+class Client:
+    def __init__(self, path):
+        self.path = path
+        self.sock = None
+        self.buf = b""
 
-# 等待主站就绪
-sock = '/tmp/emaster-orangepi-bench-dual.sock'
-while True:
-    resp = send_command(sock, 'status')
-    if 'state=4' in resp:
-        print('Master ready')
-        break
+    def connect(self):
+        self.close()
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(5.0)
+        self.sock.connect(self.path)
+
+    def close(self):
+        if self.sock:
+            self.sock.close()
+        self.sock = None
+        self.buf = b""
+
+    def command(self, cmd, retries=2):
+        """发送命令；连接被 5 秒空闲超时关掉时自动重连重试。"""
+        for attempt in range(retries + 1):
+            try:
+                if self.sock is None:
+                    self.connect()
+                self.sock.sendall((cmd + "\n").encode())
+                while b"\n" not in self.buf:
+                    chunk = self.sock.recv(4096)
+                    if not chunk:
+                        raise ConnectionResetError
+                    self.buf += chunk
+                line, _, self.buf = self.buf.partition(b"\n")
+                return line.decode().strip()
+            except (OSError, ConnectionResetError):
+                self.close()
+                if attempt == retries:
+                    raise
+        return None
+
+# 1. 等待就绪：必须等到 state=4 才能发目标（第 2.3 节）
+c = Client("/tmp/emaster-orangepi-bench-dual.sock")
+while "state=4" not in (c.command("status") or ""):
     time.sleep(0.1)
 
-# 持续发送目标（50Hz）
-target = [573362, 389669]
-while True:
-    cmd = 'set_external_target ' + ' '.join(map(str, target))
-    resp = send_command(sock, cmd)
-    if not resp.startswith('OK'):
-        print(f'Error: {resp}')
-        break
+# 2. 读单步限幅，不能硬编码（第 7.2 节）
+topo = c.command("topology")
+max_step = int(topo.split("max_step=")[1].split("|")[0])
+
+# 3. 移动必须斜坡：单步不超过 max_step，频率高于 5Hz 以喂 200ms 看门狗
+start = [573362, 389669]
+target = [611589, 427902]
+steps = 60
+for i in range(1, steps + 1):
+    pos = [s + (t - s) * i // steps for s, t in zip(start, target)]
+    c.command("set_external_target " + " ".join(map(str, pos)))
     time.sleep(0.02)
 ```
 
-### 8.2 注意事项
+### 8.3 注意事项
 
-- 每次 `send_command` 都打开新连接会受 5 秒超时和单客户端约束影响，生产代码应保持连接复用
+- **不要单步超过 `max_step`**。超限不会返回错误，而是中止整个会话（第 7.2 节）
+- 保持连接复用。每条命令新建连接会不断撞上单客户端约束
+- 若在两条命令之间思考超过 5 秒，下次发送前先重连（第 2.2 节）
 - 持续控制应使用独立线程：一个线程 50-100Hz 发送目标，另一个线程 1-10Hz 查询状态
 - 捕获 `SIGINT` 并发送 `stop` 或 `shutdown` 以优雅退出
 
