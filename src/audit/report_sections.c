@@ -170,6 +170,26 @@ static bool write_position_scale(FILE *stream,
 }
 
 /*
+ * 从站的 1C32/1C33 同步违例计数器。这三个计数器和 sync_error 位是驱动器自身对
+ * "输出帧是否在规定窗口内到达"的判定，比主站侧的相位推断更直接；但它们只在停机后
+ * 读一次，可能包含退出期间的事件，不能单独据此推断首次故障原因。
+ */
+static bool write_sync_diagnostic(FILE *stream,
+                                  const emaster_sync_diagnostic_t *diagnostic)
+{
+    return fprintf(
+               stream,
+               "{\"read_succeeded\":%s,\"sync_error\":%s,"
+               "\"sm_event_missed\":%u,\"cycle_time_too_small\":%u,"
+               "\"shift_time_too_short\":%u}",
+               diagnostic->read_succeeded ? "true" : "false",
+               diagnostic->sync_error ? "true" : "false",
+               (unsigned int)diagnostic->sm_event_missed,
+               (unsigned int)diagnostic->cycle_time_too_small,
+               (unsigned int)diagnostic->shift_time_too_short) >= 0;
+}
+
+/*
  * 输出一个分位点。落在量程外时不编造数值，只标记方向，让读者去看 ranges 的极值。
  * 桶宽同时给出，因为分位点的分辨率就是桶宽，不是精确值。
  */
@@ -255,7 +275,9 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         "\"last_phase_error_ns\":%" PRId64
         ",\"last_sync0_margin_ns\":%" PRId64
         ",\"last_dc_sample_valid\":%s,"
-        "\"sync0_late_count\":%" PRIu64 ",\"distribution\":{",
+        "\"sync0_late_count\":%" PRIu64 ","
+        "\"first_sync0_late_exchange\":%" PRIu64 ","
+        "\"last_sync0_late_exchange\":%" PRIu64 ",\"distribution\":{",
         timing->has_send_duration ? "true" : "false", timing->min_send_duration_ns,
         timing->max_send_duration_ns, timing->has_round_trip ? "true" : "false",
         timing->min_round_trip_ns, timing->max_round_trip_ns,
@@ -267,7 +289,8 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         timing->min_sync0_margin_ns, timing->max_sync0_margin_ns,
         timing->last_phase_error_ns, timing->last_sync0_margin_ns,
         timing->last_dc_sample_valid ? "true" : "false",
-        timing->sync0_late_count) >= 0);
+        timing->sync0_late_count, timing->first_sync0_late_exchange,
+        timing->last_sync0_late_exchange) >= 0);
     REQUIRE_WRITE(write_distribution(stream, "send_duration_ns",
                                      &timing->send_duration_histogram));
     REQUIRE_WRITE(fputc(',', stream) != EOF);
@@ -368,6 +391,10 @@ static bool write_axis(FILE *stream,
     REQUIRE_WRITE(write_position_scale(stream, &axis->position_scale));
     REQUIRE_WRITE(fputs(",\"timing\":", stream) != EOF);
     REQUIRE_WRITE(write_timing(stream, &axis->timing));
+    REQUIRE_WRITE(fputs(",\"sm2_diagnostic\":", stream) != EOF);
+    REQUIRE_WRITE(write_sync_diagnostic(stream, &axis->sm2_diagnostic));
+    REQUIRE_WRITE(fputs(",\"sm3_diagnostic\":", stream) != EOF);
+    REQUIRE_WRITE(write_sync_diagnostic(stream, &axis->sm3_diagnostic));
     REQUIRE_WRITE(fprintf(stream,
         ",\"shutdown_al\":{\"state\":%u,\"status_code\":%u}",
         (unsigned int)axis->shutdown_al_state, (unsigned int)axis->shutdown_al_status_code) >= 0);

@@ -70,6 +70,12 @@ typedef struct
     int64_t last_phase_error_ns;
     int64_t last_sync0_margin_ns;
     uint64_t sync0_late_count;
+    /*
+     * 迟到样本的位置（交换号，0 表示全程未出现）。只有计数回答不了"哪几个周期迟到"，
+     * 也就无法把迟到与 WKC 异常、驱动器掉出 OP 对齐。
+     */
+    uint64_t first_sync0_late_exchange;
+    uint64_t last_sync0_late_exchange;
     bool has_send_duration;
     bool has_round_trip;
     bool has_send_lateness;

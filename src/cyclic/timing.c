@@ -215,6 +215,11 @@ bool emaster_cyclic_timing_stats_record(
     if (sync0_margin_ns < 0 && stats->sync0_late_count != UINT64_MAX)
     {
         ++stats->sync0_late_count;
+        if (stats->first_sync0_late_exchange == 0U)
+        {
+            stats->first_sync0_late_exchange = observation->exchange;
+        }
+        stats->last_sync0_late_exchange = observation->exchange;
     }
     return true;
 }
