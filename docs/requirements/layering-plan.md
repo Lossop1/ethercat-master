@@ -253,8 +253,8 @@ P6 全部完成后，工程应用可对接。交付前还需确认：
 
 | # | 问题 | 完成判据 | 状态 |
 | --- | --- | --- | --- |
-| P7.1 | `frame_timeout_us` 修复（P1.6）已在 orangepi，未 commit 到本地仓库 | commit 到 main，含说明性 commit message | 未做 |
-| P7.2 | `功能要求.md` 状态与代码实况不同步 | P2 CSV/CST 描述修正；P4 状态查询打勾；P1 持续运行验证打勾；添加"已知代码缺陷"节（P4.3 SDO 未实现、P2.5 Fault Reset 未真机验证） | 未做 |
+| P7.1 | `frame_timeout_us` 修复（P1.6）已在 orangepi，未 commit 到本地仓库 | commit 到 main，含说明性 commit message | ✅ 2026-09-14 已在 6297fe1 |
+| P7.2 | `功能要求.md` 状态与代码实况不同步 | P2 CSV/CST 描述修正；P4 状态查询打勾；P1 持续运行验证打勾；添加"已知代码缺陷"节（P4.3 SDO 未实现、P2.5 Fault Reset 未真机验证） | ✅ 2026-09-14 |
 | P7.3 | 本地 main 落后 origin/main 18 个 commit | git sync | 未做 |
 
 ---
