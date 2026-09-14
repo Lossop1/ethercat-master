@@ -9,9 +9,9 @@
     "description": "WKC不匹配容错：连续N次或累计M次错误才停机"
   },
   "deadline_recovery": {
-    "enabled": false,
+    "enabled": true,
     "consecutive_error_threshold": 10,
-    "description": "周期超时容错：连续N次超时才停机（当前禁用）"
+    "description": "周期超时容错：连续10次超时才停机；非实时内核上偶发单次超时不应终止会话"
   },
   "al_state_recovery": {
     "enabled": false,
