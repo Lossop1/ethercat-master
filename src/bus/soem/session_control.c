@@ -625,10 +625,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         case EMASTER_COMMAND_QUERY_TOPOLOGY: {
                             /*
                              * 拓扑查询：返回实际轴数、总线位置和关键参数
-                             * 格式: axes=N|a1:bus=B,enc=E,gear=G1/G2,torque=T|a2:...
+                             * 格式: axes=N,max_step=S|a1:bus=B,enc=E,gear=G1/G2,torque=T|a2:...
+                             *
+                             * max_step 是相邻两条目标允许的最大增量（原始 counts，全轴统一值）。
+                             * 客户端必须按此值把大角度目标拆成小步流式发送：单步超限不会返回
+                             * 错误，而是让 session_target.c 判定 MOTION_INVALID，经
+                             * note_runtime_failure 中止整个会话。0 表示未启用单步限幅。
                              */
                             int offset = snprintf(response.message, sizeof(response.message),
-                                "axes=%zu", session->plan->axis_count);
+                                "axes=%zu,max_step=%lu",
+                                session->plan->axis_count,
+                                (unsigned long)session->position_target_max_step_counts);
 
                             for (axis_index = 0U;
                                  axis_index < session->plan->axis_count; ++axis_index) {

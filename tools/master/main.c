@@ -388,8 +388,10 @@ int main(int argc, char **argv) {
                 counts_per_degree,
                 motion_axis->max_following_error_millidegrees == 0 ? " (default)" : "");
     } else {
-        /* 兜底：无 motion_axis 配置时仍给一个保守值 */
-        following_error_counts = 6400;  /* 约 2° @ 16384 enc × 28:1 gear */
+        /* 兜底：无 motion_axis 配置时仍给一个保守值。
+         * 6400 counts 在 16384 enc × 28:1 gear 下约 5.02°（1274.31 counts/度），
+         * 不是 2°。实际值随编码器分辨率和减速比变化。 */
+        following_error_counts = 6400;
         max_step_counts = following_error_counts;
         fprintf(stderr, "[P6.3] 警告：无 motion_axis 配置，使用兜底限幅 %lu counts\n",
                 (unsigned long)following_error_counts);
