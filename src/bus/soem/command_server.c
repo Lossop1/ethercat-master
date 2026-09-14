@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -339,6 +340,19 @@ emaster_command_server_t *emaster_command_server_create(const char *socket_path)
         pthread_mutex_destroy(&server->mutex);
         free(server);
         return NULL;
+    }
+
+    /*
+     * 主站通常以 root 启动（需要 CAP_NET_RAW 和 RT 调度），bind 出来的套接字
+     * 归 root 所有且权限由 umask 决定（常见为 0755）。Unix 域套接字的 connect()
+     * 要求对套接字文件有写权限，非 root 客户端会拿到 EACCES。
+     * 这里显式放开为 0666，使台架上的普通用户能直接连控制接口。
+     * 注意：这是刻意的安全取舍——任何能访问 /tmp 的本地用户都能控制电机。
+     * 若部署环境有多个不可信本地用户，应改为 0660 并归于专用组。
+     */
+    if (chmod(socket_path, 0666) < 0)
+    {
+        fprintf(stderr, "警告：无法修改套接字权限 %s：%s\n", socket_path, strerror(errno));
     }
 
     /* 监听 */
