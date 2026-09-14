@@ -203,6 +203,12 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
     } else {
         fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FAILED),
                 session_status_text(report->status));
+        /* 是否发出过安全输出单独成句：通信不可用时停机路径整个不执行，
+         * 这时报告里没有任何停用确认，不能用一句"已尝试"盖过去。 */
+        fputs(emaster_text(report->safe_output_sent
+                               ? EMASTER_TEXT_CONTROL_SESSION_SAFE_OUTPUT_SENT
+                               : EMASTER_TEXT_CONTROL_SESSION_SAFE_OUTPUT_ABSENT),
+              stderr);
     }
     if (published) {
         fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_SAVED),
