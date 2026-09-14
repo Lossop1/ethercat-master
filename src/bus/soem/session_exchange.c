@@ -95,6 +95,15 @@ static void record_first_mismatch_scene(emaster_soem_session_t *session)
 {
     emaster_control_session_report_t *report = session->report;
 
+    /*
+     * 只认整个会话的第一次。连续计数在任何一个"帧正常"的周期上清零，因此"某一段
+     * 连续错误的第一次"可能发生很多次：实测那次运行的两次现场相差两个周期，第一次
+     * 三轴都还在 OP，第二次轴 3 已经 AL 0x1A——真正有判别力的是前一份，不能覆盖。
+     */
+    if (report->first_mismatch_present)
+    {
+        return;
+    }
     report->first_mismatch_present = true;
     report->first_mismatch_exchange = session->exchange;
     report->first_mismatch_wkc = report->actual_wkc;

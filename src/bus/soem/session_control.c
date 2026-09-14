@@ -255,6 +255,12 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                      * cycle_deadline_missed=true 自相矛盾）。
                      */
                     emaster_soem_session_note_deadline_missed(session);
+                    if (session->report->first_deadline_missed_exchange == 0U)
+                    {
+                        /* 第三个记账点（另两处在交换函数内）。本次交换已完成，
+                         * 周期号就是 session->exchange；不记就会只剩计数。 */
+                        session->report->first_deadline_missed_exchange = session->exchange;
+                    }
                     if (consecutive_deadline_skips < deadline_skip_limit &&
                         emaster_soem_session_try_deadline_recovery(session)) {
                         /* 本周期不再推进协调器：deadline_ns 已经过期，喂给协调器会
