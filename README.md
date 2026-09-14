@@ -84,6 +84,62 @@ OK|axes=2|a1:bus=1,enc=16384,gear=28/1|a2:bus=2,enc=16384,gear=28/1
 - 支持任意轴数（动态适配）
 - Unix socket 命令接口
 
+## 交互式位置控制工具
+
+Python 交互式客户端，用于实时控制电机位置（需在 Orange Pi 上运行）：
+
+```bash
+# 启动主站后，运行交互式控制工具
+python3 tools/interactive_control.py /tmp/emaster-orangepi-bench-dual.sock
+```
+
+### 可用命令
+
+| 命令 | 说明 | 示例 |
+|------|------|------|
+| `s` 或 `status` | 查看当前状态（位置、速度、力矩） | `s` |
+| `t` 或 `topology` | 查看拓扑信息（编码器、减速比） | `t` |
+| `g <p1> <p2>` | 设置目标位置（counts） | `g 573362 389669` |
+| `d <d1> <d2>` | 设置目标位置（度） | `d 10 20` |
+| `r <d1> <d2>` | 相对移动（度） | `r 5 -5` |
+| `c <p1> <p2> <freq>` | 持续模式（counts，Hz） | `c 573362 389669 50` |
+| `q` 或 `quit` | 退出 | `q` |
+
+### 使用示例
+
+```bash
+> s                          # 查看当前状态
+主站状态: state=4 cycle=12345 enabled=1 completed=0
+--------------------------------------------------------------------------------
+a1: pos=  573362 (  45.00°) target=  573362 (  45.00°)
+     vel=    0 torque=    0 status=0x1637 err=0x0000 state=7
+a2: pos=  389669 (  30.59°) target=  389669 (  30.59°)
+     vel=    0 torque=    0 status=0x1637 err=0x0000 state=7
+
+> d 90 120                   # 设置轴1到90度，轴2到120度
+目标: [90.0, 120.0] 度 -> [1146643, 1528857] counts
+响应: OK|Updated 2 external targets
+
+> r 10 0                     # 轴1增加10度，轴2不动
+相对移动: [10.0, 0.0] 度 -> 目标 [1274074, 1528857] counts
+响应: OK|Updated 2 external targets
+
+> c 573362 389669 50         # 持续以50Hz发送目标（按Ctrl+C停止）
+持续模式：以 50.0 Hz 频率发送目标
+目标位置: [573362, 389669]
+按 Ctrl+C 停止
+```
+
+### 安全约束
+
+- 工具会自动等待主站进入 RUNNING 状态（state=4）后才允许发送目标
+- 相邻目标增量不得超过配置的 `max_step`（默认 2度输出轴）
+- 超过 200ms 未收到新目标，主站自动切换为 HOLD 模式
+
+### 协议文档
+
+完整的命令协议规格见 `docs/protocol/command-protocol-v1.md`
+
 ## 系统架构
 
 ```
