@@ -10,6 +10,22 @@
  * 配置策略在 config/error_recovery_policies/ 中定义，部署配置引用具体策略。
  */
 
+/*
+ * 错误计数器读取（每从站一次 FPRD(0x0300)）的采样间隔。它是诊断，不是控制：
+ * 实测 p50 149 µs（1 ms 周期的 15%），总线异常时三次全部超时、最坏 808 µs。
+ * 也就是说它恰好在最不该拖长周期的时刻最贵，而那时读也读不到——2026-09-14 的
+ * 一次运行里 error_counter_read_fail_count=3 全部落在同一个故障周期上，正是这
+ * 808 µs 把一次 269 µs 的收包抖动放大成当次唯一的超预算周期（约 1080 µs）。
+ * 改成抽样之后，正常周期尾部只剩收包与邮箱推进。
+ */
+#define EMASTER_ERROR_COUNTER_READ_INTERVAL 50U
+
+/*
+ * 本周期收包段超过这个时长就认为已经在承压，本次跳过错峰读取。
+ * 健康运行的收包段 p50 约 50 µs，丢帧前那次先兆抬升到 50–125 µs。
+ */
+#define EMASTER_ERROR_COUNTER_STRESS_NS UINT64_C(150000)
+
 void emaster_soem_session_note_deadline_missed(emaster_soem_session_t *session)
 {
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
@@ -241,55 +257,104 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
 
     /* P4.4: 周期内读取错误计数器（0x0300-0x030F）。
      * FPRD 使用从站配置地址（configadr），不是位置序号。
-     * 0x0300 起始 16 字节覆盖全部计数器。每个从站独立读取。 */
-    for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
+     * 0x0300 起始 16 字节覆盖全部计数器。每个从站独立读取。
+     *
+     * 抽样 + 承压跳过（见文件顶部两个宏）：不是每个周期都读，本周期已经出问题
+     * （WKC 不符或收包段超常）时也不读。跳过与"读失败"分开记账，避免把跳过的
+     * 周期伪装成读不到的周期。 */
     {
-        uint16_t configadr = session->context.slavelist[axis + 1U].configadr;
-        uint8_t error_block[16];
-        int wkc = ecx_FPRD(&session->context.port, configadr, 0x0300U, sizeof(error_block),
-                          error_block, frame_timeout_us);
-        if (wkc > 0)
-        {
-            session->axes[axis].error_counters_read = true;
-            memcpy(session->axes[axis].rx_error_counter, &error_block[0], 8);
-            memcpy(session->axes[axis].forwarded_rx_error_counter, &error_block[8], 8);
-            session->axes[axis].ecat_processing_unit_error_counter = error_block[12];
-            session->axes[axis].pdi_error_counter = error_block[13];
-            session->axes[axis].pdi_error_code = error_block[14];
-            /* 0x0310 lost_link_counter 是独立寄存器，当前跳过读取。后续可扩展。 */
+        bool wkc_ok_now = session->report->actual_wkc > 0 &&
+                          session->report->actual_wkc == (int)session->report->expected_wkc;
+        uint64_t receive_span_ns = 0U;
 
-            /* 首周期输出解析后的错误计数器值 */
-            if (session->exchange == 1U)
+        if (tail_timing_valid)
+        {
+            uint64_t send_end_ns = (uint64_t)send_end.tv_sec * UINT64_C(1000000000) +
+                                   (uint64_t)send_end.tv_nsec;
+            uint64_t receive_done_ns = (uint64_t)receive_done.tv_sec * UINT64_C(1000000000) +
+                                       (uint64_t)receive_done.tv_nsec;
+
+            receive_span_ns = receive_done_ns - send_end_ns;
+        }
+        if ((session->exchange % EMASTER_ERROR_COUNTER_READ_INTERVAL) != 1U)
+        {
+            /* 未到采样点：什么都不做，也不记账——这不是异常。 */
+        }
+        else if (!wkc_ok_now || receive_span_ns > EMASTER_ERROR_COUNTER_STRESS_NS)
+        {
+            if (session->report->error_counter_skip_count != UINT64_MAX)
             {
-                uint16_t rx_p0 = ((uint16_t)error_block[0]) | (((uint16_t)error_block[1]) << 8);
-                uint16_t rx_p1 = ((uint16_t)error_block[2]) | (((uint16_t)error_block[3]) << 8);
-                uint16_t rx_p2 = ((uint16_t)error_block[4]) | (((uint16_t)error_block[5]) << 8);
-                uint16_t rx_p3 = ((uint16_t)error_block[6]) | (((uint16_t)error_block[7]) << 8);
-                fprintf(stderr, "[P4.4] 从站 %zu 错误计数器: "
-                        "RX[P0=%u P1=%u P2=%u P3=%u] "
-                        "FwdRX[P0=%u P1=%u P2=%u P3=%u] "
-                        "EPU=%u PDI=%u PDI_code=0x%02X\n",
-                        axis + 1U, rx_p0, rx_p1, rx_p2, rx_p3,
-                        error_block[8], error_block[9], error_block[10], error_block[11],
-                        error_block[12], error_block[13], error_block[14]);
+                ++session->report->error_counter_skip_count;
+            }
+            if (session->report->first_error_counter_skip_exchange == 0U)
+            {
+                session->report->first_error_counter_skip_exchange = session->exchange;
             }
         }
         else
         {
-            session->axes[axis].error_counters_read = false;
-            error_counter_read_failed = true;
-            /*
-             * 每个 FPRD 各自带 frame_timeout_us 超时，三次读全部用掉就是一个远超
-             * 周期的预算。此前只记录"本周期没读到"，不记录发生过多少次、从哪个
-             * 周期开始——而这条路径本身会拖长周期，是自激式劣化的候选。
-             */
-            if (session->report->error_counter_read_fail_count != UINT64_MAX)
+            /* 到了采样点、且本周期没出问题：这一次才是真正要付 FPRD 代价的周期。
+             * 记在循环外，单位是"采样周期"（与 skip_count 同单位），不是 FPRD 次数。 */
+            if (session->report->error_counter_read_attempt_count != UINT64_MAX)
             {
-                ++session->report->error_counter_read_fail_count;
+                ++session->report->error_counter_read_attempt_count;
             }
-            if (session->report->first_error_counter_read_fail_exchange == 0U)
+            for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
             {
-                session->report->first_error_counter_read_fail_exchange = session->exchange;
+                uint16_t configadr = session->context.slavelist[axis + 1U].configadr;
+                uint8_t error_block[16];
+                int wkc = ecx_FPRD(&session->context.port, configadr, 0x0300U, sizeof(error_block),
+                                   error_block, frame_timeout_us);
+
+                if (wkc > 0)
+                {
+                    session->axes[axis].error_counters_read = true;
+                    memcpy(session->axes[axis].rx_error_counter, &error_block[0], 8);
+                    memcpy(session->axes[axis].forwarded_rx_error_counter, &error_block[8], 8);
+                    session->axes[axis].ecat_processing_unit_error_counter = error_block[12];
+                    session->axes[axis].pdi_error_counter = error_block[13];
+                    session->axes[axis].pdi_error_code = error_block[14];
+                    /* 0x0310 lost_link_counter 是独立寄存器，当前跳过读取。后续可扩展。 */
+
+                    /* 首周期输出解析后的错误计数器值 */
+                    if (session->exchange == 1U)
+                    {
+                        uint16_t rx_p0 = ((uint16_t)error_block[0]) |
+                                         (((uint16_t)error_block[1]) << 8);
+                        uint16_t rx_p1 = ((uint16_t)error_block[2]) |
+                                         (((uint16_t)error_block[3]) << 8);
+                        uint16_t rx_p2 = ((uint16_t)error_block[4]) |
+                                         (((uint16_t)error_block[5]) << 8);
+                        uint16_t rx_p3 = ((uint16_t)error_block[6]) |
+                                         (((uint16_t)error_block[7]) << 8);
+
+                        fprintf(stderr, "[P4.4] 从站 %zu 错误计数器: "
+                                "RX[P0=%u P1=%u P2=%u P3=%u] "
+                                "FwdRX[P0=%u P1=%u P2=%u P3=%u] "
+                                "EPU=%u PDI=%u PDI_code=0x%02X\n",
+                                axis + 1U, rx_p0, rx_p1, rx_p2, rx_p3,
+                                error_block[8], error_block[9], error_block[10], error_block[11],
+                                error_block[12], error_block[13], error_block[14]);
+                    }
+                }
+                else
+                {
+                    session->axes[axis].error_counters_read = false;
+                    error_counter_read_failed = true;
+                    /*
+                     * 每个 FPRD 各自带 frame_timeout_us 超时，三次读全部用掉就是一个远超
+                     * 周期的预算。此前只记录"本周期没读到"，不记录发生过多少次、从哪个
+                     * 周期开始——而这条路径本身会拖长周期，是自激式劣化的候选。
+                     */
+                    if (session->report->error_counter_read_fail_count != UINT64_MAX)
+                    {
+                        ++session->report->error_counter_read_fail_count;
+                    }
+                    if (session->report->first_error_counter_read_fail_exchange == 0U)
+                    {
+                        session->report->first_error_counter_read_fail_exchange = session->exchange;
+                    }
+                }
             }
         }
     }
@@ -308,6 +373,29 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         if (session->wkc_consecutive_errors == 0U) {
             record_first_mismatch_scene(session);
         }
+        /*
+         * 两类故障分开计数。actual_wkc <= 0 表示"一个回帧都没有"（ecx_receive_processdata
+         * 在 valid_wkc == 0 时返回 EC_NOFRAME = -1），与"帧回来了但工作计数短"是两种
+         * 完全不同的故障：前者在链路/调度侧（帧根本没上来），后者在从站侧（从站不在
+         * OP，不计入工作计数）。此前两者共用一组计数和一条阈值，于是"整帧未回"的
+         * 长时运行证据无法与"从站掉出 OP"的现场证据互相印证。
+         */
+        bool is_no_frame = session->report->actual_wkc <= 0;
+        if (is_no_frame) {
+            if (session->no_frame_consecutive_errors == 0U) {
+                session->report->wkc_no_frame_first_exchange = session->exchange;
+            }
+            ++session->no_frame_consecutive_errors;
+            ++session->no_frame_total_errors;
+            ++session->report->wkc_no_frame_count;
+            session->report->wkc_no_frame_consecutive_errors =
+                session->no_frame_consecutive_errors;
+            if (session->no_frame_consecutive_errors >
+                session->report->wkc_no_frame_max_consecutive_errors) {
+                session->report->wkc_no_frame_max_consecutive_errors =
+                    session->no_frame_consecutive_errors;
+            }
+        }
         ++session->wkc_consecutive_errors;
         ++session->wkc_total_errors;
         ++session->report->wkc_error_count;
@@ -316,14 +404,32 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
             session->report->wkc_max_consecutive_errors = session->wkc_consecutive_errors;
         }
 
-        /* 检查是否超过配置的容错阈值 */
+        /*
+         * 检查是否超过配置的容错阈值。
+         * 连续段用联合计数：一个回帧都没有的周期同样是"连续故障"的一部分，把它从
+         * 连续段里剔出去会人为切断连续段、把一次长时间故障记账成多条短故障。
+         * 累计量按类取：整帧缺失用 no_frame 专用累计，短帧用"联合累计 - 整帧缺失累计"，
+         * 这样两类各自的累计阈值都只被自己那类故障推动。两类阈值默认与 wkc_recovery
+         * 同值，因此默认配置下的行为与拆分前一致。
+         */
         bool should_fail = false;
         if (session->error_recovery_policy != NULL &&
             session->error_recovery_policy->wkc_recovery.enabled) {
-            const emaster_wkc_recovery_config_t *wkc_cfg =
-                &session->error_recovery_policy->wkc_recovery;
-            if (session->wkc_consecutive_errors >= wkc_cfg->consecutive_error_threshold ||
-                session->wkc_total_errors >= wkc_cfg->total_error_threshold) {
+            const emaster_error_recovery_policy_t *policy = session->error_recovery_policy;
+            uint32_t consecutive_threshold;
+            uint32_t total_threshold;
+            uint64_t class_total;
+            if (is_no_frame) {
+                consecutive_threshold = policy->no_frame_recovery.consecutive_error_threshold;
+                total_threshold = policy->no_frame_recovery.total_error_threshold;
+                class_total = session->no_frame_total_errors;
+            } else {
+                consecutive_threshold = policy->wkc_recovery.consecutive_error_threshold;
+                total_threshold = policy->wkc_recovery.total_error_threshold;
+                class_total = session->wkc_total_errors - session->no_frame_total_errors;
+            }
+            if (session->wkc_consecutive_errors >= consecutive_threshold ||
+                class_total >= total_threshold) {
                 should_fail = true;
             }
         } else {
@@ -335,9 +441,11 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
             (void)fail_exchange(session, phase, EMASTER_CONTROL_SESSION_WKC_MISMATCH, true);
         }
     } else {
-        /* WKC 恢复正常，重置连续错误计数 */
+        /* WKC 恢复正常，重置连续错误计数（两类连续段都断在这里） */
         session->wkc_consecutive_errors = 0U;
+        session->no_frame_consecutive_errors = 0U;
         session->report->wkc_consecutive_errors = 0U;
+        session->report->wkc_no_frame_consecutive_errors = 0U;
     }
     memset(&timing, 0, sizeof(timing));
     timing.exchange = session->exchange;

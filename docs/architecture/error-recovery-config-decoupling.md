@@ -56,6 +56,9 @@ error_recovery_policy (id: "default")
     │   ├── enabled: true
     │   ├── consecutive_error_threshold: 5
     │   └── total_error_threshold: 50
+    ├── no_frame_recovery
+    │   ├── consecutive_error_threshold: 5
+    │   └── total_error_threshold: 50
     ├── deadline_recovery
     ├── al_state_recovery (待实现)
     └── cia402_fault_recovery (待实现)
@@ -77,6 +80,11 @@ error_recovery_policy (id: "default")
     "consecutive_error_threshold": 5,
     "total_error_threshold": 50,
     "description": "WKC不匹配容错：连续N次或累计M次错误才停机"
+  },
+  "no_frame_recovery": {
+    "consecutive_error_threshold": 5,
+    "total_error_threshold": 50,
+    "description": "整帧缺失（actual_wkc<=0，一个回帧都没有）单独计数与阈值"
   },
   "deadline_recovery": {
     "enabled": false,
@@ -138,8 +146,14 @@ typedef struct {
 } emaster_wkc_recovery_config_t;
 
 typedef struct {
+    uint32_t consecutive_error_threshold;
+    uint32_t total_error_threshold;
+} emaster_no_frame_recovery_config_t;
+
+typedef struct {
     const char *policy_id;
     emaster_wkc_recovery_config_t wkc_recovery;
+    emaster_no_frame_recovery_config_t no_frame_recovery;
     emaster_deadline_recovery_config_t deadline_recovery;
     emaster_al_state_recovery_config_t al_state_recovery;
     emaster_cia402_fault_recovery_config_t cia402_fault_recovery;
@@ -173,18 +187,34 @@ session->error_recovery_policy = emaster_error_recovery_policy_by_id(policy_id);
 #### 3.4.3 策略应用 (`session_exchange.c`)
 
 ```c
-// 使用配置的阈值而不是硬编码
+// 使用配置的阈值而不是硬编码；整帧缺失与短帧各取自己那一套阈值
 if (!matched) {
-    ++session->wkc_consecutive_errors;
-    ++session->wkc_total_errors;
+    bool is_no_frame = session->report->actual_wkc <= 0;   // EC_NOFRAME = -1
+    if (is_no_frame) {
+        ++session->no_frame_consecutive_errors;
+        ++session->no_frame_total_errors;
+    }
+    ++session->wkc_consecutive_errors;   // 联合连续段：两类故障都算
+    ++session->wkc_total_errors;         // 联合累计
 
     bool should_fail = false;
     if (session->error_recovery_policy != NULL &&
         session->error_recovery_policy->wkc_recovery.enabled) {
-        const emaster_wkc_recovery_config_t *wkc_cfg =
-            &session->error_recovery_policy->wkc_recovery;
-        if (session->wkc_consecutive_errors >= wkc_cfg->consecutive_error_threshold ||
-            session->wkc_total_errors >= wkc_cfg->total_error_threshold) {
+        const emaster_error_recovery_policy_t *policy = session->error_recovery_policy;
+        uint32_t consecutive_threshold;
+        uint32_t total_threshold;
+        uint64_t class_total;
+        if (is_no_frame) {
+            consecutive_threshold = policy->no_frame_recovery.consecutive_error_threshold;
+            total_threshold = policy->no_frame_recovery.total_error_threshold;
+            class_total = session->no_frame_total_errors;
+        } else {
+            consecutive_threshold = policy->wkc_recovery.consecutive_error_threshold;
+            total_threshold = policy->wkc_recovery.total_error_threshold;
+            class_total = session->wkc_total_errors - session->no_frame_total_errors;
+        }
+        if (session->wkc_consecutive_errors >= consecutive_threshold ||
+            class_total >= total_threshold) {
             should_fail = true;
         }
     } else {
@@ -195,6 +225,10 @@ if (!matched) {
     if (should_fail) {
         (void)fail_exchange(session, phase, EMASTER_CONTROL_SESSION_WKC_MISMATCH, true);
     }
+} else {
+    // 连续段断开：两类连续计数一起清零，累计量保留
+    session->wkc_consecutive_errors = 0U;
+    session->no_frame_consecutive_errors = 0U;
 }
 ```
 

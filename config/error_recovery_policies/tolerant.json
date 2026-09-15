@@ -8,6 +8,11 @@
     "total_error_threshold": 100,
     "description": "宽容WKC容错：允许更多瞬态错误"
   },
+  "no_frame_recovery": {
+    "consecutive_error_threshold": 10,
+    "total_error_threshold": 100,
+    "description": "整帧缺失阈值：宽容策略下与短帧同档"
+  },
   "deadline_recovery": {
     "enabled": false,
     "consecutive_error_threshold": 20,

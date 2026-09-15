@@ -379,6 +379,16 @@ typedef struct
     uint64_t wkc_error_count;
     uint64_t wkc_consecutive_errors;
     uint64_t wkc_max_consecutive_errors;
+    /*
+     * 整帧缺失单独计数：actual_wkc <= 0（SOEM 的 EC_NOFRAME，一个回帧都没有）
+     * 与"帧回来了但计数短"是两种病——前者是链路/调度侧没有回帧，后者是从站不在 OP
+     * 导致少计——混在 wkc_* 里既看不出区别，也不能分别设阈值。阈值见策略配置的
+     * no_frame_recovery。
+     */
+    uint64_t wkc_no_frame_count;
+    uint64_t wkc_no_frame_consecutive_errors;
+    uint64_t wkc_no_frame_max_consecutive_errors;
+    uint64_t wkc_no_frame_first_exchange;
     /* 安全门的最后一次判定，供上层明确知道为何禁止输出 */
     uint32_t safety_blocking_reasons;
     bool safety_control_permitted;
@@ -428,6 +438,15 @@ typedef struct
     /* FPRD(0x0300) 返回 wkc<=0 的次数与首次交换号（每次读取各带 250 µs 超时）。 */
     uint64_t error_counter_read_fail_count;
     uint64_t first_error_counter_read_fail_exchange;
+    /*
+     * 错误计数器是诊断，不是控制：改为每 N 个周期读一次，且本周期已经在承压
+     * （WKC 不符或收包段超常）时整段跳过——那种周期读也读不到，只会再叠最多
+     * 3×250 µs 超时。这两个计数把"采样密度"和"因承压跳过"分开记账，否则
+     * 报告里看不出计数器是每周期读的还是抽样的。
+     */
+    uint64_t error_counter_read_attempt_count;
+    uint64_t error_counter_skip_count;
+    uint64_t first_error_counter_skip_exchange;
     /* 从定时点到周期尾部结束的总耗时超过一个周期的次数与首次交换号。 */
     uint64_t over_budget_cycle_count;
     uint64_t first_over_budget_exchange;

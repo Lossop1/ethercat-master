@@ -69,7 +69,7 @@
     "control_session_success": "CiA 402 周期控制会话已安全停止并恢复 INIT。\n",
     "control_session_failed": "CiA 402 周期控制会话失败：%s。\n",
     "control_session_safe_output_sent": "停机阶段已发出安全输出。\n",
-    "control_session_safe_output_absent": "停机阶段未发出安全输出（通信不可用），不能据此认为驱动器已停用。\n",
+    "control_session_safe_output_absent": "停机阶段一帧安全输出都没有发出，不能据此认为驱动器已停用。\n",
     "control_session_axis_line": "从站位置 %u：身份=%s，PDO=%s，映像=%s，输出=%s，反馈=%s，6061=%s（期望=%d，实际反馈=%d），6041=0x%04X，6040=0x%04X，初始位置=%d，实际位置=%d，当前目标=%d，运行使能到达=%s\n",
     "control_session_final_mode_line": "从站 %u：退出周期后 SDO 模式读取，6060=%s/%d，6061=%s/%d\n",
     "control_session_safeop_mode_line": "从站位置 %u：SAFE-OP 模式写入后立即读回，6061=%s/%d，603F=0x%04X，1001=0x%02X，203E=0x%08lX，203F=0x%08lX，诊断读取=%s\n",

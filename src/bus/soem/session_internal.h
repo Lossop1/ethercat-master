@@ -75,6 +75,12 @@ typedef struct {
     /* WKC 错误恢复计数器 */
     uint64_t wkc_consecutive_errors;
     uint64_t wkc_total_errors;
+    /*
+     * 整帧缺失（actual_wkc <= 0）单独一套计数：它与"帧回来了但短"成因不同
+     * （链路/调度 vs 从站不在 OP），阈值也各自配置，混用会让两类故障互相掩盖。
+     */
+    uint64_t no_frame_consecutive_errors;
+    uint64_t no_frame_total_errors;
     /* 实时命令服务器：运行期间接收外部命令（可选） */
     emaster_command_server_t *command_server;
     /* 外部目标双缓冲区：由上层注入，会话不拥有内存。 */

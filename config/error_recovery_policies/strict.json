@@ -8,6 +8,11 @@
     "total_error_threshold": 20,
     "description": "严格WKC容错：更快触发停机"
   },
+  "no_frame_recovery": {
+    "consecutive_error_threshold": 3,
+    "total_error_threshold": 20,
+    "description": "整帧缺失阈值：严格策略下与短帧同档，越早停越好"
+  },
   "deadline_recovery": {
     "enabled": false,
     "consecutive_error_threshold": 5,

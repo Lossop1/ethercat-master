@@ -17,6 +17,18 @@ typedef struct
     uint32_t total_error_threshold;
 } emaster_wkc_recovery_config_t;
 
+/*
+ * 整帧缺失（actual_wkc <= 0）的容错阈值。与 wkc_recovery 分开配置：
+ * 前者是"一个回帧都没有"，后者是"帧回来了但工作计数短"，成因与修法不同。
+ * 是否启用沿用 wkc_recovery.enabled——两者都是 WKC 判定，不另设开关，
+ * 避免出现"wkc 恢复开着、整帧缺失却立刻停机"这种组合。
+ */
+typedef struct
+{
+    uint32_t consecutive_error_threshold;
+    uint32_t total_error_threshold;
+} emaster_no_frame_recovery_config_t;
+
 typedef struct
 {
     bool enabled;
@@ -42,6 +54,7 @@ typedef struct
 {
     const char *policy_id;
     emaster_wkc_recovery_config_t wkc_recovery;
+    emaster_no_frame_recovery_config_t no_frame_recovery;
     emaster_deadline_recovery_config_t deadline_recovery;
     emaster_al_state_recovery_config_t al_state_recovery;
     emaster_cia402_fault_recovery_config_t cia402_fault_recovery;

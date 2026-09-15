@@ -29,6 +29,11 @@ def load_policy(path: Path) -> dict[str, Any]:
 def generate_policy_struct(policy: dict[str, Any], ordinal: int) -> str:
     """生成单个策略的 C 结构体初始化代码。"""
     wkc = policy.get("wkc_recovery", {})
+    # 整帧缺失的阈值不写就沿用 wkc 的值：老策略文件的判定行为因此完全不变，
+    # 想让两类故障分别设阈值时才需要显式写 no_frame_recovery。
+    wkc_consecutive = wkc.get("consecutive_error_threshold", 1)
+    wkc_total = wkc.get("total_error_threshold", 1)
+    no_frame = policy.get("no_frame_recovery", {})
     deadline = policy.get("deadline_recovery", {})
     al_state = policy.get("al_state_recovery", {})
     cia402 = policy.get("cia402_fault_recovery", {})
@@ -51,8 +56,12 @@ def generate_policy_struct(policy: dict[str, Any], ordinal: int) -> str:
         .policy_id = {c_string(policy["policy_id"])},
         .wkc_recovery = {{
             .enabled = {str(wkc.get("enabled", False)).lower()},
-            .consecutive_error_threshold = UINT32_C({wkc.get("consecutive_error_threshold", 1)}),
-            .total_error_threshold = UINT32_C({wkc.get("total_error_threshold", 1)})
+            .consecutive_error_threshold = UINT32_C({wkc_consecutive}),
+            .total_error_threshold = UINT32_C({wkc_total})
+        }},
+        .no_frame_recovery = {{
+            .consecutive_error_threshold = UINT32_C({no_frame.get("consecutive_error_threshold", wkc_consecutive)}),
+            .total_error_threshold = UINT32_C({no_frame.get("total_error_threshold", wkc_total)})
         }},
         .deadline_recovery = {{
             .enabled = {str(deadline.get("enabled", False)).lower()},

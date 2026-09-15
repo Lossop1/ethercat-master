@@ -8,6 +8,11 @@
     "total_error_threshold": 50,
     "description": "WKC不匹配容错：连续N次或累计M次错误才停机"
   },
+  "no_frame_recovery": {
+    "consecutive_error_threshold": 5,
+    "total_error_threshold": 50,
+    "description": "整帧缺失（actual_wkc<=0，一个回帧都没有）单独计数与阈值。成因与短帧不同（链路/调度侧没有回帧 vs 从站不在OP少计），当前取值与 wkc_recovery 相同，仅把两者分开可调；是否启用沿用 wkc_recovery.enabled"
+  },
   "deadline_recovery": {
     "enabled": true,
     "consecutive_error_threshold": 10,

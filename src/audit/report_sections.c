@@ -849,6 +849,15 @@ bool emaster_run_report_write(FILE *stream,
         "\"wkc_error_count\":%" PRIu64
         ",\"wkc_consecutive_errors\":%" PRIu64
         ",\"wkc_max_consecutive_errors\":%" PRIu64
+        /*
+         * 整帧缺失（actual_wkc<=0，一个回帧都没有）单独一组。wkc_* 是两类故障的
+         * 联合计数，无法回答"这轮到底是帧没回来还是从站少计"——长时运行掉出 OP
+         * 的证据是前者，从站掉出 OP 的证据是后者，两者需要分开看。
+         */
+        ",\"wkc_no_frame_count\":%" PRIu64
+        ",\"wkc_no_frame_consecutive_errors\":%" PRIu64
+        ",\"wkc_no_frame_max_consecutive_errors\":%" PRIu64
+        ",\"wkc_no_frame_first_exchange\":%" PRIu64
         ",\"fault_latched\":%s,"
         "\"safety_control_permitted\":%s,\"safety_blocking_reasons\":%" PRIu32
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
@@ -865,6 +874,10 @@ bool emaster_run_report_write(FILE *stream,
         report->wkc_error_count,
         report->wkc_consecutive_errors,
         report->wkc_max_consecutive_errors,
+        report->wkc_no_frame_count,
+        report->wkc_no_frame_consecutive_errors,
+        report->wkc_no_frame_max_consecutive_errors,
+        report->wkc_no_frame_first_exchange,
         report->fault_latched ? "true" : "false",
         report->safety_control_permitted ? "true" : "false",
         report->safety_blocking_reasons,
@@ -895,6 +908,14 @@ bool emaster_run_report_write(FILE *stream,
         ",\"tail_max_error_counter_ns\":%" PRIu64
         ",\"error_counter_read_fail_count\":%" PRIu64
         ",\"first_error_counter_read_fail_exchange\":%" PRIu64
+        /*
+         * 采样记账三个数：到了采样点并真的读了（attempt）、到了采样点但因为本周期
+         * 已经出问题而跳过（skip）、没到采样点（不记账，可由 cycle_count 反推）。
+         * 分开之后，read_fail 才只表示"想读但没读到"。
+         */
+        ",\"error_counter_read_attempt_count\":%" PRIu64
+        ",\"error_counter_skip_count\":%" PRIu64
+        ",\"first_error_counter_skip_exchange\":%" PRIu64
         ",\"over_budget_cycle_count\":%" PRIu64
         ",\"first_over_budget_exchange\":%" PRIu64
         ",\"first_deadline_missed_exchange\":%" PRIu64
@@ -902,7 +923,9 @@ bool emaster_run_report_write(FILE *stream,
         ",\"first_mismatch_wkc\":%d},",
         report->tail_max_receive_ns, report->tail_max_mailbox_ns,
         report->tail_max_error_counter_ns, report->error_counter_read_fail_count,
-        report->first_error_counter_read_fail_exchange, report->over_budget_cycle_count,
+        report->first_error_counter_read_fail_exchange,
+        report->error_counter_read_attempt_count, report->error_counter_skip_count,
+        report->first_error_counter_skip_exchange, report->over_budget_cycle_count,
         report->first_over_budget_exchange, report->first_deadline_missed_exchange,
         report->first_mismatch_present ? "true" : "false", report->first_mismatch_exchange,
         report->first_mismatch_wkc) >= 0);

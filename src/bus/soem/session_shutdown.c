@@ -112,11 +112,16 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                 return false;
             }
         }
-        if (emaster_soem_session_exchange(session, EMASTER_AUDIT_PHASE_SAFE_STOP) !=
-            EMASTER_CONTROL_SESSION_OK) {
-            return false;
-        }
+        emaster_control_session_status_t exchange_status =
+            emaster_soem_session_exchange(session, EMASTER_AUDIT_PHASE_SAFE_STOP);
+
         /*
+         * 记账先于判定。交换返回失败（WKC 不符、周期截止时间错过等）只说明本帧
+         * 没有得到确认，不说明帧没有发出去——而 safe_output_sent 要回答的正是
+         * "发没发"。此前先判失败再记账，于是"帧已发出但 WKC 不符"的停机被记成
+         * safe_output_sent=false，报告在这一点上把"没发"和"发了没被确认"混成一句，
+         * 而这恰是 SAFE-OP+0x1A 掉出场景下最需要区分的一对事实。
+         *
          * 只有真正发出过帧才算"已发送安全输出"。周期时钟恢复会把本周期整帧跳过
          * （session_exchange.c 的 deadline_recovery 分支），那时交换号不变，不算数。
          */
@@ -136,6 +141,10 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                         send_end_ns - session->shutdown_prologue_start_ns;
                 }
             }
+        }
+        /* 记账之后才判失败：本帧的去向已经记进报告，再决定要不要中止停机循环。 */
+        if (exchange_status != EMASTER_CONTROL_SESSION_OK) {
+            return false;
         }
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
