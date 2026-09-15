@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Orange Pi 远程操作工具 - 通用 SSH 工具，支持密码认证"""
 import paramiko
+import os
 import sys
 import argparse
 
-HOST = "192.168.137.54"
-USER = "orangepi"
-PASSWORD = "orangepi"
+# 台架地址会随网络环境变化（ICS 共享网络 / 独立路由器给的不是同一个网段），
+# 写成环境变量可覆盖，免得每次改代码。
+HOST = os.environ.get("EMASTER_PI_HOST", "192.168.124.81")
+USER = os.environ.get("EMASTER_PI_USER", "orangepi")
+PASSWORD = os.environ.get("EMASTER_PI_PASSWORD", "orangepi")
 
 
 def connect():

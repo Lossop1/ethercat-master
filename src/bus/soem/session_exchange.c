@@ -269,12 +269,15 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
 
         if (tail_timing_valid)
         {
-            uint64_t send_end_ns = (uint64_t)send_end.tv_sec * UINT64_C(1000000000) +
-                                   (uint64_t)send_end.tv_nsec;
-            uint64_t receive_done_ns = (uint64_t)receive_done.tv_sec * UINT64_C(1000000000) +
-                                       (uint64_t)receive_done.tv_nsec;
+            /* 名字带 tail_ 前缀：函数作用域里已有同名的 receive_done_ns（尾部计时用），
+             * 不加前缀会触发 -Wshadow。 */
+            uint64_t tail_send_end_ns = (uint64_t)send_end.tv_sec * UINT64_C(1000000000) +
+                                        (uint64_t)send_end.tv_nsec;
+            uint64_t tail_receive_done_ns =
+                (uint64_t)receive_done.tv_sec * UINT64_C(1000000000) +
+                (uint64_t)receive_done.tv_nsec;
 
-            receive_span_ns = receive_done_ns - send_end_ns;
+            receive_span_ns = tail_receive_done_ns - tail_send_end_ns;
         }
         if ((session->exchange % EMASTER_ERROR_COUNTER_READ_INTERVAL) != 1U)
         {
