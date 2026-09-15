@@ -6,26 +6,43 @@
 也不绕过命令协议直接改目标。格式（协议 v1 文本）是当前的临时形态，入口和
 流向不变。
 
+两种运动模式：
+  单程（默认）      起点 -> 起点+位移，之后在 --hold 秒内持续重发同一目标
+  往返（--cycles）  起点 <-> 起点+位移，连续往返；--cycles 0 表示不限次数
+
 用法:
   python3 test_external_motion_client.py <socket_path> [选项]
 
 选项:
   --degrees D    各轴相对位移（输出轴度数，默认 30）
-  --duration S   位移耗时（秒，默认 3）
+  --duration S   单程模式的位移耗时（秒，默认 3）
   --rate HZ      目标更新频率（默认 50，必须快于 200ms 超时）
-  --hold S       到位后保持发送的秒数（默认 60）
+  --hold S       单程模式到位后保持发送的秒数（默认 60）
   --ready S      等待 RUNNING 的超时（秒，默认 30）
+  --cycles N     往返次数（0 = 不限次数，直到 --total 或主站结束）
+  --traverse S   往返模式单程耗时（秒，默认 3）
+  --wave W       往返波形：triangle（默认，匀速）或 sine（两端速度为零）
+  --total S      往返模式总时长上限（秒，0 = 不限）
+  --dry-run      不连主站，只按参数生成目标、核对限幅并打印统计
 
-退出时停止发送，主站自动进入 HOLD（保持最后目标），不会停机。
+退出时停止发送，主站自动进入 HOLD（保持最后目标），不停机。
+
+"持续有效"的判据：主站在 200ms 收不到新目标就判定客户端失活、转 HOLD。
+本脚本以墙钟为时间基准生成曲线，并记录相邻两条目标的实际发送间隔；结束时
+报告最大间隔，超过 200ms 即说明中途出现过不受控的保持窗口。
 """
 
 import argparse
+import math
 import socket
 import sys
 import time
 
 IDLE_TIMEOUT_S = 5.0
 TARGET_TIMEOUT_MS = 200
+# 往返模式的单步限幅裕量：实际可达更新频率低于标称值（每次命令一个往返），
+# 曲线按墙钟推进，频率越低单步越大。按标称值的这个比例估算，留出余量。
+RATE_MARGIN = 0.6
 
 
 class Client:
@@ -93,10 +110,15 @@ class Client:
 
 
 def parse_field(response, key):
-    """从 OK|k=v k=v 形式的响应里取整数值。"""
+    """从 OK|k=v k=v 形式的响应里取整数值。
+
+    分隔符有两种：段内用逗号，段之间用竖线。只切逗号会让最后一个字段吞掉
+    后面的 "|a1:..."，例如 topology 的 max_step 会被解析成 "2548|a1:bus=1"
+    而取不到值——单步限幅因此在联机时被静默跳过。
+    """
     if not response.startswith("OK|"):
         return None
-    for token in response[3:].replace(",", " ").split():
+    for token in response[3:].replace(",", " ").replace("|", " ").split():
         if token.startswith(key + "="):
             value = token[len(key) + 1:]
             try:
@@ -140,18 +162,184 @@ def counts_per_degree(topology):
     return enc * gear / 360.0
 
 
+def triangle_phase(t, traverse):
+    """三角波：t=0 起 0 -> 1 -> 0，周期 2*traverse，全程匀速。"""
+    period = 2.0 * traverse
+    x = math.fmod(t, period)
+    if x < 0.0:
+        x += period
+    return x / traverse if x <= traverse else 2.0 - x / traverse
+
+
+def sine_phase(t, traverse):
+    """正弦波：t=0 起 0 -> 1 -> 0，周期 2*traverse，两端速度为零。"""
+    return 0.5 * (1.0 - math.cos(math.pi * t / traverse))
+
+
+def check_step_limit(delta, traverse, rate, max_step):
+    """往返模式下按标称频率核对单步增量，必要时拉长单程时间。
+
+    返回 (traverse, message)。max_step 为 0 表示主站未启用单步限幅。
+    """
+    if max_step <= 0:
+        return traverse, None
+    span = max(abs(value) for value in delta)
+    if span == 0:
+        return traverse, None
+    per_update = span / (traverse * rate * RATE_MARGIN)
+    if per_update <= max_step:
+        return traverse, None
+    required = span / (max_step * rate * RATE_MARGIN)
+    return required, (f"[client] 单步 {per_update:.0f} counts 超过 max_step={max_step}，"
+                      f"单程时间 {traverse:.2f}s 拉长到 {required:.2f}s "
+                      f"（每步约 {span / (required * rate * RATE_MARGIN):.0f} counts）")
+
+
+def dry_run(start, delta, args):
+    """不连主站，按参数生成一个往返周期的目标序列并核对步长。"""
+    phase_fn = sine_phase if args.wave == "sine" else triangle_phase
+    traverse, message = check_step_limit(delta, args.traverse, args.rate, args.max_step)
+    if message:
+        print(message, flush=True)
+    period = 1.0 / args.rate
+    steps = max(1, int(traverse * args.rate * 2.0))
+    prev = list(start)
+    max_step = 0
+    samples = []
+    for index in range(steps + 1):
+        t = index * period
+        f = phase_fn(t, traverse)
+        frame = [int(round(p + d * f)) for p, d in zip(start, delta)]
+        step = max(abs(a - b) for a, b in zip(frame, prev))
+        max_step = max(max_step, step)
+        prev = frame
+        if index % max(1, steps // 8) == 0 or index == steps:
+            samples.append((t, f, frame))
+    print(f"[dry-run] 波形={args.wave} 单程={traverse:.2f}s 频率={args.rate:.0f}Hz "
+          f"样本数={steps + 1}")
+    for t, f, frame in samples:
+        print(f"[dry-run] t={t:7.3f}s phase={f:.4f} 目标={frame}")
+    print(f"[dry-run] 单步最大 {max_step} counts "
+          f"（max_step={args.max_step}，{'未启用限幅' if args.max_step <= 0 else '限内' if max_step <= args.max_step else '超限'})")
+    return max_step
+
+
+def run_reciprocate(client, start, delta, args, max_step):
+    """连续往返：起点 <-> 起点+位移，直到次数用尽、总时长到点或连接中断。"""
+    phase_fn = sine_phase if args.wave == "sine" else triangle_phase
+    period = 1.0 / args.rate
+    base = time.monotonic()
+    t_next = base
+    last_send = None
+    max_gap = 0.0
+    max_step_sent = 0
+    sent = 0
+    rejected = 0
+    prev_frame = list(start)
+    next_report = base + 10.0
+    stop_reason = "循环结束"
+    elapsed = 0.0
+
+    try:
+        while True:
+            elapsed = time.monotonic() - base
+            if args.cycles > 0 and elapsed >= args.cycles * 2.0 * args.traverse:
+                stop_reason = f"完成 {args.cycles} 次往返"
+                break
+            if args.total > 0 and elapsed >= args.total:
+                stop_reason = f"到达总时长 {args.total:.0f}s"
+                break
+
+            f = phase_fn(elapsed, args.traverse)
+            frame = [int(round(p + d * f)) for p, d in zip(start, delta)]
+            response = client.command("set_external_target " + " ".join(str(v) for v in frame))
+            sent += 1
+            now = time.monotonic()
+            if last_send is not None and now - last_send > max_gap:
+                max_gap = now - last_send
+            last_send = now
+            step = max(abs(a - b) for a, b in zip(frame, prev_frame))
+            max_step_sent = max(max_step_sent, step)
+            prev_frame = frame
+
+            if not response.startswith("OK|"):
+                rejected += 1
+                print(f"[client] 第 {sent} 条目标被拒: {response}", flush=True)
+                if "Not ready" in response:
+                    client.wait_running()
+
+            if now >= next_report:
+                feedback = client.command("status")
+                positions = parse_axis_positions(feedback) if feedback.startswith("OK|") else []
+                print(f"[client] t+{elapsed:.0f}s 往返 {elapsed / (2.0 * args.traverse):.2f} 次 "
+                      f"phase={f:.3f} 目标={frame} 实际={positions} "
+                      f"已发={sent} 被拒={rejected} 最大间隔={max_gap * 1000:.1f}ms", flush=True)
+                next_report = now + 10.0
+
+            t_next += period
+            now = time.monotonic()
+            if t_next < now:
+                # 单次往返（命令+响应）超过周期时不追赶：追赶会连发多条，
+                # 目标间隔反而变短，曲线时间基准也会偏离墙钟。
+                t_next = now
+            time.sleep(t_next - now)
+    except (OSError, ConnectionError) as error:
+        stop_reason = "连接中断"
+        print(f"[client] 发送中断: {error}", flush=True)
+
+    client.close()
+    print(f"[client] 结束（{stop_reason}）：墙钟 {elapsed:.1f}s，"
+          f"完成往返 {elapsed / (2.0 * args.traverse):.2f} 次，"
+          f"发出 {sent} 条（{sent / max(elapsed, 1e-9):.1f} 条/秒），被拒 {rejected} 条", flush=True)
+    print(f"[client] 相邻目标间隔 最大 {max_gap * 1000:.1f} ms "
+          f"（主站失活阈值 {TARGET_TIMEOUT_MS} ms）", flush=True)
+    print(f"[client] 单步最大 {max_step_sent} counts（上限 {max_step}）", flush=True)
+    if stop_reason == "连接中断":
+        # 主站侧结束（故障锁存或停机）：命令流的终点由主站的报告给出，客户端只报事实。
+        print("[client] 命令流被主站中断，未跑满计划时长", flush=True)
+        return 2
+    if max_gap * 1000.0 >= TARGET_TIMEOUT_MS:
+        print("[client] 警告：间隔超过 200ms，主站中途转为 HOLD，命令流不是全程连续有效的",
+              flush=True)
+        return 1
+    print("[client] 命令流全程连续有效（未出现超过 200ms 的空档）", flush=True)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("socket_path")
+    parser.add_argument("socket_path", nargs="?", default=None)
     parser.add_argument("--degrees", type=float, default=30.0)
     parser.add_argument("--duration", type=float, default=3.0)
     parser.add_argument("--rate", type=float, default=50.0)
     parser.add_argument("--hold", type=float, default=60.0)
     parser.add_argument("--ready", type=float, default=30.0)
+    parser.add_argument("--cycles", type=int, default=None,
+                        help="往返次数；0 = 不限次数（不给则用单程模式）")
+    parser.add_argument("--traverse", type=float, default=3.0, help="往返单程耗时（秒）")
+    parser.add_argument("--wave", choices=("triangle", "sine"), default="triangle")
+    parser.add_argument("--total", type=float, default=0.0, help="往返总时长上限（秒）")
+    parser.add_argument("--max-step", type=int, default=2548,
+                        help="单步上限（counts），仅 --dry-run 使用；"
+                             "联机时以 topology 返回的 max_step 为准（默认 2548 = 2°@16384×28:1）")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="不连主站，只生成目标并核对限幅")
     args = parser.parse_args()
 
     if args.rate <= 0 or 1.0 / args.rate >= TARGET_TIMEOUT_MS / 1000.0:
         raise SystemExit("更新频率必须快于外部目标超时（200ms）")
+
+    if args.dry_run:
+        # 本地核对用：按台架的编码器折算（16384 counts/rev × 28:1 减速比），
+        # 起点取 0，不连主站、不碰硬件。
+        per_degree = counts_per_degree("OK|axes=1,enc=16384|a1:bus=1,enc=16384,gear=28/1")
+        delta = [int(round(args.degrees * per_degree))] * 3
+        print(f"[dry-run] counts/度={per_degree:.2f} 位移={delta[0]} counts", flush=True)
+        max_step = dry_run([0, 0, 0], delta, args)
+        return 0 if max_step <= args.max_step else 1
+
+    if args.socket_path is None:
+        raise SystemExit("缺少套接字路径（--dry-run 可离线核对波形）")
 
     client = Client(args.socket_path, args.ready)
     client.connect()
@@ -164,9 +352,25 @@ def main():
 
     per_degree = counts_per_degree(topology)
     delta = int(round(args.degrees * per_degree))
-    targets = [position + delta for position in start]
-    print(f"[client] counts/度={per_degree:.2f} 位移={delta} counts", flush=True)
+    max_step = parse_field(topology, "max_step") or 0
+    print(f"[client] counts/度={per_degree:.2f} 位移={delta} counts max_step={max_step}",
+          flush=True)
     print(f"[client] 起点={start}", flush=True)
+
+    if args.cycles is not None:
+        traverse, message = check_step_limit([delta] * len(start), args.traverse,
+                                             args.rate, max_step)
+        if message:
+            print(message, flush=True)
+        args.traverse = traverse
+        print(f"[client] 往返模式：{start} <-> "
+              f"{[position + delta for position in start]}，单程 {traverse:.2f}s，"
+              f"波形 {args.wave}，"
+              f"{'不限次数' if args.cycles == 0 else f'{args.cycles} 次'}",
+              flush=True)
+        return run_reciprocate(client, start, [delta] * len(start), args, max_step)
+
+    targets = [position + delta for position in start]
     print(f"[client] 终点={targets}", flush=True)
 
     period = 1.0 / args.rate
@@ -174,7 +378,6 @@ def main():
     # 单步限幅：主站在周期线程里按相邻两条目标之差判定，超限会判 MOTION_INVALID
     # 并中止整个会话（协议 7.2 节）。步长按每次更新的增量折算，超过 max_step 时
     # 拉长位移时间而不是拒绝。
-    max_step = parse_field(topology, "max_step") or 0
     if max_step > 0 and abs(delta) > 0:
         per_update = (abs(delta) + steps - 1) // steps
         if per_update > max_step:
