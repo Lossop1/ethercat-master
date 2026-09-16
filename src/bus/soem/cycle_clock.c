@@ -11,7 +11,9 @@ enum
     EMASTER_NANOSECONDS_PER_SECOND = 1000000000,
     /* 与 SOEM 官方 ec_sample 的 0.01 和 0.00002 增益完全等价。 */
     EMASTER_DC_PROPORTIONAL_DIVISOR = 100,
-    EMASTER_DC_INTEGRAL_DIVISOR = 50000
+    EMASTER_DC_INTEGRAL_DIVISOR = 50000,
+    /* 恢复后与恢复过来的那个周期边界之间至少留出的余量，见 recover。 */
+    EMASTER_RECOVERY_BOUNDARY_GUARD_NS = 100000
 };
 
 static bool timespec_add_ns(struct timespec *value, int64_t nanoseconds)
@@ -210,12 +212,40 @@ int64_t emaster_cycle_clock_phase_error_ns(const emaster_cycle_clock_t *clock)
     return clock != NULL && clock->dc_feedback_valid ? clock->phase_error_ns : 0;
 }
 
+/*
+ * 从超时中恢复：把节拍重新钉回最近的周期边界，并保证下一次发帧就在那儿。
+ *
+ * 关键在 deadline 的含义。wait() 每轮先按 interval 把 deadline 前移（sample 是在
+ * 前移之前判超时的），再睡到前移后的值，所以"下一次实际发帧时刻 = 恢复后留下的
+ * deadline + interval"。也就是说 deadline 保存的不是"下次发帧时刻"，而是它的前一个
+ * 边界。恢复时必须按这个契约反过来减一个周期，否则下一次发帧会落到 now 之后的
+ * 第二个边界上，把一次卡顿平白放大成一个完整周期的过程数据空档。
+ *
+ * 改动前的算法是"deadline 前推至 now 之后的最近边界"，对着上面的契约看，它比想要的
+ * 晚一个周期：迟到 1.5 个周期时，旧算法把下一次发帧放到 3 个周期之后，新算法放在
+ * 2 个周期边界上——平白多赔一个周期的过程数据空档。
+ * （2026-09-15 曾把 4002632 ns 当成现场证据，那是误读：它等于停机序言缺口
+ * shutdown_prologue_gap_ns，即"最后一条周期帧 → 第一条安全停机帧"，不是运行期帧距。）
+ *
+ * 迟到量不足一个周期时，等到边界最多要赔上接近一个完整周期——那部分不是放大，
+ * 是为了不破坏 DC 相位而付出的代价（帧仍然落在同一个 Sync0 之前）。只有当边界
+ * 近在眼前（余量不足 guard）时才直接发，牺牲最多 guard 的相位，避免下一次 wait
+ * 刚进 sample 就又判一次超限、白丢一个周期。
+ *
+ * DC 积分误差和相位修正值保留，PI 环在恢复后不从零重建；落点仍在原来的节拍网格上，
+ * 因此相位不会被这次恢复带偏。
+ */
 bool emaster_cycle_clock_recover(emaster_cycle_clock_t *clock)
 {
     struct timespec now;
     uint64_t now_ns;
     uint64_t deadline_ns;
-    uint64_t elapsed_cycles;
+    int64_t interval_ns;
+    int64_t guard_ns;
+    uint64_t late_ns;
+    uint64_t remainder_ns;
+    int64_t delay_ns;
+    int64_t advance_ns;
 
     if (clock == NULL || !clock->initialized || !clock->deadline_missed)
     {
@@ -227,22 +257,46 @@ bool emaster_cycle_clock_recover(emaster_cycle_clock_t *clock)
     {
         return false;
     }
-    /*
-     * 将 deadline 前推至 now 之后的最近周期边界。
-     * DC 积分误差和相位修正值保留，使 PI 环在恢复后不从零重建。
-     */
-    if (now_ns > deadline_ns)
+    interval_ns = (int64_t)clock->cycle_ns + clock->correction_ns;
+    if (interval_ns <= 0)
     {
-        elapsed_cycles = (now_ns - deadline_ns) / (uint64_t)clock->cycle_ns + 1U;
-        if (elapsed_cycles > UINT64_MAX / (uint64_t)clock->cycle_ns)
-        {
-            return false;
-        }
-        if (!timespec_add_ns(&clock->deadline,
-                             (int64_t)(elapsed_cycles * (uint64_t)clock->cycle_ns)))
-        {
-            return false;
-        }
+        return false;
+    }
+    if (now_ns <= deadline_ns)
+    {
+        clock->deadline_missed = false;
+        return true;
+    }
+    late_ns = now_ns - deadline_ns;
+    if (late_ns > (uint64_t)INT64_MAX)
+    {
+        return false;
+    }
+    /*
+     * 距离 now 之后第一个边界的时长。落在边界上时余数为零，取模后自然得零，
+     * 不需要单独判 `now 恰好在边界上` 这个退化情形——它在 2 ms 抢占配 1 ms 周期
+     * 时并不罕见。
+     */
+    remainder_ns = late_ns % (uint64_t)interval_ns;
+    delay_ns = (int64_t)(((uint64_t)interval_ns - remainder_ns) % (uint64_t)interval_ns);
+    guard_ns = (int64_t)EMASTER_RECOVERY_BOUNDARY_GUARD_NS;
+    if (guard_ns > (int64_t)clock->cycle_ns / INT64_C(4))
+    {
+        guard_ns = (int64_t)clock->cycle_ns / INT64_C(4);
+    }
+    if (delay_ns < guard_ns)
+    {
+        delay_ns = guard_ns;
+    }
+    /* 下一次发帧在 now + delay，按 wait() 的契约留出它的前一个边界。 */
+    advance_ns = (int64_t)late_ns + delay_ns - interval_ns;
+    if (advance_ns < 0)
+    {
+        advance_ns = 0;
+    }
+    if (!timespec_add_ns(&clock->deadline, advance_ns))
+    {
+        return false;
     }
     clock->deadline_missed = false;
     return true;

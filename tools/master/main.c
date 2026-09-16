@@ -22,10 +22,22 @@
 /*
  * RT 参数：等 P1.4/P1.5 实测抖动数据后，考虑迁移到部署配置。
  * 优先级 80 是 EtherCAT 主站的常见选择，高于驱动中断（通常 50-60），
- * 低于看门狗（通常 90+）。绑核 0；如果 Orange Pi 有 CPU 隔离配置，改为隔离核。
+ * 低于看门狗（通常 90+）。
+ *
+ * 绑核 11：台架实测（2026-09-15，12 核）CPU 0 承担了 33% 的硬中断
+ * （arch_timer 一项就 156 万次），管理网卡 enp97s0 的中断 100% 落在 CPU 0；
+ * CPU 11 算力 984（2.5 GHz，与 CPU 0 的 1024 同级）而中断占比仅 1.3%。
+ * 对"别的核上有 CPU 竞争者"这类干扰，改绑 CPU 11 是决定性的：同一剂量的
+ * SCHED_FIFO 90 压载打在 CPU 0 上时，绑 0 的周期线程 1.7 s 就死（status=19），
+ * 绑 11 的两轮都跑满（wkc_no_frame_count=0，send_lateness 最大 29.3 µs）。
+ *
+ * 但这不构成"原来的病因是中断打在周期核上"的证据，那条因果链已被证伪：
+ * 管理面轮询照样打死绑 11 的周期线程（23.1 s，status=16，send_lateness 冲到
+ * 399 µs），而此时中断亲和全程没动——enp49s0-0 仍在 CPU 4、enp97s0-0 仍在
+ * CPU 0，CPU 11 又只有一个退出时延为 0 的空闲态。机制尚未确定，不要引用。
  */
 #define EMASTER_RT_PRIORITY  80
-#define EMASTER_RT_CPU_CORE  0
+#define EMASTER_RT_CPU_CORE  11
 
 static volatile sig_atomic_t stop_requested = 0;
 

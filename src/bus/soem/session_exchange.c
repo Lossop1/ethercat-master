@@ -18,7 +18,16 @@
  * 808 µs 把一次 269 µs 的收包抖动放大成当次唯一的超预算周期（约 1080 µs）。
  * 改成抽样之后，正常周期尾部只剩收包与邮箱推进。
  */
+/*
+ * 可在编译时覆盖，用于 A/B 实验：把间隔设成一个大到运行期内不会命中的值
+ * （例如 -DEMASTER_ERROR_COUNTER_READ_INTERVAL=100000000U），就能整体关掉
+ * 周期内的 FPRD(0x0300)，用来把"主站自己的诊断读"与"链路本身"分开归因。
+ * 关闭后报告里 error_counter_read_attempt_count 会停在 1、skip_count 停在 0，
+ * 可据此确认开关确实生效。默认值不变。
+ */
+#ifndef EMASTER_ERROR_COUNTER_READ_INTERVAL
 #define EMASTER_ERROR_COUNTER_READ_INTERVAL 50U
+#endif
 
 /*
  * 本周期收包段超过这个时长就认为已经在承压，本次跳过错峰读取。
@@ -36,7 +45,8 @@ void emaster_soem_session_note_deadline_missed(emaster_soem_session_t *session)
 
 /*
  * 按配置策略判断本次死区超时是否在可恢复范围内。
- * 若策略允许：重置时钟 deadline 至最近未来边界，清除 deadline_missed，返回 true。
+ * 若策略允许：把节拍重新钉回最近的周期边界（见 emaster_cycle_clock_recover），
+ * 清除 deadline_missed，返回 true。
  * 若策略不允许或时钟重置失败：返回 false，调用者负责锁存失败。
  */
 bool emaster_soem_session_try_deadline_recovery(emaster_soem_session_t *session)
@@ -94,7 +104,18 @@ static void cycle_trace_freeze(emaster_cycle_trace_t *trace)
 
 /*
  * 第一个 WKC 不符当下的现场：冻结不符之前的周期现场，并读一次三轴 AL 状态。
- * 这两件事都不发邮箱，因此不会给驱动器增加任何额外负担——这是刻意的。
+ *
+ * 2026-09-16 实测推翻了这里原先"不发邮箱就不花钱"的判断：ecx_readstate 的第一发
+ * 是一个广播读，只要它不齐——刚丢过帧的网卡正是这种时候——SOEM 就退化成每从站
+ * 一个数据报、每个吃 2 ms 级的 EC_TIMEOUTRET。实测这一拍的未覆盖尾部是
+ * 3.296/3.401 ms（正常周期 0.17–0.22 ms），吃穿 1 ms 预算 → 周期末判超限 →
+ * recover 把 deadline 前移 2 ms → 下一帧距 4.001/4.000 ms → 四轴 AL 20/0x001A
+ * 掉出 OP，会话以 WKC 不符终止。也就是说仪表亲手制造了它要观测的那次掉出，
+ * 而且这次是在周期里、在容错策略本来会容忍的那个单帧丢失之后。
+ *
+ * EMASTER_NO_FIRST_MISMATCH_AL_READ 置真则整段跳过这次读，用来把"主站自己的
+ * 诊断读"与"链路本身"分开归因；跳过时报告里 first_mismatch_al_read 全为 false，
+ * 可据此确认开关确实生效。默认关＝维持既有行为。
  *
  * 更直接的问法是"第一个不符那一刻，驱动器自己的 SM2 事件丢失计数是多少"：
  * 若已经接近阈值，说明驱动器先开始丢同步事件、帧异常是后果；若是 0，说明帧先出
@@ -123,6 +144,11 @@ static void record_first_mismatch_scene(emaster_soem_session_t *session)
     report->first_mismatch_present = true;
     report->first_mismatch_exchange = session->exchange;
     report->first_mismatch_wkc = report->actual_wkc;
+    /*
+     * 不符这一周期驱动器看到的帧距。现场环的副本记的是不符之前的 64 个周期，
+     * 不含本周期，单独留一个标量才能回答"从站掉出的那一刻，总线刚断多久"。
+     */
+    report->first_mismatch_frame_interval_ns = session->frame_interval_ns;
     cycle_trace_freeze(&report->cycle_trace);
     report->cycle_trace.mismatch_present = true;
     report->cycle_trace.mismatch_exchange = session->exchange;
@@ -131,6 +157,14 @@ static void record_first_mismatch_scene(emaster_soem_session_t *session)
      * 读一次从站状态（寄存器 datagram，不发邮箱）。此前的报告只有 WKC 数值，
      * 无法区分"驱动器先掉出 OP 导致 WKC 少计"和"帧本身出问题导致 WKC 少计"。
      */
+    if (emaster_soem_env_flag_enabled("EMASTER_NO_FIRST_MISMATCH_AL_READ"))
+    {
+        /* 对照实验支路：跳过读，只留免费事实。报告里三轴 first_mismatch_al_read
+         * 全为 false，是这一支确实走到的证据。 */
+        printf("[WKC] 首次不符 交换号=%" PRIu64 "：AL 读取已按 EMASTER_NO_FIRST_MISMATCH_AL_READ 跳过\n",
+               session->exchange);
+        return;
+    }
     ecx_readstate(&session->context);
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
     {
@@ -236,6 +270,45 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     if (clock_gettime(CLOCK_MONOTONIC, &send_end) != 0)
     {
         return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED, false);
+    }
+    /*
+     * 帧距仪表：驱动器判的是"两帧之间隔了多久"，不是"主站一个周期里花了多久"。
+     * over_budget_cycle_count 量的是后者，而恢复路径 emaster_cycle_clock_recover
+     * 整周期跳发时，主站内部分段计时全都正常，只有这个间隔会露出来。
+     *
+     * 缺口阈值取 1.5 个周期而不是 1 个：DC 相位修正让正常帧距在周期值上下抖动，
+     * 按 1 个周期判会把约一半的正常周期误记成缺口；整周期跳发是翻倍到约 2 个周期，
+     * 1.5 能干净分开。max 不设阈值，直接取运行期极值。
+     */
+    {
+        uint64_t send_end_ns =
+            (uint64_t)send_end.tv_sec * UINT64_C(1000000000) + (uint64_t)send_end.tv_nsec;
+        if (session->last_send_end_valid)
+        {
+            uint64_t interval_ns = send_end_ns - session->last_send_end_ns;
+            uint64_t gap_threshold_ns = (uint64_t)session->plan->cycle_ns +
+                                        (uint64_t)session->plan->cycle_ns / 2U;
+
+            session->frame_interval_ns = interval_ns;
+            if (interval_ns > session->report->frame_interval_max_ns)
+            {
+                session->report->frame_interval_max_ns = interval_ns;
+                session->report->frame_interval_max_exchange = session->exchange;
+            }
+            if (interval_ns > gap_threshold_ns)
+            {
+                if (session->report->frame_interval_gap_count != UINT64_MAX)
+                {
+                    ++session->report->frame_interval_gap_count;
+                }
+                if (session->report->first_frame_interval_gap_exchange == 0U)
+                {
+                    session->report->first_frame_interval_gap_exchange = session->exchange;
+                }
+            }
+        }
+        session->last_send_end_ns = send_end_ns;
+        session->last_send_end_valid = true;
     }
     session->report->actual_wkc = ecx_receive_processdata(&session->context, frame_timeout_us);
     /*
@@ -385,7 +458,14 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
          */
         bool is_no_frame = session->report->actual_wkc <= 0;
         if (is_no_frame) {
-            if (session->no_frame_consecutive_errors == 0U) {
+            /*
+             * 会话级哨兵，不是"本连续段的第一次"。此前用
+             * no_frame_consecutive_errors == 0 做守卫，而连续段计数器在每个帧正常的
+             * 周期都会清零，于是每段新的整帧缺失都会覆盖这个字段——报告里留下的
+             * 是最后一段的起点，不是第一次。同文件的 first_deadline_missed_exchange
+             * 等四个字段用的都是 == 0 哨兵（交换号自 ++exchange 起恒 >= 1），这里对齐。
+             */
+            if (session->report->wkc_no_frame_first_exchange == 0U) {
                 session->report->wkc_no_frame_first_exchange = session->exchange;
             }
             ++session->no_frame_consecutive_errors;
@@ -524,6 +604,7 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         trace_sample.sync0_margin_ns = stats_belong_to_cycle && host_stats->last_dc_sample_valid
                                            ? (int32_t)host_stats->last_sync0_margin_ns
                                            : INT32_MIN;
+        trace_sample.frame_interval_ns = clamp_u32(session->frame_interval_ns);
         if (tail_timing_valid && monotonic_ns(&receive_done, &receive_done_ns) &&
             monotonic_ns(&mailbox_done, &mailbox_done_ns) &&
             monotonic_ns(&receive_end, &receive_end_ns) &&
@@ -574,6 +655,33 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         }
     }
     /*
+     * 周期尾部未覆盖段：receive_end 之后到这里之间的耗时。中间是 timing 统计、
+     * 现场入环和逐轴 PDO 审计输出——此前没有计时点，于是"某个周期超过 1 ms"这件事
+     * 报告无法回答时间花在主站自己的哪一段上，还是根本不在主站里（被外部抢占）。
+     * 探针放在这里而不是各段之前，是为了拿到整段的合计。
+     */
+    uint64_t tail_uncovered_ns = 0U;
+    {
+        struct timespec tail_probe;
+
+        if (clock_gettime(CLOCK_MONOTONIC, &tail_probe) == 0 &&
+            monotonic_ns(&receive_end, &receive_end_ns))
+        {
+            uint64_t probe_ns = (uint64_t)tail_probe.tv_sec * UINT64_C(1000000000) +
+                                (uint64_t)tail_probe.tv_nsec;
+
+            if (probe_ns >= receive_end_ns)
+            {
+                tail_uncovered_ns = probe_ns - receive_end_ns;
+                if (tail_uncovered_ns > session->report->tail_uncovered_max_ns)
+                {
+                    session->report->tail_uncovered_max_ns = tail_uncovered_ns;
+                    session->report->tail_uncovered_max_exchange = session->exchange;
+                }
+            }
+        }
+    }
+    /*
      * WKC 容错策略：单次或少量WKC错误可以容忍，只有持续或频繁错误才停机。
      * 这样可以避免瞬态干扰导致的误停机，同时保持对严重通信故障的响应。
      */
@@ -606,6 +714,12 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                 /* 此处已在 ++exchange 之后，本次超限对应的周期号就是 exchange。 */
                 session->report->first_deadline_missed_exchange = session->exchange;
             }
+            /*
+             * 超限那一周期的两个归因量：驱动器看到的帧距，以及主站自己的未覆盖尾部。
+             * 二者一起才能回答"这 1 ms 是主站的活干多了，还是被外部抢占、帧距被拉长"。
+             */
+            session->report->deadline_miss_frame_interval_ns = session->frame_interval_ns;
+            session->report->deadline_miss_tail_uncovered_ns = tail_uncovered_ns;
             /*
              * 帧已收发完毕，仅周期末尾检查超限。本周期控制输出已写入，
              * 允许按策略恢复而不丢弃本次成果。

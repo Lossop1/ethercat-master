@@ -99,7 +99,7 @@ IMU 不在 EtherCAT 链路上，本轮不纳入。
 **P0.5**：CSP36° 基线（游离提交 `957e9cd` 等）明确标注作废，不从 main 复现。三条独立原因：
 (1) 全部 sync0_margin 数据早于修复 `6c4ea9d`，旧公式存在回绕假象，修复后无任何新数据；
 (2) 测量时无 RT 保障（mlockall / SCHED_FIFO / CPU 亲和均缺失），抖动量无法归因于总线；
-(3) 产出 schema_version 6 报告的提交是游离提交，当前 main 只发 schema_version 3 且无
+(3) 产出 schema_version 6 报告的提交是游离提交，当前 main 只发 schema_version 4 且无
    `tracking_error` 字段，无法复现。
 有效替代基线为 P1.4（2026-09-11，15分钟，deadline_missed=0），见 [[ethercat-csp36-timing-baseline]]。
 

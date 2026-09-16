@@ -57,15 +57,91 @@ typedef struct
     bool sync_error;
 } observer_sync_probe_t;
 
+static uint64_t observer_now_ns(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    {
+        return 0U;
+    }
+    return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
+}
+
+/* 进入一个相位：记住相位类别与起点。相位起点是反推"标志落下那一刻线程在做什么"的依据。 */
+static void observer_enter_phase(emaster_soem_session_t *session, int phase)
+{
+    session->report->observer_stop.phase = phase;
+    session->report->observer_stop.phase_begin_ns = observer_now_ns();
+}
+
+/*
+ * 记下"观测线程第一次看见停止标志"这一刻。只记第一次：后面的检查点都在收尾路径上，
+ * 再记就把相位覆盖成收尾时的相位了。
+ *
+ * 相位是反推出来的，不是猜的：标志时刻（主线程写）落在当前相位区间内，才把当前相位
+ * 记成"标志落下时线程在做什么"；否则说明标志落在更早的相位里，而更早的相位已经被覆盖，
+ * 记 UNKNOWN。这个区分是这套仪表的核心——join 的双峰只可能来自"相位不同"。
+ */
+static void observer_note_stop(emaster_soem_session_t *session, int site)
+{
+    emaster_observer_stop_trace_t *trace = &session->report->observer_stop;
+
+    if (trace->stop_seen_ns != 0U)
+    {
+        return;
+    }
+    trace->stop_seen_ns = observer_now_ns();
+    trace->stop_site = site;
+    trace->stop_axis = trace->current_axis;
+    trace->stop_iteration = trace->iteration_count;
+    trace->stop_phase = EMASTER_OBSERVER_PHASE_UNKNOWN;
+    trace->stop_phase_begin_ns = 0U;
+    if (trace->stop_flag_ns != 0U && trace->stop_flag_ns >= trace->phase_begin_ns &&
+        trace->phase_begin_ns != 0U)
+    {
+        trace->stop_phase = trace->phase;
+        trace->stop_phase_begin_ns = trace->phase_begin_ns;
+    }
+}
+
 static int observer_sdo_read(emaster_soem_session_t *session, uint16_t slave, uint16_t index,
                              uint8_t subindex, int *size, void *value)
 {
+    uint64_t start_ns;
+    uint64_t end_ns;
+    uint64_t duration_ns;
+    int wkc;
+
     if (!session->observer_running)
     {
+        /* 在读入口发现：标志落在两次读之间（上一次读返回后没有被立刻看到）。 */
+        observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_BETWEEN);
         return 0; /* 与读失败同义：调用者只按 wkc > 0 判断，不会写入样本。 */
     }
-    return ecx_SDOread(&session->context, slave, index, subindex, FALSE, size, value,
-                       OBSERVER_MAILBOX_TIMEOUT_US);
+    observer_enter_phase(session, EMASTER_OBSERVER_PHASE_READ);
+    start_ns = observer_now_ns();
+    wkc = ecx_SDOread(&session->context, slave, index, subindex, FALSE, size, value,
+                      OBSERVER_MAILBOX_TIMEOUT_US);
+    end_ns = observer_now_ns();
+    duration_ns = end_ns > start_ns ? end_ns - start_ns : 0U;
+    if (session->report->observer_stop.read_count == 0U ||
+        duration_ns > session->report->observer_stop.read_max_ns)
+    {
+        session->report->observer_stop.read_max_ns = duration_ns;
+    }
+    session->report->observer_stop.read_count++;
+    session->report->observer_stop.read_last_ns = duration_ns;
+    if (!session->observer_running)
+    {
+        /*
+         * 读返回时才发现：标志是在这次邮箱往返期间落下的。这一条与"读入口发现"必须
+         * 分开——等待上限从"下一个检查点"变成"这次往返剩下的时间"，这正是 join 的
+         * 双峰里那个更长的一峰。
+         */
+        observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_MAILBOX);
+    }
+    return wkc;
 }
 
 /*
@@ -143,6 +219,9 @@ static void observer_sleep(emaster_soem_session_t *session, const struct timespe
 
     while (session->observer_running && (remaining.tv_sec > 0 || remaining.tv_nsec > 0))
     {
+        /* 相位逐片登记：睡眠片的起点是反推"标志落下时线程是否在睡"的依据，
+         * 也说明 join 最多还要等这一个片（1ms）而不是整个 50ms。 */
+        observer_enter_phase(session, EMASTER_OBSERVER_PHASE_SLEEP);
         if (nanosleep(&slice, NULL) != 0)
         {
             return;
@@ -161,6 +240,10 @@ static void observer_sleep(emaster_soem_session_t *session, const struct timespe
             remaining.tv_nsec += 1000000000L - slice.tv_nsec;
         }
     }
+    if (!session->observer_running)
+    {
+        observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_SLEEP);
+    }
 }
 
 static void *observer_thread_func(void *arg)
@@ -168,6 +251,7 @@ static void *observer_thread_func(void *arg)
     emaster_soem_session_t *session = (emaster_soem_session_t *)arg;
     struct timespec interval = {0, 50000000}; /* 50ms */
     uint64_t iteration = 0U;
+    emaster_observer_stop_trace_t *trace = &session->report->observer_stop;
 
     fprintf(stderr, "[P4.3] SDO 观测线程已启动\n");
     fprintf(stderr, "[P4.3] session=%p\n", (void*)session);
@@ -182,8 +266,18 @@ static void *observer_thread_func(void *arg)
     fprintf(stderr, "[P4.3] axis_count=%zu\n", session->plan->axis_count);
     fflush(stderr);
 
-    while (session->observer_running)
+    for (;;)
     {
+        uint64_t iteration_start_ns;
+        uint64_t iteration_ns;
+
+        if (!session->observer_running)
+        {
+            /* 循环顶发现：睡眠片与读入口都没先看到它，说明标志落在两次检查之间。 */
+            observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_BETWEEN);
+            break;
+        }
+        iteration_start_ns = observer_now_ns();
         /*
          * 同步诊断探针只在驱动器已经在 OP 里之后才读：进入 OP 之前 DC 同步还没跑，
          * 1C32/1C33 的计数器没有意义，先读一次会把启动瞬态记成运行期事件。
@@ -193,6 +287,7 @@ static void *observer_thread_func(void *arg)
 
         for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
         {
+            trace->current_axis = axis;
             int16_t current_6078h = 0;
             uint16_t error_code_603f = 0;
             uint32_t voltage_6079h = 0;
@@ -265,6 +360,11 @@ static void *observer_thread_func(void *arg)
                        wkc_speed_command, speed_command_200b09h);
             }
 
+            /*
+             * 相位：解算并写样本。每 20 次读取有一次 stderr 日志落在这里，而 stderr
+             * 是无缓冲的——这一轮里最可能被 I/O 挡住的就是这一段。
+             */
+            observer_enter_phase(session, EMASTER_OBSERVER_PHASE_SAMPLE);
             /* 加锁写入结果 */
             pthread_mutex_lock(&session->observer_mutex);
             if (wkc_current > 0)
@@ -370,6 +470,8 @@ static void *observer_thread_func(void *arg)
                                                           UINT16_C(0x1C32), &sm2_probe);
                 bool sm3_ok = observer_read_sync_counters(session, slave_position,
                                                           UINT16_C(0x1C33), &sm3_probe);
+                /* 两次读数之后不是读，是算：相位从这里退回 SAMPLE，别把上一拍的读当现场。 */
+                observer_enter_phase(session, EMASTER_OBSERVER_PHASE_SAMPLE);
 
                 pthread_mutex_lock(&session->observer_mutex);
                 /*
@@ -420,10 +522,37 @@ static void *observer_thread_func(void *arg)
         }
 
         ++iteration;
+        trace->iteration_count = iteration;
+        {
+            /* 单轮工作耗时（不含睡眠）：50 ms 周期里真正占核的部分，也是"同优先级 FIFO
+             * 线程互相遮挡"时最该被看见的量。 */
+            uint64_t iteration_end_ns = observer_now_ns();
+
+            iteration_ns = iteration_end_ns > iteration_start_ns
+                               ? iteration_end_ns - iteration_start_ns
+                               : 0U;
+            if (iteration_ns > trace->iteration_max_ns)
+            {
+                trace->iteration_max_ns = iteration_ns;
+            }
+        }
         observer_sleep(session, &interval);
     }
+    trace->loop_exit_ns = observer_now_ns();
 
     fprintf(stderr, "[P4.3] SDO 观测线程已退出\n");
+    /*
+     * 收尾时刻单独记：这条 fprintf 走的是无缓冲 stderr，主线程在 join 里等它写完。
+     * "看见标志 → 循环退出"与"循环退出 → 线程函数返回"两段分开，才能判断 join 的
+     * 双峰是等待检查点还是被收尾的 I/O 挡住。
+     */
+    trace->exit_ns = observer_now_ns();
+    /*
+     * 线程函数里的最后一件事。放在 return 之前而不是循环出口：调用者看到的必须是
+     * "这个线程已经没事可做了"，而不是"它刚决定要退"。之后真正回收仍然靠 pthread_join，
+     * 这个标志只负责让停机序言不必在 join 上阻塞掉一段过程数据。
+     */
+    session->observer_exited = true;
     return NULL;
 }
 
@@ -447,15 +576,62 @@ bool emaster_soem_session_start_observer(emaster_soem_session_t *session)
     return true;
 }
 
-void emaster_soem_session_stop_observer(emaster_soem_session_t *session)
+/*
+ * 停机拆成三段（EMASTER_SHUTDOWN_INLINE_PROLOGUE 的停机序言要用）：
+ *
+ *   request  ── 置标志。不阻塞，调用者可以立刻回去发下一帧。
+ *   exited   ── 只看一眼线程有没有跑完，不阻塞、不回收。
+ *   reap     ── pthread_join + 销毁互斥锁。只有在 exited 为真之后调用才不阻塞。
+ *
+ * 之所以必须拆开：join 会一直等到观测线程把手上的邮箱读做完（实测最长 5.34 ms），
+ * 而这段等待原先整个落在"周期已停、停机帧未发"的窗口里，经时钟栅格量化成 2～3 ms
+ * 的过程数据断供，驱动器按 CiA402 同步容差直接掉出 OP。拆开后这三段可以分散到
+ * 不同的周期里，中间照常发帧，等待就不再等于断供。
+ *
+ * stop_observer = request + reap，语义与拆分之前逐字一致。
+ */
+void emaster_soem_session_request_observer_stop(emaster_soem_session_t *session)
 {
-    if (!session->observer_thread_created)
+    if (session == NULL || !session->observer_thread_created)
     {
         return;
     }
 
+    /*
+     * 先记时刻再置标志，次序不能反：这两个时间点之间的差就是"标志落下 → 被看见"，
+     * 而 join 的总耗时是双峰的（12 臂实测 ≤0.806 ms 全通过、≥0.935 ms 全失败）。
+     * 不把这两段分开，就只能看到"join 长了一点"，看不出长在哪。
+     */
+    session->observer_exited = false;
+    session->report->observer_stop.stop_flag_ns = observer_now_ns();
     session->observer_running = false;
+}
+
+bool emaster_soem_session_observer_exited(const emaster_soem_session_t *session)
+{
+    /* 没起来过的线程算已经退出：调用者据此直接进 next 步，不会白等。 */
+    return session == NULL || !session->observer_thread_created || session->observer_exited;
+}
+
+void emaster_soem_session_reap_observer(emaster_soem_session_t *session)
+{
+    if (session == NULL || !session->observer_thread_created)
+    {
+        return;
+    }
+
     pthread_join(session->observer_thread, NULL);
     pthread_mutex_destroy(&session->observer_mutex);
     session->observer_thread_created = false;
+}
+
+void emaster_soem_session_stop_observer(emaster_soem_session_t *session)
+{
+    if (session == NULL || !session->observer_thread_created)
+    {
+        return;
+    }
+
+    emaster_soem_session_request_observer_stop(session);
+    emaster_soem_session_reap_observer(session);
 }

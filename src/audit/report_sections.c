@@ -770,10 +770,12 @@ static bool write_cycle_trace_sample(FILE *stream,
         ",\"receive_duration_ns\":%" PRIu32
         ",\"mailbox_duration_ns\":%" PRIu32
         ",\"error_counter_duration_ns\":%" PRIu32
-        ",\"send_lateness_ns\":%" PRId32 ",\"sync0_margin_ns\":",
+        ",\"send_lateness_ns\":%" PRId32
+        ",\"frame_interval_ns\":%" PRIu32 ",\"sync0_margin_ns\":",
         sample->exchange, sample->wkc, sample->flags, sample->send_duration_ns,
         sample->receive_duration_ns, sample->mailbox_duration_ns,
-        sample->error_counter_duration_ns, sample->send_lateness_ns) >= 0);
+        sample->error_counter_duration_ns, sample->send_lateness_ns,
+        sample->frame_interval_ns) >= 0);
     if (sample->sync0_margin_ns == INT32_MIN)
     {
         REQUIRE_WRITE(fputs("null", stream) != EOF);
@@ -783,6 +785,144 @@ static bool write_cycle_trace_sample(FILE *stream,
         REQUIRE_WRITE(fprintf(stream, "%" PRId32, sample->sync0_margin_ns) >= 0);
     }
     return fputc('}', stream) != EOF;
+}
+
+/* 停机循环单拍现场。state_known 为假的轴上 state 无意义，仍照原值输出：
+ * 报告只负责标出"这一列这一刻是否有效"，不替读者判断。 */
+static bool write_shutdown_cycle_sample(FILE *stream,
+                                        const emaster_shutdown_cycle_sample_t *sample)
+{
+    size_t axis_index;
+    size_t axis_count = sample->axis_count;
+
+    if (axis_count > EMASTER_RUNTIME_FAILURE_MAX_AXES)
+    {
+        axis_count = EMASTER_RUNTIME_FAILURE_MAX_AXES;
+    }
+    REQUIRE_WRITE(fprintf(stream,
+        "{\"exchange\":%" PRIu64 ",\"wkc\":%" PRId32 ",\"exchange_status\":%d"
+        ",\"all_axes_safe\":%s,\"axes_decoded\":%s,\"axes\":[",
+        sample->exchange, sample->wkc, sample->exchange_status,
+        sample->all_axes_safe ? "true" : "false",
+        sample->axes_decoded ? "true" : "false") >= 0);
+    for (axis_index = 0U; axis_index < axis_count; ++axis_index)
+    {
+        REQUIRE_WRITE(fprintf(stream,
+            "%s{\"status_word\":\"0x%04X\",\"control_word\":\"0x%04X\","
+            "\"state\":%u,\"state_known\":%s}",
+            axis_index == 0U ? "" : ",",
+            (unsigned int)sample->status_words[axis_index],
+            (unsigned int)sample->control_words[axis_index],
+            (unsigned int)sample->cia402_states[axis_index],
+            sample->states_known[axis_index] ? "true" : "false") >= 0);
+    }
+    return fputs("]}", stream) != EOF;
+}
+
+/* 停机循环的逐周期现场：头若干拍 + 最后一拍 + 首次 WKC 不符时的 AL 快照。 */
+static bool write_shutdown_cycles(FILE *stream, const emaster_shutdown_cycle_trace_t *trace)
+{
+    size_t axis_index;
+    size_t axis_count;
+
+    REQUIRE_WRITE(fprintf(stream,
+        "{\"capacity\":%u,\"cycle_total\":%" PRIu64 ",\"sample_count\":%zu"
+        ",\"aborted_before_exchange\":%s,\"aborted_axis\":%zu,\"aborted_stage\":%d"
+        ",\"mismatch_al_read\":%s,\"mismatch_al_read_ns\":%" PRIu64
+        ",\"mismatch_al_exchange\":%" PRIu64 ",\"mismatch_al\":[",
+        (unsigned int)EMASTER_SHUTDOWN_CYCLE_CAPACITY, trace->cycle_total,
+        trace->sample_count, trace->aborted_before_exchange ? "true" : "false",
+        trace->aborted_axis, trace->aborted_stage,
+        trace->mismatch_al_read ? "true" : "false", trace->mismatch_al_read_ns,
+        trace->mismatch_al_exchange) >= 0);
+    axis_count = trace->mismatch_al_axis_count;
+    if (axis_count > EMASTER_RUNTIME_FAILURE_MAX_AXES)
+    {
+        axis_count = EMASTER_RUNTIME_FAILURE_MAX_AXES;
+    }
+    for (axis_index = 0U; axis_index < axis_count; ++axis_index)
+    {
+        REQUIRE_WRITE(fprintf(stream, "%s{\"axis\":%zu,\"state\":%u,\"status_code\":%u}",
+            axis_index == 0U ? "" : ",", axis_index + 1U,
+            (unsigned int)trace->mismatch_al_state[axis_index],
+            (unsigned int)trace->mismatch_al_status_code[axis_index]) >= 0);
+    }
+    REQUIRE_WRITE(fputs("],\"samples\":[", stream) != EOF);
+    for (size_t index = 0U; index < trace->sample_count; ++index)
+    {
+        REQUIRE_WRITE(fputs(index == 0U ? "" : ",", stream) != EOF);
+        REQUIRE_WRITE(write_shutdown_cycle_sample(stream, &trace->samples[index]));
+    }
+    REQUIRE_WRITE(fputs("],\"last\":", stream) != EOF);
+    if (trace->last_valid)
+    {
+        REQUIRE_WRITE(write_shutdown_cycle_sample(stream, &trace->last));
+    }
+    else
+    {
+        REQUIRE_WRITE(fputs("null", stream) != EOF);
+    }
+    /*
+     * 停机首拍的定位仪表。时刻都是 CLOCK_MONOTONIC 绝对值，与前面的 mark_* 不同；
+     * shutdown_prologue.origin_monotonic_ns 是同一条时间轴上的原点。
+     */
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"attempt_count\":%zu,\"attempts\":[", trace->attempt_count) >= 0);
+    for (size_t index = 0U; index < trace->attempt_count; ++index)
+    {
+        const emaster_shutdown_attempt_t *attempt = &trace->attempts[index];
+
+        REQUIRE_WRITE(fprintf(stream,
+            "%s{\"begin_ns\":%" PRIu64 ",\"deadline_before_ns\":%" PRIu64
+            ",\"deadline_after_ns\":%" PRIu64 ",\"end_ns\":%" PRIu64
+            ",\"exchange_after\":%" PRIu64 ",\"exchange_status\":%d"
+            ",\"correction_ns\":%" PRId64 ",\"phase_error_ns\":%" PRId64 "}",
+            index == 0U ? "" : ",", attempt->begin_ns, attempt->deadline_before_ns,
+            attempt->deadline_after_ns, attempt->end_ns, attempt->exchange_after,
+            (int)attempt->exchange_status, attempt->correction_ns,
+            attempt->phase_error_ns) >= 0);
+    }
+    REQUIRE_WRITE(fputc(']', stream) != EOF);
+    return fputc('}', stream) != EOF;
+}
+
+/*
+ * 停止观测线程的相位现场。join 是双峰的（≤0.806 ms 全通过 / ≥0.935 ms 全失败），
+ * 这里把这两峰拆成三段：标志落下 → 被看见 → 循环退出 → 线程返回。
+ * site/phase 是分类，时刻才是判据；phase 为 UNKNOWN 表示标志落在已被覆盖的更早相位里
+ * （见 emaster_observer_stop_trace_t 的说明），不是"没有相位"。
+ */
+static bool write_observer_stop(FILE *stream, const emaster_observer_stop_trace_t *stop)
+{
+    return fprintf(stream,
+        "{\"stop_flag_ns\":%" PRIu64 ",\"stop_seen_ns\":%" PRIu64
+        ",\"loop_exit_ns\":%" PRIu64 ",\"exit_ns\":%" PRIu64
+        ",\"stop_phase\":%d,\"stop_phase_begin_ns\":%" PRIu64
+        ",\"stop_site\":%d,\"stop_axis\":%zu,\"stop_iteration\":%" PRIu64
+        ",\"iteration_count\":%" PRIu64 ",\"iteration_max_ns\":%" PRIu64
+        ",\"read_count\":%" PRIu64 ",\"read_max_ns\":%" PRIu64
+        ",\"read_last_ns\":%" PRIu64 "}",
+        stop->stop_flag_ns, stop->stop_seen_ns, stop->loop_exit_ns, stop->exit_ns,
+        stop->stop_phase, stop->stop_phase_begin_ns, stop->stop_site, stop->stop_axis,
+        stop->stop_iteration, stop->iteration_count, stop->iteration_max_ns,
+        stop->read_count, stop->read_max_ns, stop->read_last_ns) >= 0;
+}
+
+/* 收尾时抓的各线程调度累计值。tid 是唯一标识（内核 comm 对同进程线程是同一个）。 */
+static bool write_thread_schedstat(FILE *stream, const emaster_control_session_report_t *report)
+{
+    REQUIRE_WRITE(fputc('[', stream) != EOF);
+    for (size_t index = 0U; index < report->thread_schedstat_count; ++index)
+    {
+        const emaster_thread_schedstat_t *row = &report->thread_schedstat[index];
+
+        REQUIRE_WRITE(fprintf(stream,
+            "%s{\"tid\":%" PRIu32 ",\"policy\":%d,\"priority\":%d"
+            ",\"exec_ns\":%" PRIu64 ",\"wait_ns\":%" PRIu64 ",\"switches\":%" PRIu64 "}",
+            index == 0U ? "" : ",", row->tid, row->policy, row->priority,
+            row->exec_ns, row->wait_ns, row->switches) >= 0);
+    }
+    return fputc(']', stream) != EOF;
 }
 
 /*
@@ -830,7 +970,7 @@ bool emaster_run_report_write(FILE *stream,
     {
         return false;
     }
-    REQUIRE_WRITE(fputs("{\"schema_version\":3,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":4,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -920,7 +1060,20 @@ bool emaster_run_report_write(FILE *stream,
         ",\"first_over_budget_exchange\":%" PRIu64
         ",\"first_deadline_missed_exchange\":%" PRIu64
         ",\"first_mismatch_present\":%s,\"first_mismatch_exchange\":%" PRIu64
-        ",\"first_mismatch_wkc\":%d},",
+        ",\"first_mismatch_wkc\":%d"
+        /*
+         * 帧距：驱动器真正看到的过程数据节奏。gap_count 用 1.5 个周期做阈值，
+         * 单独一条就能回答"总线有没有整周期跳发过"——不需要去逐条翻现场环。
+         */
+        ",\"frame_interval_max_ns\":%" PRIu64
+        ",\"frame_interval_max_exchange\":%" PRIu64
+        ",\"frame_interval_gap_count\":%" PRIu64
+        ",\"first_frame_interval_gap_exchange\":%" PRIu64
+        ",\"first_mismatch_frame_interval_ns\":%" PRIu64
+        ",\"deadline_miss_frame_interval_ns\":%" PRIu64
+        ",\"tail_uncovered_max_ns\":%" PRIu64
+        ",\"tail_uncovered_max_exchange\":%" PRIu64
+        ",\"deadline_miss_tail_uncovered_ns\":%" PRIu64 "},",
         report->tail_max_receive_ns, report->tail_max_mailbox_ns,
         report->tail_max_error_counter_ns, report->error_counter_read_fail_count,
         report->first_error_counter_read_fail_exchange,
@@ -928,8 +1081,46 @@ bool emaster_run_report_write(FILE *stream,
         report->first_error_counter_skip_exchange, report->over_budget_cycle_count,
         report->first_over_budget_exchange, report->first_deadline_missed_exchange,
         report->first_mismatch_present ? "true" : "false", report->first_mismatch_exchange,
-        report->first_mismatch_wkc) >= 0);
-    REQUIRE_WRITE(fputs("\"cycle_trace\":", stream) != EOF);
+        report->first_mismatch_wkc, report->frame_interval_max_ns,
+        report->frame_interval_max_exchange, report->frame_interval_gap_count,
+        report->first_frame_interval_gap_exchange,
+        report->first_mismatch_frame_interval_ns,
+        report->deadline_miss_frame_interval_ns, report->tail_uncovered_max_ns,
+        report->tail_uncovered_max_exchange,
+        report->deadline_miss_tail_uncovered_ns) >= 0);
+    /*
+     * 停机段的仪表（缺口为什么是 5～6 ms 而不是 1 ms）：序言分段计时、停机循环逐周期
+     * 现场、观测线程的停止相位、各线程调度累计值。mark_* 都是相对序言起点的累计位置，
+     * start_valid 为假时全部为 0（"没测到"，不是"耗时为零"）。
+     */
+    REQUIRE_WRITE(fprintf(stream,
+        "\"shutdown_prologue\":{\"start_valid\":%s,\"fast_mode\":%s,\"inline_mode\":%s"
+        ",\"inline_drain_ns\":%" PRIu64 ",\"inline_drain_cycles\":%" PRIu64
+        ",\"mark_after_entry_al_ns\":%" PRIu64 ",\"mark_after_join_ns\":%" PRIu64
+        ",\"mark_after_pre_stop_al_ns\":%" PRIu64 ",\"mark_after_audit_ns\":%" PRIu64
+        ",\"mark_first_safe_frame_ns\":%" PRIu64
+        ",\"entry_al_read_ns\":%" PRIu64 ",\"pre_stop_al_read_ns\":%" PRIu64
+        ",\"origin_monotonic_ns\":%" PRIu64
+        "},\"shutdown_cycles\":",
+        report->shutdown_prologue.start_valid ? "true" : "false",
+        report->shutdown_prologue.fast_mode ? "true" : "false",
+        report->shutdown_prologue.inline_mode ? "true" : "false",
+        report->shutdown_prologue.inline_drain_ns,
+        report->shutdown_prologue.inline_drain_cycles,
+        report->shutdown_prologue.mark_after_entry_al_ns,
+        report->shutdown_prologue.mark_after_join_ns,
+        report->shutdown_prologue.mark_after_pre_stop_al_ns,
+        report->shutdown_prologue.mark_after_audit_ns,
+        report->shutdown_prologue.mark_first_safe_frame_ns,
+        report->shutdown_prologue.entry_al_read_ns,
+        report->shutdown_prologue.pre_stop_al_read_ns,
+        report->shutdown_prologue.origin_monotonic_ns) >= 0);
+    REQUIRE_WRITE(write_shutdown_cycles(stream, &report->shutdown_cycles));
+    REQUIRE_WRITE(fputs(",\"observer_stop\":", stream) != EOF);
+    REQUIRE_WRITE(write_observer_stop(stream, &report->observer_stop));
+    REQUIRE_WRITE(fputs(",\"thread_schedstat\":", stream) != EOF);
+    REQUIRE_WRITE(write_thread_schedstat(stream, report));
+    REQUIRE_WRITE(fputs(",\"cycle_trace\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_trace(stream, &report->cycle_trace));
     REQUIRE_WRITE(fprintf(stream,
         ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64 "},"

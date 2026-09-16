@@ -300,6 +300,12 @@ typedef struct
     uint32_t error_counter_duration_ns;
     int32_t send_lateness_ns;
     int32_t sync0_margin_ns;
+    /*
+     * 本周期与上一周期发帧之间的实际间隔。放进现场环是为了让掉出 OP 之前那 64 个周期
+     * 能直接读出"驱动器看到的帧距"——只记主站内部分段的话，整周期跳发这种故障在
+     * 现场里完全没有痕迹。
+     */
+    uint32_t frame_interval_ns;
 } emaster_cycle_trace_sample_t;
 
 /*
@@ -361,6 +367,203 @@ typedef struct
     bool state_known[EMASTER_RUNTIME_FAILURE_MAX_AXES];
     bool fault_present[EMASTER_RUNTIME_FAILURE_MAX_AXES];
 } emaster_runtime_failure_t;
+
+/*
+ * 停机序言的分段计时。停机序言（最后一次周期交换 → 第一条安全停机帧）期间不发送任何
+ * 过程数据，驱动器靠过程数据的连续性维持 OP：窗口超过同步容差就以 AL 0x1A 掉出 SAFE-OP，
+ * 之后停机帧再正确也无效。2026-09-15 四轴 12 臂实测的缺口是 1.0 ms（通过）对 5.0～6.0 ms
+ * （失败），而 join 只占 0.25～1.93 ms，主项在 join 之外的序言工作里——两次 AL 快照
+ * （各自一次 ecx_readstate）加审计收尾。只量总缺口无法判断该砍哪一段，所以逐段打点。
+ *
+ * 所有 mark_* 都是相对序言起点的纳秒数（起点 = 最后一次周期帧的发送结束时刻）；
+ * start_valid 为假时全部保持 0，表示本轮没有可用的起点，不是"耗时为零"。
+ */
+typedef struct
+{
+    bool start_valid;
+    /* 本轮是否走 EMASTER_SHUTDOWN_FAST 快路径（不把两次 AL 快照放进断供窗口）。 */
+    bool fast_mode;
+    /*
+     * 本轮是否走 EMASTER_SHUTDOWN_INLINE_PROLOGUE：序言融进周期，边发帧边准备。
+     * 置位时下面这组 mark_* 一律不取（保持 0 = 没测到）：序言工作发生在帧与帧之间，
+     * 不是断供窗口的一部分，按缺口原点记只会得到一堆贴着 0 的数。序言本身有多长、
+     * 发了几帧，看 inline_drain_ns / inline_drain_cycles；断供窗口仍然只看
+     * result.shutdown_prologue_gap_ns（它的含义在两种模式下相同）。
+     */
+    bool inline_mode;
+    /* inline 模式下序言的总长与发包数：从最后一条周期帧到序言做完，中间一直有帧。 */
+    uint64_t inline_drain_ns;
+    uint64_t inline_drain_cycles;
+    uint64_t mark_after_entry_al_ns;
+    uint64_t mark_after_join_ns;
+    uint64_t mark_after_pre_stop_al_ns;
+    uint64_t mark_after_audit_ns;
+    /* 第一条安全停机帧的发送结束时刻；有值时等于 result.shutdown_prologue_gap_ns。 */
+    uint64_t mark_first_safe_frame_ns;
+    /* 两次 ecx_readstate 快照自身的耗时，用来验证"快照是缺口主项"这个猜测。 */
+    uint64_t entry_al_read_ns;
+    uint64_t pre_stop_al_read_ns;
+    /*
+     * 序言起点的 CLOCK_MONOTONIC 绝对值。上面所有 mark_* 都以它为 0，而停机首拍仪表
+     * （见 emaster_shutdown_attempt_t）记的是时钟线程自己的绝对时刻；两边要放在同一条
+     * 时间轴上比，得有一个公共原点。
+     */
+    uint64_t origin_monotonic_ns;
+} emaster_shutdown_prologue_t;
+
+/*
+ * 停机循环的逐周期现场。停机循环最多跑 max_cycles（EC_TIMEOUTSTATE / 周期）拍，而值得看
+ * 的是开头几拍：12 臂实测里四轴在"安全停机前"仍为 OP，掉出只可能发生在循环内部，报告
+ * 里却只有循环前后的两个坐标。环保留前 EMASTER_SHUTDOWN_CYCLE_CAPACITY 拍（覆盖掉出
+ * 那一刻），另存最后一拍（循环跑到超时的情形）。全部只写内存，循环里不做 I/O。
+ */
+#define EMASTER_SHUTDOWN_CYCLE_CAPACITY 24U
+
+/*
+ * 停机首拍"这一拍为什么这么久"的定位仪表。
+ *
+ * 2026-09-15 正式批次实测：从"审计收尾后"到第一条安全停机帧之间稳定地跑掉 3.7～4.0 ms，
+ * 而这段里唯一的阻塞点是 emaster_cycle_clock_wait 的 clock_nanosleep——周期时钟在这一拍
+ * 里要么等了一次重新对齐后的边界，要么主线程在进入交换之前就停了。两种解释的修法完全
+ * 不同，光看总缺口分不开，所以记四个时刻：
+ *
+ *   begin_ns      这一拍开始（控制器步进之前）的时刻
+ *   deadline_*    进入这次交换之前 / 交换返回之后，周期时钟自己认的下一个发送边界
+ *   end_ns        交换返回的时刻
+ *
+ * 三点连读就能定性：begin 到 end 之间的空档若全在交换里，说明是等待（看 deadline 前后
+ * 跳了几个周期）；若 begin 本身就已经离序言起点很远，说明是交换之前的停顿。
+ * 前 EMASTER_SHUTDOWN_ATTEMPT_CAPACITY 拍都记：第 0 拍可能是被整周期跳发的那一拍
+ * （交换号不推进），第一条真正发出去的停机帧在下一拍。
+ *
+ * 所有时刻都是 CLOCK_MONOTONIC 绝对值；换算成相对序言起点的位置要用
+ * shutdown_prologue.origin_monotonic_ns。
+ */
+#define EMASTER_SHUTDOWN_ATTEMPT_CAPACITY 2U
+
+typedef struct
+{
+    uint64_t begin_ns;
+    uint64_t deadline_before_ns;
+    uint64_t deadline_after_ns;
+    uint64_t end_ns;
+    /* 交换返回后的交换号：与 begin 前的差就是这一拍到底有没有发出帧。 */
+    uint64_t exchange_after;
+    int32_t exchange_status;
+    /* 周期时钟的 PI 状态，用来判断跳发幅度是不是被修正量放大过。 */
+    int64_t correction_ns;
+    int64_t phase_error_ns;
+} emaster_shutdown_attempt_t;
+
+typedef struct
+{
+    uint64_t exchange;
+    int32_t wkc;
+    /* 本拍停机交换的返回码（emaster_control_session_status_t）；非 0 即本拍中止停机循环。 */
+    int exchange_status;
+    bool all_axes_safe;
+    /*
+     * 本拍的逐轴状态字是否已经由本拍的回帧解码过。交换失败而提前返回的那一拍，
+     * 状态字仍是上一拍的值，此时为假——否则会把上一拍的状态当成这一拍的现场。
+     */
+    bool axes_decoded;
+    size_t axis_count;
+    uint16_t status_words[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    uint16_t control_words[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    /* 解码失败（status word 解不出 CiA402 状态）的轴，标量状态列无效，看 states_known。 */
+    uint8_t cia402_states[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    bool states_known[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+} emaster_shutdown_cycle_sample_t;
+
+typedef struct
+{
+    /* 停机循环实际跑了多少拍（含未入环的中止拍）。 */
+    uint64_t cycle_total;
+    size_t sample_count;
+    emaster_shutdown_cycle_sample_t samples[EMASTER_SHUTDOWN_CYCLE_CAPACITY];
+    bool last_valid;
+    emaster_shutdown_cycle_sample_t last;
+    /*
+     * 循环内首次 WKC 不符当下的 AL 快照：把"驱动器什么时候掉出 OP"钉到周期粒度。
+     * 这次读取本身要占断供窗口的时间，耗时记账在 mismatch_al_read_ns 里，读数要扣掉它。
+     */
+    bool mismatch_al_read;
+    uint64_t mismatch_al_read_ns;
+    uint64_t mismatch_al_exchange;
+    size_t mismatch_al_axis_count;
+    uint16_t mismatch_al_state[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    uint16_t mismatch_al_status_code[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    /* 交换前就中止的拍（控制器步进或过程映像更新失败）：没有帧，也没有现场可记。 */
+    bool aborted_before_exchange;
+    size_t aborted_axis;
+    int aborted_stage;
+    size_t attempt_count;
+    emaster_shutdown_attempt_t attempts[EMASTER_SHUTDOWN_ATTEMPT_CAPACITY];
+} emaster_shutdown_cycle_trace_t;
+
+/*
+ * 停止观测线程时的相位现场。join 的耗时是双峰的（12 臂实测 ≤0.806 ms 全通过、
+ * ≥0.935 ms 全失败），而观测线程只在固定检查点看停止标志：睡眠片的边界、每次邮箱读的
+ * 入口、以及读返回之后。所以 join =（标志落下 → 被看见）+（看见 → 线程退出）。
+ *
+ * 两个坐标都要：
+ * - stop_phase 是"标志落下那一刻"线程在做什么：它由当前相位的起点反推（标志时刻落在
+ *   当前相位区间内才算数，否则记 UNKNOWN，不猜）。多等一个睡眠片与"卡在解算/日志 I/O 里"
+ *   是两种完全不同的修法。
+ * - stop_site 是"在哪一类检查点上被看见"，与 stop_phase 不同：相位是事实，检查点是机制。
+ */
+#define EMASTER_OBSERVER_PHASE_UNKNOWN 0
+#define EMASTER_OBSERVER_PHASE_READ 1    /* 邮箱往返中（含同步探针的读） */
+#define EMASTER_OBSERVER_PHASE_SAMPLE 2  /* 解算并写样本，含每 20 次的 stderr 日志 */
+#define EMASTER_OBSERVER_PHASE_SLEEP 3   /* 睡眠片中（含探针段的轮间） */
+
+#define EMASTER_OBSERVER_STOP_SITE_SLEEP 0
+#define EMASTER_OBSERVER_STOP_SITE_MAILBOX 1
+#define EMASTER_OBSERVER_STOP_SITE_BETWEEN 2
+
+typedef struct
+{
+    /* 主线程置停止标志的时刻（join 计时的起点与之相差一次 clock_gettime）。 */
+    uint64_t stop_flag_ns;
+    /* 标志落下那一刻观测线程的相位与相位起点（见上面的 PHASE_*）。 */
+    int stop_phase;
+    uint64_t stop_phase_begin_ns;
+    /* 观测线程第一次看见标志的时刻、在哪类检查点上看见、当时在处理哪一轴。 */
+    uint64_t stop_seen_ns;
+    int stop_site;
+    size_t stop_axis;
+    uint64_t stop_iteration;
+    /* 看见标志的时刻 → 循环退出 → 线程函数返回。差值就是线程收尾自身的开销。 */
+    uint64_t loop_exit_ns;
+    uint64_t exit_ns;
+    /* 整轮的规模与极值：读次数、单次邮箱往返最大耗时、单轮最大耗时。 */
+    uint64_t iteration_count;
+    uint64_t read_count;
+    uint64_t read_max_ns;
+    uint64_t read_last_ns;
+    uint64_t iteration_max_ns;
+    /* 观测线程当前相位与正在处理的轴（只有它自己写，停机后主线程才读，无需加锁）。 */
+    int phase;
+    uint64_t phase_begin_ns;
+    size_t current_axis;
+} emaster_observer_stop_trace_t;
+
+/*
+ * 收尾时一次性抓的各线程调度累计值（/proc/self/task/<tid>/schedstat）。
+ * wait_ns 是"在运行队列上等着被调度"的累计时间，正是同优先级 SCHED_FIFO 线程互相
+ * 遮挡的度量；只在停机之后读，不在任何实时窗口内。
+ */
+#define EMASTER_THREAD_SCHEDSTAT_CAPACITY 8U
+
+typedef struct
+{
+    uint32_t tid;
+    int policy;
+    int priority;
+    uint64_t exec_ns;
+    uint64_t wait_ns;
+    uint64_t switches;
+} emaster_thread_schedstat_t;
 
 typedef struct
 {
@@ -450,12 +653,42 @@ typedef struct
     /* 从定时点到周期尾部结束的总耗时超过一个周期的次数与首次交换号。 */
     uint64_t over_budget_cycle_count;
     uint64_t first_over_budget_exchange;
+    /*
+     * 相邻两次发帧之间的实际间隔（上一次 send_end → 本次 send_end，同一 CLOCK_MONOTONIC
+     * 时基）。这是驱动器真正看到的过程数据节奏：over_budget_cycle_count 量的是主站自己
+     * 一个周期里花了多久，而驱动器掉出 OP 判的是"两帧之间隔了多久"。恢复路径
+     * （emaster_cycle_clock_recover）把 deadline 推到 next 边界时会整周期跳发，
+     * 这时主站内部各段计时全都正常，只有这个间隔会露出来。
+     *
+     * 计数阈值取 1.5 个周期，不能取 1 个周期：DC 相位修正让正常间隔在 1 ms 上下抖动，
+     * 按 1 个周期判会把约一半的正常周期算成缺口。max 无阈值，直接取运行期极值。
+     */
+    uint64_t frame_interval_max_ns;
+    uint64_t frame_interval_max_exchange;
+    uint64_t frame_interval_gap_count;
+    uint64_t first_frame_interval_gap_exchange;
+    /* 首次 WKC 不符 / 首次截止超时那两个周期各自的实际帧间隔（0 = 未测到）。 */
+    uint64_t first_mismatch_frame_interval_ns;
+    uint64_t deadline_miss_frame_interval_ns;
+    /*
+     * 周期尾部未被已有分段覆盖的那一段：从 receive_end（错误计数器读取之后）到周期末尾
+     * 截止检查之前的耗时。中间是 timing 统计、现场入环和逐轴 PDO 审计输出，此前没有
+     * 计时点，1 ms 超限里如果有大块时间落在这里，报告无法回答。
+     */
+    uint64_t tail_uncovered_max_ns;
+    uint64_t tail_uncovered_max_exchange;
+    uint64_t deadline_miss_tail_uncovered_ns;
     /* 首次 WKC 不符的整体坐标；逐轴现场在 axes[] 的 first_mismatch_* 里。 */
     bool first_mismatch_present;
     uint64_t first_mismatch_exchange;
     int first_mismatch_wkc;
     /* 首次截止超时对应的周期号（0 = 未出现）。 */
     uint64_t first_deadline_missed_exchange;
+    emaster_shutdown_prologue_t shutdown_prologue;
+    emaster_shutdown_cycle_trace_t shutdown_cycles;
+    emaster_observer_stop_trace_t observer_stop;
+    size_t thread_schedstat_count;
+    emaster_thread_schedstat_t thread_schedstat[EMASTER_THREAD_SCHEDSTAT_CAPACITY];
     emaster_cycle_trace_t cycle_trace;
     emaster_cycle_failure_t first_cycle_failure;
     emaster_runtime_failure_t first_runtime_failure;

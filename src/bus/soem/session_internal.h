@@ -81,6 +81,13 @@ typedef struct {
      */
     uint64_t no_frame_consecutive_errors;
     uint64_t no_frame_total_errors;
+    /*
+     * 帧距仪表：上一次发帧结束时刻，以及它与本次之间的间隔。
+     * 间隔在发帧后立刻算出，现场入环时直接取用，避免跨周期取值的错位。
+     */
+    uint64_t last_send_end_ns;
+    bool last_send_end_valid;
+    uint64_t frame_interval_ns;
     /* 实时命令服务器：运行期间接收外部命令（可选） */
     emaster_command_server_t *command_server;
     /* 外部目标双缓冲区：由上层注入，会话不拥有内存。 */
@@ -91,6 +98,10 @@ typedef struct {
     /* 跨线程停止标志：观测线程每次邮箱读之前都查它，停机序言的 join 延迟因此有界。
      * 用 volatile 而不是普通 bool，避免这个检查被优化掉后 join 又等满一次完整迭代。 */
     volatile bool observer_running;
+    /* 观测线程是否已经跑完线程函数。只负责"先看一眼"——真正回收线程仍然是 pthread_join，
+     * 所以这里不需要比 running 更强的同步。有了它，停机序言才能把 join 拆成
+     * "置标志 → 每周期看一眼 → 回收"三段，中间照常发帧。 */
+    volatile bool observer_exited;
     pthread_mutex_t observer_mutex;
 } emaster_soem_session_t;
 
@@ -128,6 +139,10 @@ emaster_control_session_status_t emaster_soem_session_publish_feedback(
  * 超时会因检出位置不同而结局相反（一处可恢复、另一处直接终止且不留现场）。 */
 void emaster_soem_session_note_deadline_missed(emaster_soem_session_t *session);
 bool emaster_soem_session_try_deadline_recovery(emaster_soem_session_t *session);
+/* 环境变量开关：只认写明的几种真值（1/on/true/yes，大小写不敏感）。
+ * 停机序言的快路径与周期内首次不符的 AL 读取都用它做对照实验的开关，
+ * 因此放在这里共用一份，不各自复制。 */
+bool emaster_soem_env_flag_enabled(const char *name);
 emaster_control_session_status_t emaster_soem_session_position_target_step(
     emaster_soem_session_t *session,
     bool *updated);
@@ -161,6 +176,11 @@ bool emaster_soem_pop_error_safe(emaster_soem_session_t *session, ec_errort *err
 /* P4.3: SDO 慢速观测线程管理 */
 bool emaster_soem_session_start_observer(emaster_soem_session_t *session);
 void emaster_soem_session_stop_observer(emaster_soem_session_t *session);
+/* 三段式停机（停机序言融入周期时用）：置标志不阻塞 / 只看一眼 / 回收线程。
+ * stop_observer = request + reap；只有在 observer_exited 为真之后 reap 才不阻塞。 */
+void emaster_soem_session_request_observer_stop(emaster_soem_session_t *session);
+bool emaster_soem_session_observer_exited(const emaster_soem_session_t *session);
+void emaster_soem_session_reap_observer(emaster_soem_session_t *session);
 
 /* 拓扑映射：动态从站发现和轴匹配 */
 typedef struct {

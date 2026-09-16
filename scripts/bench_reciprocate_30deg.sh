@@ -19,6 +19,8 @@
 #   RATE        目标更新频率（Hz），默认 100
 #   WAVE        波形 triangle|sine，默认 triangle
 #   TAG         产物文件名后缀，默认 recip30
+#
+# 报告路径取自部署配置的 run_report_path，无需另行指定。
 
 set -u
 
@@ -36,8 +38,25 @@ LOG=/tmp/${TAG}_master.log
 OUT=/tmp/${TAG}_outcome.txt
 DONE=/tmp/${TAG}_done
 CLIENT_LOG=/tmp/${TAG}_client.log
-REPORT=${REPO}/runtime/reports/orangepi-triple-30deg-latest.json
 STAMP=$(date '+%Y%m%d-%H%M%S')
+
+# 报告路径从部署配置里读，避免换部署时忘了同步（四轴用的就是另一个路径）。
+# 按 deployment_id 找文件，不能按文件名猜：文件名用下划线，ID 用连字符。
+REPORT_REL=$(DEPLOYMENT="$DEPLOYMENT" python3 -c "
+import json, os, glob, sys
+target = os.environ['DEPLOYMENT']
+for path in sorted(glob.glob('${REPO}/config/deployments/*.json')):
+    with open(path) as handle:
+        if json.load(handle).get('deployment_id') == target:
+            print(json.load(open(path))['run_report_path'])
+            sys.exit(0)
+sys.exit(1)
+" 2>/dev/null)
+if [ -z "$REPORT_REL" ]; then
+    echo "错误：读不出部署 $DEPLOYMENT 的 run_report_path" >&2
+    exit 1
+fi
+REPORT=${REPO}/${REPORT_REL}
 
 if [ "$(id -u)" != "0" ]; then
     echo "错误：需要 root（主站要求 mlockall/SCHED_FIFO，套接字由 root 创建）" >&2
@@ -110,13 +129,28 @@ tail -6 "$CLIENT_LOG"
 echo ""
 echo "终点：$(timeout 3 nc -U "$SOCK" <<< "status" 2>/dev/null | tr '|' '\n' | grep '^a' | tr '\n' ' ')"
 
+# 停机走 SIGINT，不走套接字的 shutdown。
+# 已知缺陷：套接字的 stop/shutdown 只置 report->stop_requested，这条路径不经过
+# 安全门（session_supervisor 的 collect_safety_conditions），而 session_control.c
+# 的退出分支要求 safety_denied——健康会话里 safety_denied 恒为 false，于是
+# stop/shutdown 是空操作，会话不会结束，报告也写不出来。
+# SIGINT 经 main.c 的 application_stop_requested 回调进入安全门，会真正停机。
+# 这里仍然发一次 shutdown 并记录结果，用来观察该缺陷是否已被修复。
 echo "shutdown" | timeout 3 nc -U "$SOCK" > /dev/null 2>&1
-for _ in $(seq 1 20); do
+for _ in $(seq 1 10); do
     kill -0 "$MASTER_PID" 2>/dev/null || break
     sleep 0.5
 done
 if kill -0 "$MASTER_PID" 2>/dev/null; then
-    echo "主站未自行退出，强制结束"
+    echo "shutdown 未使主站退出（已知缺陷），改发 SIGINT"
+    kill -INT "$MASTER_PID" 2>/dev/null
+    for _ in $(seq 1 60); do
+        kill -0 "$MASTER_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+fi
+if kill -0 "$MASTER_PID" 2>/dev/null; then
+    echo "SIGINT 后主站仍未退出，强制结束"
     pkill -9 -f emaster-master 2>/dev/null
 else
     echo "主站已自行退出"

@@ -49,7 +49,9 @@ bool emaster_cycle_clock_observe_dc(emaster_cycle_clock_t *clock,
 int64_t emaster_cycle_clock_phase_error_ns(const emaster_cycle_clock_t *clock);
 
 /*
- * 从死区超时状态中恢复：清除 deadline_missed，将 deadline 前推至最近的未来周期边界。
+ * 从死区超时状态中恢复：清除 deadline_missed，并让下一次发帧落在 now 之后的第一个
+ * 周期边界上（边界近在眼前时直接发）。不把一次卡顿放大成额外一个周期的数据空档，
+ * 落点仍在本来的节拍网格上，因此不改变 DC 相位。
  * 仅在调用者确认连续超次数未超阈值后调用；consecutive_deadline_misses 保持不变，
  * 由调用者在后续成功周期中通过 emaster_cycle_clock_wait 返回 true 时自动清零。
  */
