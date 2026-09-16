@@ -591,6 +591,26 @@ static void capture_thread_schedstat(emaster_control_session_report_t *report)
 #define EMASTER_PROLOGUE_DRAIN_MAX_CYCLES 50U
 
 /*
+ * 通信是否仍可用：判据只有一条——失效类别是不是通信类（四个状态码），
+ * 不看故障有没有被锁存。
+ *
+ * 这一条是停机序言要不要融入周期的唯一依据。此前用的是 `!session->fault_latched`，
+ * 于是锁存过任何故障的会话都退回旧序言：跟随误差、模式不符、协调器拒绝这些
+ * **总线仍然健康**的停机，照样会断供 2～3 ms 并掉出 OP——而那恰恰是最需要
+ * 过程数据连续的场合。反过来，真正通信失效时也不必靠故障位去拦：融入周期的
+ * 每一拍都会走一次 exchange，第一拍失败就回退常规路径，代价有界。
+ */
+static bool communication_usable(const emaster_soem_session_t *session)
+{
+    return session->context_open && session->process_map_ready &&
+           session->cycle_output_active &&
+           session->report->status != EMASTER_CONTROL_SESSION_WKC_MISMATCH &&
+           session->report->status != EMASTER_CONTROL_SESSION_DC_SYNC_FAILED &&
+           session->report->status != EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED &&
+           session->report->status != EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
+}
+
+/*
  * 序言融入周期：把停机准备拆成每周期一步，步与步之间照常走一次过程数据交换。
  *
  * 原来的序言是"先停供、再准备"：周期回路一退出过程数据就断了，而准备工作（等观测
@@ -601,8 +621,9 @@ static void capture_thread_schedstat(emaster_control_session_report_t *report)
  * 这里改成"边发边准备"：驱动器整段停机序言里一直有过程数据。缺口是被消除的，
  * 不是被缩短的——每一拍之间都有帧，所以没有哪一段可以叫做断供窗口。
  *
- * 只在未锁存故障、过程映像可用、且跑过周期时调用：故障态的通信已经可疑，
- * 快退优先于供帧连续；没跑过周期则根本没有缺口可言，白等 50 拍。
+ * 只在通信仍可用（见 communication_usable）且确实跑过周期时调用：通信失效时
+ * 快退优先于供帧连续，而且此时第一拍 exchange 必然失败、会立刻回退；
+ * 没跑过周期则根本没有缺口可言，白等 50 拍。
  *
  * 返回 true 表示序言已全部做完；false 表示中途通信失败或超限，调用者按常规路径收尾。
  * 每一步都写成幂等的：即便这里做到一半退出，常规序言重做一遍也不会出错。
@@ -740,11 +761,10 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     /*
      * 序言融入周期。走完之后序言已经全部做完，下面的常规序言整块跳过——两者的关系是
      * 二选一，不是叠加：这里返回 true 才知道可以跳过，返回 false 就原样走常规路径收尾。
-     * 只在没有锁存故障时走：故障态的通信已经可疑，快退优先于供帧连续。
+     * 判据是通信可用（communication_usable），不是"有没有锁存故障"——后者会让
+     * 跟随误差这类总线健康的停机白白退回避开过程数据的旧序言。
      */
-    if (inline_mode && !session->fault_latched && session->context_open &&
-        session->process_map_ready && session->cycle_output_active &&
-        session->report->status == EMASTER_CONTROL_SESSION_OK &&
+    if (inline_mode && communication_usable(session) &&
         session->shutdown_prologue_start_ns != 0U)
     {
         prologue_done = prologue_drain(session);
@@ -807,11 +827,9 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         prologue_mark_ns(session, monotonic_ns());
     }
     if (session->process_map_ready && session->cycle_output_active) {
-        bool communication_usable =
-            session->report->status != EMASTER_CONTROL_SESSION_WKC_MISMATCH &&
-            session->report->status != EMASTER_CONTROL_SESSION_DC_SYNC_FAILED &&
-            session->report->status != EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED &&
-            session->report->status != EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED;
+        /* 与序言闸门共用同一份判据：两处若各写一份，迟早会出现"序言按一种理解
+         * 融入了周期、停用确认按另一种理解被跳过"这种自相矛盾的收尾。 */
+        const bool comm_usable = communication_usable(session);
 
         if (session->report->status == EMASTER_CONTROL_SESSION_OK)
         {
@@ -822,7 +840,7 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
          * 只有通信和周期时钟仍可用时，才能把逐级停用称为已确认
          * WKC、DC 或截止时间失效后继续发送只能算尽力而为，不能伪造安全到达结论
          */
-        if (communication_usable) {
+        if (comm_usable) {
             session->report->safe_state_reached = stop_process_data(session);
             if (session->report->shutdown_prologue_gap_ns != 0U)
             {
@@ -861,7 +879,7 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
             }
         }
         log_shutdown_attempts(session);
-        if (communication_usable && !session->report->safe_state_reached &&
+        if (comm_usable && !session->report->safe_state_reached &&
             session->report->status == EMASTER_CONTROL_SESSION_OK) {
             session->report->status = EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED;
             session->report->fault_latched = true;
