@@ -982,6 +982,12 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->ethercat_interface));
     REQUIRE_WRITE(fputs(",\"topology_id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->topology->topology_id));
+    /*
+     * 报告实际落盘的位置。相对路径按进程 CWD 解析，从别处启动就写到别处——没有
+     * 这一列，那种事故在报告里看不出任何异常。调用方没解析时留空。
+     */
+    REQUIRE_WRITE(fputs(",\"report_path\":", stream) != EOF);
+    REQUIRE_WRITE(emaster_json_string(stream, report->report_path));
     REQUIRE_WRITE(fprintf(
         stream,
         "},\"result\":{\"status_code\":%u,\"control_state\":%u,\"io_map_size\":%zu,"

@@ -6,6 +6,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+# 报告历史副本的默认保留份数。取 20 是因为台架上"最近若干轮"是要反复对比的对象，
+# 而单份报告在审计封顶后约几十 MB——20 份是几十到几百 MB 量级，不会撑爆 runtime/。
+# 想要保留更久或一份不留，在部署配置里写 report_archive_keep。
+DEFAULT_REPORT_ARCHIVE_KEEP = 20
+
 
 def load_documents(paths: list[Path], kind: str) -> list[dict[str, Any]]:
     """按传入顺序读取 JSON 对象，输入错误直接使构建失败。"""
@@ -836,6 +841,19 @@ def deployment_values(
         if external_target_timeout_ms == 0:
             timeout_present = False
 
+        # 报告历史副本保留份数。缺省即用默认值——绝大多数部署不需要显式写它，
+        # 但"这个台架留多少轮证据"应当可以在部署里改，而不是重新编译。
+        # 0 有意义（不留历史），因此这里不用 0 兼作"未配置"。
+        archive_keep = document.get("report_archive_keep", DEFAULT_REPORT_ARCHIVE_KEEP)
+        if isinstance(archive_keep, bool) or not isinstance(archive_keep, int):
+            raise ValueError(
+                f"部署 {deployment_id} 的 report_archive_keep 必须是整数"
+            )
+        if archive_keep < 0:
+            raise ValueError(
+                f"部署 {deployment_id} 的 report_archive_keep 不能为负"
+            )
+
         values.append(
             {
                 "id": deployment_id,
@@ -861,6 +879,7 @@ def deployment_values(
                 "realtime_required": realtime_required,
                 "external_target_timeout_present": timeout_present,
                 "external_target_timeout_ms": external_target_timeout_ms,
+                "report_archive_keep": archive_keep,
             }
         )
     return sorted(values, key=lambda item: item["id"])

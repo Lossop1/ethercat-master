@@ -642,6 +642,15 @@ def validate_deployments(
             non_empty_string(run_report_path),
             f"部署 {deployment_id} 的 run_report_path 必须是非空字符串",
         )
+        # 报告历史副本的保留份数。缺省合法（用默认值），写错则必须挡在生成之前——
+        # 生成器也校验，但那里的报错是一句 Python 异常，这里能指出是哪个部署。
+        archive_keep = deployment.get("report_archive_keep")
+        check.require(
+            archive_keep is None
+            or (isinstance(archive_keep, int) and not isinstance(archive_keep, bool)
+                and archive_keep >= 0),
+            f"部署 {deployment_id} 的 report_archive_keep 必须是非负整数",
+        )
         check.require(
             not management_interface or management_interface != interface,
             f"部署 {deployment_id} 的 EtherCAT 与管理接口不能相同",

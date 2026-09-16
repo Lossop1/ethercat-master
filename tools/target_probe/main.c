@@ -424,6 +424,7 @@ int main(int argc, char **argv)
     emaster_session_plan_status_t plan_status;
     emaster_control_session_status_t session_status;
     size_t axis_capacity;
+    char resolved_report_path[EMASTER_REPORT_PATH_CAPACITY];
 
     /* 解析命令行参数：支持 --deployment <id> 指定部署配置 */
     if (argc == 3 && strcmp(argv[1], "--deployment") == 0)
@@ -528,13 +529,24 @@ int main(int argc, char **argv)
      */
     if (deployment->run_report_path != NULL)
     {
-        if (!emaster_run_report_publish(&plan, &report, deployment->run_report_path))
+        /* 与主程序同一套路径规则：先解成绝对路径再发布，解析结果写进报告。
+         * 相对路径按进程 CWD 解析，两个工具从不同目录启动就会写到两个地方。 */
+        if (!emaster_run_report_resolve_path(deployment->run_report_path, resolved_report_path,
+                                             sizeof(resolved_report_path)))
         {
-            fprintf(stderr, "报告发布失败：%s\n", deployment->run_report_path);
+            (void)snprintf(resolved_report_path, sizeof(resolved_report_path), "%s",
+                           deployment->run_report_path);
+        }
+        (void)snprintf(report.report_path, sizeof(report.report_path), "%s",
+                       resolved_report_path);
+        if (!emaster_run_report_publish(&plan, &report, resolved_report_path,
+                                       deployment->report_archive_keep))
+        {
+            fprintf(stderr, "报告发布失败：%s\n", resolved_report_path);
         }
         else
         {
-            fprintf(stdout, "报告已发布：%s\n", deployment->run_report_path);
+            fprintf(stdout, "报告已发布：%s\n", resolved_report_path);
         }
     }
     print_probe_summary(&ramp, &report, plan.axis_count);

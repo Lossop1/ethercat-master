@@ -346,6 +346,7 @@ int main(int argc, char **argv) {
     emaster_control_session_status_t session_status;
     bool report_published;
     size_t axis_capacity;
+    char resolved_report_path[EMASTER_REPORT_PATH_CAPACITY];
 
     /* 解析命令行参数：支持 --deployment <id> 指定部署配置 */
     if (argc == 3 && strcmp(argv[1], "--deployment") == 0) {
@@ -487,7 +488,21 @@ int main(int argc, char **argv) {
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
                                                   &callbacks, &report);
 
-    report_published = emaster_run_report_publish(&plan, &report, deployment->run_report_path);
+    /*
+     * 报告路径先解成绝对路径再发布。相对路径按进程 CWD 解析，而主站不做 chdir——
+     * 只有 bench 脚本先 cd 到仓库根才成立。解不出来时退回配置原值：写到一个不确定
+     * 的位置，也好过让整轮已经跑完的运行在最后一步报失败。解析结果同时写进报告，
+     * 让"这份文件到底落在哪"成为可核对的事实。
+     */
+    if (!emaster_run_report_resolve_path(deployment->run_report_path, resolved_report_path,
+                                         sizeof(resolved_report_path)))
+    {
+        (void)snprintf(resolved_report_path, sizeof(resolved_report_path), "%s",
+                       deployment->run_report_path);
+    }
+    (void)snprintf(report.report_path, sizeof(report.report_path), "%s", resolved_report_path);
+    report_published = emaster_run_report_publish(&plan, &report, resolved_report_path,
+                                                  deployment->report_archive_keep);
     emaster_master_console_result(&plan, &report, report_published);
     emaster_control_session_report_destroy(&report);
     free(plan_axes);

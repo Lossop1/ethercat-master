@@ -210,11 +210,14 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                                : EMASTER_TEXT_CONTROL_SESSION_SAFE_OUTPUT_ABSENT),
               stderr);
     }
+    /* 打印报告实际落盘的绝对路径，而不是配置里的相对路径：相对路径按进程 CWD
+     * 解析，"报告保存到 runtime/reports/..." 这句提示本身不告诉你它在哪。 */
+    const char *report_path = report->report_path[0] != '\0'
+                                  ? report->report_path
+                                  : plan->deployment->run_report_path;
     if (published) {
-        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_SAVED),
-                plan->deployment->run_report_path);
+        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_SAVED), report_path);
     } else {
-        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_FAILED),
-                plan->deployment->run_report_path);
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_FAILED), report_path);
     }
 }

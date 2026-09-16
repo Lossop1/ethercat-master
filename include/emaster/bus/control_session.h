@@ -599,11 +599,23 @@ typedef struct
     uint64_t publish_over_budget_count;
 } emaster_observation_report_t;
 
+/* 报告落盘路径的容量上限。定义在这里而不是 run_report.h：报告结构体要用它，
+ * 而 run_report.h 反过来包含本头文件。 */
+#define EMASTER_REPORT_PATH_CAPACITY 512U
+
 typedef struct
 {
     emaster_control_session_status_t status;
     emaster_control_state_t state;
     char interface_name[128];
+    /*
+     * 本次报告实际落盘的绝对路径，由调用方在发布前填。留空表示调用方没解析。
+     *
+     * 会话本身不写文件，也没有 CWD 的概念，所以这个字段只能由工具侧填。放在这里
+     * 是为了让报告自证位置：相对路径按进程 CWD 解析，从别处启动就会写到别处，
+     * 而"写到哪去了"在报告内容里原本看不出任何异常。
+     */
+    char report_path[EMASTER_REPORT_PATH_CAPACITY];
     emaster_control_session_axis_result_t *axes;
     size_t axis_count;
     size_t io_map_size;

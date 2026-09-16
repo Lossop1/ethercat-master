@@ -23,6 +23,11 @@ def c_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
+def c_uint32(value: int) -> str:
+    """生成无符号 32 位常量，与其它无符号部署字段的来源保持一致。"""
+    return f"UINT32_C({value})"
+
+
 def c_int32(value: int) -> str:
     """生成可移植的 32 位有符号整数常量，包括无法直接取正值的 INT32_MIN。"""
     if value == -(1 << 31):
@@ -309,6 +314,7 @@ def render_deployments(
         .operation_profile_count = {operation_count},
         .motion_profile = {motion_pointer},
         .run_report_path = {c_string(deployment['run_report_path'])},
+        .report_archive_keep = {c_uint32(deployment['report_archive_keep'])},
         .error_recovery_policy_id = {c_string(deployment['error_recovery_policy_id'])},
         .fault_policy = {deployment['fault_policy']},
         .has_realtime_priority = {'true' if deployment['realtime_priority_present'] else 'false'},

@@ -190,6 +190,15 @@ typedef struct
     const emaster_motion_profile_t *motion_profile;
     /* 运行报告路径由部署决定，主站每次原子覆盖该文件，不在命令行追加参数。 */
     const char *run_report_path;
+    /*
+     * 报告历史副本的保留份数。0 表示不留历史（只保留 run_report_path 那一份）。
+     *
+     * run_report_path 是覆盖写，同一部署跑一百次只会剩最后一个文件，而"上一轮跑成
+     * 什么样"往往正是要对比的东西——只靠 bench 脚本手工 cp 的话，换个人启动、或
+     * 直接从命令行跑，历史就断了。份数在部署配置里给，因为"这个台架留多少轮证据"
+     * 是部署的事实，不是程序常量。
+     */
+    uint32_t report_archive_keep;
     /* 错误恢复策略 ID，引用独立的策略配置；NULL 时使用 "default"。 */
     const char *error_recovery_policy_id;
     /* P2.5: 故障隔离策略，默认为 GLOBAL_STOP（向后兼容） */

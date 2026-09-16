@@ -512,24 +512,27 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
             uint32_t consecutive_threshold;
             uint32_t total_threshold;
             uint64_t window_count;
-            uint64_t now_ns = 0U;
+            /* 不叫 now_ns：那是本函数的局部量，尾部采样会写它。这里另起一个名字，
+             * 免得两处取值互相看不见对方的存在。 */
+            uint64_t window_now_ns = 0U;
 
             /*
              * receive_end 是上面同一次时钟调用的结果，转换不会再失败；真失败了就用 0，
              * 窗口不推进——事件仍落在当前桶里，判定偏保守而不是偏松。
              */
-            (void)monotonic_ns(&receive_end, &now_ns);
+            (void)monotonic_ns(&receive_end, &window_now_ns);
             if (is_no_frame) {
                 consecutive_threshold = policy->no_frame_recovery.consecutive_error_threshold;
                 total_threshold = policy->no_frame_recovery.total_error_threshold;
-                window_count = emaster_cyclic_window_record(&session->no_frame_window, now_ns);
+                window_count =
+                    emaster_cyclic_window_record(&session->no_frame_window, window_now_ns);
                 if (window_count > session->report->wkc_no_frame_window_max) {
                     session->report->wkc_no_frame_window_max = window_count;
                 }
             } else {
                 consecutive_threshold = policy->wkc_recovery.consecutive_error_threshold;
                 total_threshold = policy->wkc_recovery.total_error_threshold;
-                window_count = emaster_cyclic_window_record(&session->wkc_window, now_ns);
+                window_count = emaster_cyclic_window_record(&session->wkc_window, window_now_ns);
                 if (window_count > session->report->wkc_short_frame_window_max) {
                     session->report->wkc_short_frame_window_max = window_count;
                 }
