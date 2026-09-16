@@ -97,6 +97,7 @@ static void *listen_thread(void *arg)
     emaster_command_server_t *server = (emaster_command_server_t *)arg;
     char buffer[512];
     ssize_t bytes_read;
+    size_t queue_count; /* 锁内快照，供解锁后的 fprintf 使用 */
     emaster_command_t command;
 
     /*
@@ -277,9 +278,18 @@ static void *listen_thread(void *arg)
             server->queue.commands[server->queue.write_index] = command;
             server->queue.write_index = (server->queue.write_index + 1U) % COMMAND_QUEUE_CAPACITY;
             ++server->queue.count;
-            fprintf(stderr, "[CMD_SERVER] Enqueued, count=%zu\n", server->queue.count);
-            fflush(stderr);
+            queue_count = server->queue.count;
             pthread_mutex_unlock(&server->mutex);
+
+            /*
+             * 打印在**解锁之后**。这把锁的另一端是实时周期线程——它每拍调一次
+             * emaster_command_server_receive 来取命令，而 stderr 若是管道或终端，
+             * 一次 fprintf+fflush 可以阻塞任意久。持锁做 I/O 等于把这个无界等待
+             * 转嫁给周期线程。计数先在锁内取快照，解锁后再打印，因此打印的仍然是
+             * 那一刻的真实值。
+             */
+            fprintf(stderr, "[CMD_SERVER] Enqueued, count=%zu\n", queue_count);
+            fflush(stderr);
         }
     }
 
@@ -461,9 +471,37 @@ bool emaster_command_server_respond(emaster_command_server_t *server,
         return false;
     }
 
-    /* 发送响应；客户端已断开时返回 EPIPE（SIGPIPE 已屏蔽），不影响主站运行。 */
-    bytes_written = write(client_fd, buffer, (size_t)len);
-    return bytes_written == len;
+    /*
+     * 发送响应。这段代码跑在**实时周期线程**上（session_control.c 的 status 分支每拍
+     * 调一次），所以绝不能阻塞：客户端连上就不读 → 套接字发送缓冲写满 → 原来的阻塞
+     * write() 会让周期线程卡在系统调用里，直到对方读取或断连。这不是理论风险，是
+     * "任何客户端都能拖死控制回路"的现成通道。
+     *
+     * MSG_DONTWAIT 把"发不出去"变成立刻返回的错误。代价是可能出现**短写**：缓冲区
+     * 只装得下一部分，`OK|<半个多轴状态>` 留在流里，后续响应接在它后面，客户端的行
+     * 解析从此错位。所以短写与 EAGAIN 一并按"这个客户端跟不上"处理——关掉连接让它
+     * 重连。响应以换行结尾，客户端读到的不完整行没有结尾换行，这是它与完整响应可
+     * 区分的地方。
+     *
+     * 在锁内 close 并置 -1，与监听线程回收连接的既有写法一致（它也是"锁内改
+     * client_fd"）。fd 复用窗口与监听线程自己 :146 的那处检查同级：需要监听线程
+     * 恰好在这几微秒内走完"读失败→close→accept 拿到同一个 fd 号"，而它绝大部分
+     * 时间阻塞在 read 上。
+     */
+    bytes_written = send(client_fd, buffer, (size_t)len, MSG_DONTWAIT);
+    if (bytes_written == (ssize_t)len)
+    {
+        return true;
+    }
+
+    pthread_mutex_lock(&server->mutex);
+    if (server->client_fd == client_fd)
+    {
+        close(server->client_fd);
+        server->client_fd = -1;
+    }
+    pthread_mutex_unlock(&server->mutex);
+    return false;
 }
 
 const char *emaster_command_server_socket_path(const emaster_command_server_t *server)
