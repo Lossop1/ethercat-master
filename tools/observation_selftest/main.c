@@ -144,16 +144,15 @@ static bool axis_matches(const emaster_observation_axis_t *actual,
            actual->control_word == expected->control_word && actual->flags == expected->flags;
 }
 
-/* frame 是否恰好是 index 这一拍的内容（含 publish_index）。 */
-static bool frame_matches(const emaster_observation_frame_t *frame, uint64_t index)
+/*
+ * frame 的载荷是否恰好是 index 这一拍的内容，**不看 publish_index**。
+ * 单独拆出来是为了分辨"整圈错位"和"同一槽的两次发布混在一起"。
+ */
+static bool frame_payload_matches(const emaster_observation_frame_t *frame, uint64_t index)
 {
     emaster_observation_frame_t expected;
     uint16_t axis_index;
 
-    if (frame->publish_index != index)
-    {
-        return false;
-    }
     fill_frame(&expected, index);
     if (frame->cycle != expected.cycle || frame->monotonic_ns != expected.monotonic_ns ||
         frame->deadline_ns != expected.deadline_ns ||
@@ -170,6 +169,12 @@ static bool frame_matches(const emaster_observation_frame_t *frame, uint64_t ind
         }
     }
     return true;
+}
+
+/* frame 是否恰好是 index 这一拍的内容（含 publish_index）。 */
+static bool frame_matches(const emaster_observation_frame_t *frame, uint64_t index)
+{
+    return frame->publish_index == index && frame_payload_matches(frame, index);
 }
 
 /* ---------------------------------------------------------------- 边界与窗口 */
@@ -290,7 +295,33 @@ typedef struct
     _Atomic uint64_t head_regression;
     /* read_or_latest 在该降级的时候没有降级。 */
     _Atomic uint64_t degraded_mismatch;
+    /*
+     * 第一次撕裂的现场。用来分辨两种完全不同的成因，而它们需要完全不同的修法：
+     *
+     * - **读者侧内存序缺口**：拷贝与复查之间的载荷读被重排到复查之后，于是复查报
+     *   "head 没变"，载荷却读到了写者后来写进去的下一圈内容。特征是帧里的
+     *   publish_index 仍等于请求的序号（槽的归属标签还没被改写），而载荷对不上。
+     * - **协议本身有洞**：可读窗口算错，读者读到了写者手上的那一格。特征是
+     *   publish_index 与请求序号不符，或载荷与请求序号相差整一圈。
+     *
+     * x86 是强内存序（TSO），载荷读不会被重排到后面的读之后，因此本机永远看不到
+     * 第一种；aarch64 是弱内存序，才会露出来。
+     */
+    _Atomic bool torn_recorded;
+    _Atomic uint64_t torn_index;
+    _Atomic uint64_t torn_head;
+    _Atomic uint64_t torn_publish;
+    /* 首次撕裂的错位形态，见 torn_kind_* 常量。 */
+    _Atomic unsigned torn_kind;
+    /* 撕裂帧的载荷与 index±CAP 相符的次数：相符即"整圈错位"，不符即"混了"。 */
+    _Atomic uint64_t torn_next_lap;
+    _Atomic uint64_t torn_prev_lap;
 } reader_stats_t;
+
+/* 首次撕裂的错位形态。见 note_tear。 */
+#define TORN_KIND_MIXED 0U    /* 载荷既不等于 index 也不等于 index±CAP：混了两拍 */
+#define TORN_KIND_NEXT_LAP 1U /* 载荷整份等于 index+CAP：整圈错位到下一圈 */
+#define TORN_KIND_PREV_LAP 2U /* 载荷整份等于 index-CAP：整圈错位到上一圈 */
 
 static void stats_reset(reader_stats_t *stats)
 {
@@ -302,11 +333,92 @@ static void stats_reset(reader_stats_t *stats)
     atomic_store_explicit(&stats->torn, 0U, memory_order_relaxed);
     atomic_store_explicit(&stats->head_regression, 0U, memory_order_relaxed);
     atomic_store_explicit(&stats->degraded_mismatch, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn_recorded, false, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn_index, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn_head, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn_publish, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn_kind, TORN_KIND_MIXED, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn_next_lap, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn_prev_lap, 0U, memory_order_relaxed);
 }
 
 static void stats_count(_Atomic uint64_t *counter)
 {
     atomic_fetch_add_explicit(counter, 1U, memory_order_relaxed);
+}
+
+/*
+ * 记一次撕裂，并留下第一次的现场。第一次才是能定因果的那次：后面的都被后续撕裂
+ * 覆盖了。这与报告里 first_mismatch_* 只记首次是同一个手法。
+ */
+static void note_tear(reader_stats_t *stats,
+                      const emaster_observation_frame_t *frame,
+                      uint64_t index)
+{
+    const uint64_t capacity = (uint64_t)EMASTER_OBSERVATION_RING_CAPACITY;
+    uint64_t head = emaster_observation_ring_head(stats->ring);
+    unsigned kind = TORN_KIND_MIXED;
+
+    stats_count(&stats->torn);
+    if (frame_payload_matches(frame, index + capacity))
+    {
+        stats_count(&stats->torn_next_lap);
+        kind = TORN_KIND_NEXT_LAP;
+    }
+    else if (index >= capacity && frame_payload_matches(frame, index - capacity))
+    {
+        stats_count(&stats->torn_prev_lap);
+        kind = TORN_KIND_PREV_LAP;
+    }
+    if (!atomic_exchange_explicit(&stats->torn_recorded, true, memory_order_relaxed))
+    {
+        atomic_store_explicit(&stats->torn_kind, kind, memory_order_relaxed);
+        atomic_store_explicit(&stats->torn_index, index, memory_order_relaxed);
+        atomic_store_explicit(&stats->torn_head, head, memory_order_relaxed);
+        atomic_store_explicit(&stats->torn_publish, frame->publish_index,
+                              memory_order_relaxed);
+    }
+}
+
+/*
+ * 把首次撕裂的现场打出来。读者能读到 OK，说明它自己那两道判据都过了：复查的 head
+ * 与首读相同、且槽里的 publish_index 等于请求序号。所以现场里 publish_index **一定**
+ * 等于请求序号，能分辨成因的只剩载荷错位到哪一圈。
+ *
+ * 而协议本身可以证明"整圈错位到上一圈"不是写者的错：写者只在 head == index 时写槽
+ * index % CAP，读者只在 index ≥ oldest(head) = head - CAP + 1 时才取该槽，两者交集
+ * 为空。若现场真的出现上一圈命中，这条证明就被证伪了，那时要查的是窗口算术，不是
+ * 内存序。
+ */
+static void report_tear_scene(const reader_stats_t *stats)
+{
+    uint64_t index = atomic_load(&stats->torn_index);
+    uint64_t head = atomic_load(&stats->torn_head);
+    uint64_t publish = atomic_load(&stats->torn_publish);
+    unsigned kind = atomic_load(&stats->torn_kind);
+
+    printf("    首次撕裂现场：请求 index=%" PRIu64 " head=%" PRIu64
+           " 帧内 publish_index=%" PRIu64 " 下一圈命中=%" PRIu64 " 上一圈命中=%" PRIu64 "\n",
+           index, head, publish, atomic_load(&stats->torn_next_lap),
+           atomic_load(&stats->torn_prev_lap));
+    if (kind == TORN_KIND_NEXT_LAP)
+    {
+        printf("    错位形态：载荷整份来自 index+CAP（槽标签仍是本圈）。\n");
+    }
+    else if (kind == TORN_KIND_PREV_LAP)
+    {
+        printf("    错位形态：载荷整份来自 index-CAP —— 与可读窗口的证明矛盾，"
+               "要先查窗口算术。\n");
+    }
+    else
+    {
+        printf("    错位形态：载荷既不等于本圈也不等于邻圈 —— 同一次拷贝里混了两拍。\n");
+    }
+    if (publish != index)
+    {
+        printf("    注意：publish_index 与请求序号不符，撕裂不在 read() 的判据之内"
+               "（对照探针直接读槽，属于预期）。\n");
+    }
 }
 
 /* 每 READER_YIELD_INTERVAL 次读让出一次 CPU。见该宏处的说明。 */
@@ -352,7 +464,7 @@ static void *reader_newest(void *arg)
         case EMASTER_OBSERVATION_READ_OK:
             if (!frame_matches(&frame, head - 1U))
             {
-                stats_count(&stats->torn);
+                note_tear(stats, &frame, head - 1U);
             }
             stats_count(&stats->ok);
             break;
@@ -401,7 +513,7 @@ static void *reader_oldest(void *arg)
             /* 读到了！要么是排除逻辑没生效，要么是它返回了内容对不上的帧。 */
             if (!frame_matches(&frame, head - capacity))
             {
-                stats_count(&stats->torn);
+                note_tear(stats, &frame, head - capacity);
             }
             stats_count(&stats->ok);
             break;
@@ -446,7 +558,7 @@ static void *reader_window(void *arg)
             case EMASTER_OBSERVATION_READ_OK:
                 if (!frame_matches(&frame, index))
                 {
-                    stats_count(&stats->torn);
+                    note_tear(stats, &frame, index);
                 }
                 stats_count(&stats->ok);
                 break;
@@ -493,7 +605,7 @@ static void *reader_degraded(void *arg)
             }
             if (!frame_matches(&frame, frame.publish_index))
             {
-                stats_count(&stats->torn);
+                note_tear(stats, &frame, frame.publish_index);
             }
             stats_count(&stats->ok);
             break;
@@ -545,7 +657,7 @@ static void *reader_naive_probe(void *arg)
         else
         {
             /* 两圈都不是：两拍混在一起了。 */
-            stats_count(&stats->torn);
+            note_tear(stats, &raw, head);
         }
     }
     return NULL;
@@ -576,6 +688,11 @@ static void test_ring_concurrent(const char *title, void *(*reader)(void *), boo
            " UNSTABLE=%-10" PRIu64 " 撕裂=%" PRIu64 "\n",
            title, atomic_load(&stats.ok), atomic_load(&stats.stale),
            atomic_load(&stats.empty), atomic_load(&stats.unstable), atomic_load(&stats.torn));
+
+    if (atomic_load(&stats.torn) > 0U)
+    {
+        report_tear_scene(&stats);
+    }
 
     if (expect_torn)
     {
@@ -784,6 +901,10 @@ static void test_writer_independence(void)
           per_frame_contended, per_frame_alone);
     CHECK(emaster_observation_ring_head(&ring) == TEST_CONCURRENT_FRAMES,
           "写者发布的帧数不对：head=%" PRIu64, emaster_observation_ring_head(&ring));
+    if (atomic_load(&stats.torn) > 0U)
+    {
+        report_tear_scene(&stats);
+    }
     CHECK(atomic_load(&stats.torn) == 0U, "读者在场时出现了撕裂帧");
 }
 
@@ -796,6 +917,15 @@ typedef struct
     _Atomic uint64_t ok;
     _Atomic uint64_t failed;
     _Atomic uint64_t torn;
+    /*
+     * 读到"发布过一次之前的全零状态"的次数，单列出来不并进 torn。
+     *
+     * 读者线程可能先于写者的首次发布跑起来，此时序号是 0、载荷全零，而它是一份
+     * 自洽的（写者没在写）状态，seqlock 检查当然放行。它不是撕裂——是"还没有数据"，
+     * 与环形缓冲的 EMPTY 同类。分开计数是为了让这条判定有据可依：若它正好等于
+     * 曾经记在 torn 上的数量，就说明那些"撕裂"全是它，seqlock 本身没事。
+     */
+    _Atomic uint64_t unpublished;
     _Atomic uint64_t unsafe_ok;
     _Atomic uint64_t unsafe_torn;
 } slow_stats_t;
@@ -871,12 +1001,29 @@ static void spin_iterations(uint32_t iterations)
     }
 }
 
+/*
+ * 写者起跑前先等一会儿，好让带校验读者**一定**先撞上"还没发布过"的空状态。
+ *
+ * 这一段是判定依据本身，不是凑数。不带它，读者有没有跑到那个状态取决于两个线程的
+ * 起跑偏差：跑到了就多出几十次"载荷对不上"，跑不到就一次没有——而这两种情况在
+ * 通过的报告里长得一模一样。断言 slow_stats_t::unpublished 必须被行使过，就是靠它。
+ */
+static void slow_writer_head_start(void)
+{
+    struct timespec delay;
+
+    delay.tv_sec = 0;
+    delay.tv_nsec = 20000000L; /* 20 ms：读者在这段时间里会转成千上万圈 */
+    (void)nanosleep(&delay, NULL);
+}
+
 static void *slow_writer(void *arg)
 {
     slow_stats_t *stats = arg;
     emaster_observation_slow_state_t state;
     uint64_t round;
 
+    slow_writer_head_start();
     for (round = 1U; round <= TEST_SLOW_PUBLISHES; ++round)
     {
         fill_slow(&state, round);
@@ -900,11 +1047,19 @@ static void *slow_reader(void *arg)
             atomic_fetch_add_explicit(&stats->failed, 1U, memory_order_relaxed);
             continue;
         }
+        /* 发布前的空状态与"载荷对不上"分开记，但两笔都计。见 slow_stats_t 的说明。 */
+        if (state.read_count == 0U && state.axis_count == 0U)
+        {
+            atomic_fetch_add_explicit(&stats->unpublished, 1U, memory_order_relaxed);
+        }
+        else
+        {
+            atomic_fetch_add_explicit(&stats->ok, 1U, memory_order_relaxed);
+        }
         if (!slow_matches(&state))
         {
             atomic_fetch_add_explicit(&stats->torn, 1U, memory_order_relaxed);
         }
-        atomic_fetch_add_explicit(&stats->ok, 1U, memory_order_relaxed);
     }
     return NULL;
 }
@@ -965,14 +1120,28 @@ static void test_slow_seqlock(void)
     checked_torn = atomic_load(&stats.torn);
     unsafe_torn = atomic_load(&stats.unsafe_torn);
     printf("  带校验读者：成功 %" PRIu64 " 次，撕裂 %" PRIu64 " 次；重试上限未命中 %" PRIu64
-           " 次\n",
-           checked_ok, checked_torn, atomic_load(&stats.failed));
+           " 次；发布前的空状态 %" PRIu64 " 次\n",
+           checked_ok, checked_torn, atomic_load(&stats.failed),
+           atomic_load(&stats.unpublished));
     printf("  对照读者（跳过校验）：一致 %" PRIu64 " 次，不一致 %" PRIu64 " 次\n",
            atomic_load(&stats.unsafe_ok), unsafe_torn);
 
     CHECK(checked_ok >= 1000U, "带校验读者成功次数太少（%" PRIu64 "），断言没有意义",
           checked_ok);
-    CHECK(checked_torn == 0U, "带校验读者读到不一致快照");
+    /*
+     * 先确认这条判定被行使过：读者必须在写者首次发布之前跑过一段，才会读到那个
+     * 全零的空状态。没有这一条，下面的等式可能一整轮都是 0 == 0，等于没测。
+     */
+    CHECK(atomic_load(&stats.unpublished) > 0U,
+          "读者没跑到过发布前的空状态，torn == unpublished 这条断言没有被行使");
+    /*
+     * 带校验读者的**每一处**"载荷对不上"都必须正好是那个发布前的空状态。它是自洽的
+     * （写者确实没在写），只是"还没有数据"，与环形缓冲的 EMPTY 同类——不是撕裂。
+     * 等式而不是不等式：只要出现一次真正的混合快照，右边就不再相等。
+     */
+    CHECK(atomic_load(&stats.unpublished) == checked_torn,
+          "带校验读者读到不一致快照：撕裂 %" PRIu64 " 次，其中发布前空状态 %" PRIu64 " 次",
+          checked_torn, atomic_load(&stats.unpublished));
     CHECK(unsafe_torn > 0U, "对照读者没有观察到不一致快照，本次交错不可采信");
 }
 

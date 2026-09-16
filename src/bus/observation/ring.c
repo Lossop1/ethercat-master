@@ -88,11 +88,28 @@ void emaster_observation_ring_publish(emaster_observation_ring_t *ring,
     slot->publish_index = index;
 
     /*
-     * 唯一的屏障。release 保证上面所有对槽的写入对 acquire 到这个新 head 的读者可见。
+     * 第一道屏障。release 保证上面所有对槽的写入对 acquire 到这个新 head 的读者可见。
      * 不 CAS、不自旋、不重试——写者执行的指令与读者的存在无关，这是"观测不扰动控制"
      * 的机制保证。读者能施加的唯一影响是这一行缓存的所有权争用，有界且不构成等待。
      */
     atomic_store_explicit(&ring->head, index + UINT64_C(1), memory_order_release);
+
+    /*
+     * 第二道屏障，**方向与上一道相反**：把这次 head 存钉在**下一次**发布的载荷存之前。
+     *
+     * release 只管"先前的写"不越过它，管不住"其后的写"提前——而这里要防的恰恰是后者：
+     * 发布 index+CAP 的载荷存，可以在 head = index+CAP 那次存之前就被读者观察到。于是
+     * 读者会看到下一圈的载荷、却读到还没变的 head，两道判据一齐放行。自测在 aarch64
+     * 上抓到过正是这一形态（撕裂帧的 head 恰好等于 index+CAP，载荷却不是本圈）。
+     *
+     * 少了它，读者的 acquire 屏障只能挡住"读者自己把载荷读重排到复查之后"，挡不住
+     * "写者把 head 存落在了载荷存之后"。两者是不同的缺口，各要各的屏障。
+     *
+     * C11 里对应"先前的访问先于其后的写"的栅栏就是 release 栅栏。代价：aarch64 上一条
+     * dmb ish，x86 上是空（TSO 已经保证 store-store 序，编译器不会为此发指令）。
+     * 仍然与读者无关——这条屏障的耗时不由任何读者的行为决定。
+     */
+    atomic_thread_fence(memory_order_release);
 }
 
 uint64_t emaster_observation_ring_head(const emaster_observation_ring_t *ring)
@@ -177,8 +194,26 @@ emaster_observation_ring_read(const emaster_observation_ring_t *ring,
         *out_frame = *slot;
 
         /*
-         * head 没变，说明这一遍拷贝期间写者没有完成任何一次发布。再叠上 publish_index
-         * 的比对，抓的是"槽装错了帧"这类 head 判不出来的错误（例如序号算术写错）。
+         * 载荷读必须先于下面那次 head 复查**完成**，这一道屏障就是干这个的。
+         *
+         * 少了它，乱序核会把复查的读提前执行：它命中的还是读者 L1 里那个旧的 head，
+         * 于是复查报"没变"，而载荷读落在后面，已经把写者这一遍的写看了进去。结果
+         * 就是一道通过了全部判据的撕裂帧——这是 aarch64 上实测到的（x86-TSO 下没露
+         * 出来，所以自测在本机是绿的、在 Pi 上是红的）。
+         *
+         * 缺口只在"读者请求的正好是可读窗口下界"时兑现：那一格的槽恰是写者的**下一**
+         * 次发布要写的位置（见 oldest_readable 的推导）。读者请求 index = head - CAP + 1
+         * 时，index % CAP == (head + 1) % CAP，写者发布的下一帧正落在这里。
+         *
+         * 代价在读者侧：aarch64 上一条 dmb ishld。写者那条路径一个字都没动，
+         * "写者不需要为此多花一条指令"这个性质仍然成立。
+         */
+        atomic_thread_fence(memory_order_acquire);
+
+        /*
+         * 屏障立起来之后，"head 没变"才真的蕴含"这一遍拷贝期间写者没有完成任何一次
+         * 发布"。再叠上 publish_index 的比对，抓的是"槽装错了帧"这类 head 判不出来的
+         * 错误（例如序号算术写错）。
          */
         recheck = atomic_load_explicit(&ring->head, memory_order_acquire);
         if (recheck == head && out_frame->publish_index == index)
