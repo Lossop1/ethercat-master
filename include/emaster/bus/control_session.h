@@ -626,6 +626,13 @@ typedef struct
     uint64_t wkc_no_frame_consecutive_errors;
     uint64_t wkc_no_frame_max_consecutive_errors;
     uint64_t wkc_no_frame_first_exchange;
+    /*
+     * 滑动窗口内的错误峰值，两类各一个。累计阈值现在是"最近 N 毫秒内错 M 次"，
+     * 这两个字段回答的是"离阈值还有多远"——没有它们，一次长跑只能事后从
+     * wkc_*_count 和运行时长反推错误密度，看不出余量是被慢慢吃掉的。
+     */
+    uint64_t wkc_short_frame_window_max;
+    uint64_t wkc_no_frame_window_max;
     /* 安全门的最后一次判定，供上层明确知道为何禁止输出 */
     uint32_t safety_blocking_reasons;
     bool safety_control_permitted;

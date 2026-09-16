@@ -6,11 +6,13 @@
     "enabled": true,
     "consecutive_error_threshold": 3,
     "total_error_threshold": 20,
-    "description": "严格WKC容错：更快触发停机"
+    "total_error_window_ms": 10000,
+    "description": "严格WKC容错：连续3次，或最近10秒内累计20次就停机。窗口取得短，短时间内的错误密度高就立刻停"
   },
   "no_frame_recovery": {
     "consecutive_error_threshold": 3,
     "total_error_threshold": 20,
+    "total_error_window_ms": 10000,
     "description": "整帧缺失阈值：严格策略下与短帧同档，越早停越好"
   },
   "deadline_recovery": {

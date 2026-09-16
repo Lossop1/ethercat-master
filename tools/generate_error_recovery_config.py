@@ -9,9 +9,24 @@ from pathlib import Path
 from typing import Any
 
 
+# total_error_threshold 的默认统计窗口（毫秒）。策略文件不写时用它。
+# 取 60 秒：比"连续 N 次"慢得多，但远短于一次台架长跑，因此孤立错误会被时间冲掉，
+# 持续性的高错误率仍会在窗口里攒满。
+DEFAULT_TOTAL_ERROR_WINDOW_MS = 60000
+
+
 def c_string(value: str) -> str:
     """使用 JSON 转义规则生成可移植的 C 字符串字面量。"""
     return json.dumps(value, ensure_ascii=True)
+
+
+def window_ms_of(section: dict[str, Any], fallback: int, label: str, path: Path) -> int:
+    """读取并校验统计窗口。窗口是阈值判定的分母，写 0 会让阈值永远够不着。"""
+    value = section.get("total_error_window_ms", fallback)
+    assert isinstance(value, int) and not isinstance(value, bool) and value >= 1, (
+        f"{path}: {label}.total_error_window_ms 必须是 >= 1 的整数，实际为 {value!r}"
+    )
+    return value
 
 
 def load_policy(path: Path) -> dict[str, Any]:
@@ -23,6 +38,14 @@ def load_policy(path: Path) -> dict[str, Any]:
     assert policy.get("schema_version") == 1, f"Unsupported schema_version in {path}"
     assert "policy_id" in policy, f"Missing policy_id in {path}"
 
+    # 窗口是阈值判定的分母：写 0 或负数会让 total_error_threshold 永远够不着，
+    # 等于把累计阈值悄悄关掉。宁可在生成期拒绝，也不要运行期静默失效。
+    wkc = policy.get("wkc_recovery", {})
+    wkc_window = window_ms_of(wkc, DEFAULT_TOTAL_ERROR_WINDOW_MS, "wkc_recovery", path)
+    window_ms_of(
+        policy.get("no_frame_recovery", {}), wkc_window, "no_frame_recovery", path
+    )
+
     return policy
 
 
@@ -33,6 +56,7 @@ def generate_policy_struct(policy: dict[str, Any], ordinal: int) -> str:
     # 想让两类故障分别设阈值时才需要显式写 no_frame_recovery。
     wkc_consecutive = wkc.get("consecutive_error_threshold", 1)
     wkc_total = wkc.get("total_error_threshold", 1)
+    wkc_window_ms = wkc.get("total_error_window_ms", DEFAULT_TOTAL_ERROR_WINDOW_MS)
     no_frame = policy.get("no_frame_recovery", {})
     deadline = policy.get("deadline_recovery", {})
     al_state = policy.get("al_state_recovery", {})
@@ -57,11 +81,13 @@ def generate_policy_struct(policy: dict[str, Any], ordinal: int) -> str:
         .wkc_recovery = {{
             .enabled = {str(wkc.get("enabled", False)).lower()},
             .consecutive_error_threshold = UINT32_C({wkc_consecutive}),
-            .total_error_threshold = UINT32_C({wkc_total})
+            .total_error_threshold = UINT32_C({wkc_total}),
+            .total_error_window_ms = UINT32_C({wkc_window_ms})
         }},
         .no_frame_recovery = {{
             .consecutive_error_threshold = UINT32_C({no_frame.get("consecutive_error_threshold", wkc_consecutive)}),
-            .total_error_threshold = UINT32_C({no_frame.get("total_error_threshold", wkc_total)})
+            .total_error_threshold = UINT32_C({no_frame.get("total_error_threshold", wkc_total)}),
+            .total_error_window_ms = UINT32_C({no_frame.get("total_error_window_ms", wkc_window_ms)})
         }},
         .deadline_recovery = {{
             .enabled = {str(deadline.get("enabled", False)).lower()},

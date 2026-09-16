@@ -6,11 +6,13 @@
     "enabled": true,
     "consecutive_error_threshold": 10,
     "total_error_threshold": 100,
-    "description": "宽容WKC容错：允许更多瞬态错误"
+    "total_error_window_ms": 120000,
+    "description": "宽容WKC容错：连续10次，或最近120秒内累计100次才停机。窗口放长以进一步压掉瞬态错误"
   },
   "no_frame_recovery": {
     "consecutive_error_threshold": 10,
     "total_error_threshold": 100,
+    "total_error_window_ms": 120000,
     "description": "整帧缺失阈值：宽容策略下与短帧同档"
   },
   "deadline_recovery": {

@@ -1000,6 +1000,12 @@ bool emaster_run_report_write(FILE *stream,
         ",\"wkc_no_frame_consecutive_errors\":%" PRIu64
         ",\"wkc_no_frame_max_consecutive_errors\":%" PRIu64
         ",\"wkc_no_frame_first_exchange\":%" PRIu64
+        /*
+         * 累计阈值的滑动窗口内峰值。阈值判据是"最近 N 毫秒内错 M 次"，这两个字段
+         * 回答"离阈值还有多远"——只有总量和时长的话，看不出余量是在被慢慢吃掉。
+         */
+        ",\"wkc_short_frame_window_max\":%" PRIu64
+        ",\"wkc_no_frame_window_max\":%" PRIu64
         ",\"fault_latched\":%s,"
         "\"safety_control_permitted\":%s,\"safety_blocking_reasons\":%" PRIu32
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
@@ -1020,6 +1026,8 @@ bool emaster_run_report_write(FILE *stream,
         report->wkc_no_frame_consecutive_errors,
         report->wkc_no_frame_max_consecutive_errors,
         report->wkc_no_frame_first_exchange,
+        report->wkc_short_frame_window_max,
+        report->wkc_no_frame_window_max,
         report->fault_latched ? "true" : "false",
         report->safety_control_permitted ? "true" : "false",
         report->safety_blocking_reasons,
@@ -1151,9 +1159,10 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(fputs(",\"cycle_trace\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_trace(stream, &report->cycle_trace));
     REQUIRE_WRITE(fprintf(stream,
-        ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64 "},"
+        ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64 ",\"cyclic_capacity\":%zu},"
         "\"diagnostic_preop_reached\":%s,",
         report->audit.omitted_pdo_samples,
+        report->audit.sealed_capacity,
         report->diagnostic_preop_reached ? "true" : "false") >= 0);
     REQUIRE_WRITE(fprintf(
         stream,

@@ -6,12 +6,14 @@
     "enabled": true,
     "consecutive_error_threshold": 5,
     "total_error_threshold": 50,
-    "description": "WKC不匹配容错：连续N次或累计M次错误才停机"
+    "total_error_window_ms": 60000,
+    "description": "WKC不匹配容错：连续5次，或最近60秒内累计50次才停机。total 是滑动窗口不是整轮会话累计——按累计记账时，一次发生在第11秒的孤立错误会一直挂在账上，把一次本来健康的25分钟长跑判死（2026-09-16台架现场，status_code=16）"
   },
   "no_frame_recovery": {
     "consecutive_error_threshold": 5,
     "total_error_threshold": 50,
-    "description": "整帧缺失（actual_wkc<=0，一个回帧都没有）单独计数与阈值。成因与短帧不同（链路/调度侧没有回帧 vs 从站不在OP少计），当前取值与 wkc_recovery 相同，仅把两者分开可调；是否启用沿用 wkc_recovery.enabled"
+    "total_error_window_ms": 60000,
+    "description": "整帧缺失（actual_wkc<=0，一个回帧都没有）单独计数与阈值。成因与短帧不同（链路/调度侧没有回帧 vs 从站不在OP少计），当前取值与 wkc_recovery 相同，仅把两者分开可调；是否启用沿用 wkc_recovery.enabled。窗口语义同上"
   },
   "deadline_recovery": {
     "enabled": true,

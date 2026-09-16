@@ -6,6 +6,7 @@
 #include "emaster/bus/command_server.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/config/error_recovery_config.h"
+#include "emaster/cyclic/window.h"
 #include "emaster/multiaxis/coordinator.h"
 #include "emaster/motion/velocity_profile.h"
 #include "emaster/observation/ring.h"
@@ -75,15 +76,20 @@ typedef struct {
     bool position_target_committed;
     /* 错误恢复策略配置：从部署配置加载，与业务逻辑解耦 */
     const emaster_error_recovery_policy_t *error_recovery_policy;
-    /* WKC 错误恢复计数器 */
+    /* WKC 错误恢复计数器。连续段用联合计数，累计量改由下面两个滑动窗口承担。 */
     uint64_t wkc_consecutive_errors;
-    uint64_t wkc_total_errors;
     /*
      * 整帧缺失（actual_wkc <= 0）单独一套计数：它与"帧回来了但短"成因不同
      * （链路/调度 vs 从站不在 OP），阈值也各自配置，混用会让两类故障互相掩盖。
      */
     uint64_t no_frame_consecutive_errors;
-    uint64_t no_frame_total_errors;
+    /*
+     * 累计阈值的滑动窗口计数，短帧与整帧缺失各一个。放在这里而不是本地静态变量：
+     * 阈值判定分布在每次交换里，窗口必须跨周期存在，且必须随会话重建而清零。
+     * 只有真出现错误时才被写入，因此健康周期上这两个结构一分钱不花。
+     */
+    emaster_cyclic_window_t wkc_window;
+    emaster_cyclic_window_t no_frame_window;
     /*
      * 帧距仪表：上一次发帧结束时刻，以及它与本次之间的间隔。
      * 间隔在发帧后立刻算出，现场入环时直接取用，避免跨周期取值的错位。

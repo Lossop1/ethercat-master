@@ -300,6 +300,21 @@ emaster_control_session_status_t emaster_soem_control_session(
         session->error_recovery_policy = emaster_error_recovery_policy_by_id(policy_id);
         /* 策略未找到时使用 NULL，exchange 逻辑将采用保守默认行为（首次错误即停机） */
     }
+    /*
+     * 累计阈值的滑动窗口按策略配置的窗口长度建，两类故障各一个。放在这里而不是
+     * 第一次出错时惰性初始化：那次初始化要读策略、要判长度变化，而它恰好发生在
+     * 已经出错、最不该多做事的时刻。
+     */
+    {
+        const emaster_error_recovery_policy_t *policy = session->error_recovery_policy;
+        uint64_t wkc_window_ms = policy != NULL ? policy->wkc_recovery.total_error_window_ms : 0U;
+        uint64_t no_frame_window_ms =
+            policy != NULL ? policy->no_frame_recovery.total_error_window_ms : 0U;
+
+        emaster_cyclic_window_init(&session->wkc_window, wkc_window_ms * UINT64_C(1000000));
+        emaster_cyclic_window_init(&session->no_frame_window,
+                                   no_frame_window_ms * UINT64_C(1000000));
+    }
 
     /* 创建实时命令服务器：允许运行期间接收外部命令 */
     {
@@ -327,6 +342,15 @@ emaster_control_session_status_t emaster_soem_control_session(
     (void)snprintf(report->interface_name, sizeof(report->interface_name), "%s",
                    plan->deployment->ethercat_interface);
     emaster_run_audit_init(&report->audit);
+    /*
+     * 这里只登记上限，真正的封存在 prepare_audit 里做——它按运动时长算出容量，
+     * 我们把这个容量压低到上限之内。见 run_audit.c 里那段"为什么需要一条上限"。
+     */
+    if (emaster_run_audit_apply_capacity_limit(&report->audit)) {
+        fprintf(stdout, "审计记录上限：%zu 条（EMASTER_AUDIT_MAX_ACCESSES，实际容量在会话开始时定）\n",
+                report->audit.capacity_limit);
+        (void)fflush(stdout);
+    }
     report->state = EMASTER_CONTROL_STATE_INITIALIZING;
     if (session->state_changed != NULL) {
         session->state_changed(report->state, EMASTER_CONTROL_SESSION_OK,
@@ -350,6 +374,12 @@ emaster_control_session_status_t emaster_soem_control_session(
                                        status);
     }
     report->cycle_deadline_missed |= session->clock.deadline_missed;
+    /*
+     * 周期结束、停机诊断之前解封。顺序是硬约束：停机诊断走 record_access，那条路
+     * 没有封存守卫，容量已满时会置 allocation_failed，而它被当作 AUDIT_FAILED 上报
+     * 并让整轮会话转 FAULTED——刚刚跑完的一小时会被记成一次故障。
+     */
+    emaster_run_audit_end_cyclic(&report->audit);
     emaster_soem_session_shutdown(session);
     if (report->safe_state_reached && report->status == EMASTER_CONTROL_SESSION_OK) {
         emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_STOPPED,

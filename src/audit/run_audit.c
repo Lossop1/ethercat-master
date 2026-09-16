@@ -1,5 +1,7 @@
 #include "emaster/audit/run_audit.h"
 
+#include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -76,6 +78,7 @@ void emaster_run_audit_seal_capacity(emaster_run_audit_t *audit)
     if (audit != NULL)
     {
         audit->capacity_sealed = true;
+        audit->sealed_capacity = audit->access_capacity;
     }
 }
 
@@ -85,6 +88,68 @@ void emaster_run_audit_init(emaster_run_audit_t *audit)
     {
         memset(audit, 0, sizeof(*audit));
     }
+}
+
+/*
+ * 为什么需要一条上限：周期 PDO 记录按"轴 × 变化的字段"逐拍追加，运动时位置与目标
+ * 每拍都在变，上面对 record_pdo 的合并条件就再也命中不了，记录数于是随时长线性增长。
+ * 1 kHz 四轴实测约 4 MB/s：60 秒 243 MB，8 小时上百 GB——长时运行会先把内存吃光，
+ * 再让报告写不出来。
+ *
+ * 而报告里真正用来判"这一轮行不行"的汇聚指标（帧距、截止时间、WKC、发布耗时）都不
+ * 依赖这条逐拍轨迹。所以长时运行应当给它一个上限，满了只计数（omitted_pdo_samples，
+ * 报告与控制台都会标出来），而不是让整轮实验做不成。
+ *
+ * 默认不设：环境变量缺席时返回 false，容量仍按需倍增——与加这个开关之前逐字一致。
+ */
+bool emaster_run_audit_apply_capacity_limit(emaster_run_audit_t *audit)
+{
+    const char *text;
+    char *end = NULL;
+    unsigned long long limit;
+
+    if (audit == NULL)
+    {
+        return false;
+    }
+    text = getenv("EMASTER_AUDIT_MAX_ACCESSES");
+    if (text == NULL || text[0] == '\0')
+    {
+        return false;
+    }
+    errno = 0;
+    limit = strtoull(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || limit == 0ULL)
+    {
+        fprintf(stderr, "EMASTER_AUDIT_MAX_ACCESSES 不是正整数（%s），本次不设上限\n", text);
+        fflush(stderr);
+        return false;
+    }
+    if (limit > (unsigned long long)SIZE_MAX)
+    {
+        limit = (unsigned long long)SIZE_MAX;
+    }
+    audit->capacity_limit = (size_t)limit;
+    return true;
+}
+
+size_t emaster_run_audit_clamp_capacity(const emaster_run_audit_t *audit, size_t capacity)
+{
+    if (audit == NULL)
+    {
+        return capacity;
+    }
+    if (audit->capacity_limit != 0U && capacity > audit->capacity_limit)
+    {
+        capacity = audit->capacity_limit;
+    }
+    /* 下限是已记录条数：低于它，下一次 append_access 会立刻判定容量已满并置
+     * allocation_failed，等于把上限开关变成一次自伤。 */
+    if (capacity < audit->access_count)
+    {
+        capacity = audit->access_count;
+    }
+    return capacity;
 }
 
 void emaster_run_audit_end_cyclic(emaster_run_audit_t *audit)

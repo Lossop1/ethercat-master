@@ -69,8 +69,15 @@ typedef struct
     uint64_t next_order;
     bool capacity_sealed;
     bool allocation_failed;
+    /*
+     * 封存那一刻的容量，只增不减。cycle 阶段的容量上限看它，不看 access_capacity——
+     * 停机诊断会解封并可能把数组再翻一倍，那时的 access_capacity 已不是周期阶段的上限。
+     */
+    size_t sealed_capacity;
     /* 周期记录容量耗尽后只计数，不分配内存，也不阻断控制；报告显式标注截断。 */
     uint64_t omitted_pdo_samples;
+    /* 0 表示不设上限。由 apply_capacity_limit 写入，由 clamp_capacity 在封存前生效。 */
+    size_t capacity_limit;
 } emaster_run_audit_t;
 
 /* 初始化和析构只管理审计记录，不访问总线或文件系统。 */
@@ -80,7 +87,24 @@ void emaster_run_audit_destroy(emaster_run_audit_t *audit);
 /* 周期开始前预留容量并封存；封存后记录模块绝不在周期线程中重新分配内存。 */
 bool emaster_run_audit_reserve(emaster_run_audit_t *audit, size_t capacity);
 void emaster_run_audit_seal_capacity(emaster_run_audit_t *audit);
-/* 仅在周期已停止后调用，允许后续 SDO 诊断继续保存完整记录。 */
+/*
+ * 读 EMASTER_AUDIT_MAX_ACCESSES 并记下上限。**只记数，不预留、不封存**——封存是
+ * emaster_session_observer_prepare_audit 的职责，它按运动时长算出容量后一次性 reserve
+ * 再 seal。在它之前自行 seal 会让它的 reserve 撞上 capacity_sealed 而返回 false，
+ * 那条 false 被 session_start 当作 AUDIT_FAILED，整轮会话在 OP 之前就转 FAULTED。
+ * 返回是否真的设了上限；没设时后续行为与没有这个开关逐字一致。
+ */
+bool emaster_run_audit_apply_capacity_limit(emaster_run_audit_t *audit);
+/*
+ * 把算出来的容量压低到上限之内。上限为 0、或算出来的容量本就更小时原样返回。
+ * 结果不会低于已记录条数：低于它会让 append_access 立刻判定容量已满。
+ */
+size_t emaster_run_audit_clamp_capacity(const emaster_run_audit_t *audit, size_t capacity);
+/*
+ * 仅在周期已停止后调用，允许后续 SDO 诊断继续保存完整记录。
+ * 封存状态下不能走到停机诊断——那条路用的 record_access 没有封存守卫，会置
+ * allocation_failed，而它被当作 AUDIT_FAILED 上报并让会话转 FAULTED。
+ */
 void emaster_run_audit_end_cyclic(emaster_run_audit_t *audit);
 
 /* 记录一次真实邮箱或 ESC 寄存器访问；raw 必须是总线上实际使用的字节序。 */

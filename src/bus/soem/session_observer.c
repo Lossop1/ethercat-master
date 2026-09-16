@@ -308,6 +308,8 @@ bool emaster_session_observer_prepare_audit(
     }
     capacity += plan->axis_count * EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS +
                 audit->access_count;
+    /* 上限只压低这里算出来的容量，不改变"谁封存"——封存仍然只发生在下面这一处。 */
+    capacity = emaster_run_audit_clamp_capacity(audit, capacity);
     if (!emaster_run_audit_reserve(audit, capacity))
     {
         return false;

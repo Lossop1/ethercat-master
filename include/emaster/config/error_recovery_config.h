@@ -15,6 +15,15 @@ typedef struct
     bool enabled;
     uint32_t consecutive_error_threshold;
     uint32_t total_error_threshold;
+    /*
+     * total_error_threshold 的统计窗口：判据是"最近这么多毫秒内错了 N 次"，
+     * 不是"整轮会话累计错了 N 次"。
+     *
+     * 累计语义会让长跑必然自杀：一次发生在第 11 秒的孤立错误会一直挂在账上，
+     * 等到第 50 次把一次本来健康的 25 分钟会话判死（2026-09-16 台架现场）。
+     * 窗口取值必须 >= 1；想要"越跑越容易触发"的旧行为，把它设得比会话时长更大即可。
+     */
+    uint32_t total_error_window_ms;
 } emaster_wkc_recovery_config_t;
 
 /*
@@ -27,6 +36,8 @@ typedef struct
 {
     uint32_t consecutive_error_threshold;
     uint32_t total_error_threshold;
+    /* 同 wkc_recovery.total_error_window_ms。 */
+    uint32_t total_error_window_ms;
 } emaster_no_frame_recovery_config_t;
 
 typedef struct

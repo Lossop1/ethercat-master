@@ -223,6 +223,13 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     emaster_cyclic_timing_observation_t timing;
     bool tail_timing_valid;
     bool error_counter_read_failed = false;
+    /*
+     * 本拍 WKC 不符时按策略算出的判定，只在 !matched 时有意义。
+     * 判定在初段（不符分类、现场抓取）算一次，尾部门禁复用同一个结果：两处各判一次
+     * 不仅会把同一个错误记进滑动窗口两遍，还会让两处的语义各自漂移——尾部那一份
+     * 此前用的是两类混合的会话累计量，既没有整帧缺失的分类，也没有窗口。
+     */
+    bool wkc_threshold_exceeded = false;
 
     if (!emaster_cycle_clock_wait(&session->clock)) {
         session->report->cycle_deadline_missed |= session->clock.deadline_missed;
@@ -471,7 +478,6 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                 session->report->wkc_no_frame_first_exchange = session->exchange;
             }
             ++session->no_frame_consecutive_errors;
-            ++session->no_frame_total_errors;
             ++session->report->wkc_no_frame_count;
             session->report->wkc_no_frame_consecutive_errors =
                 session->no_frame_consecutive_errors;
@@ -482,7 +488,6 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
             }
         }
         ++session->wkc_consecutive_errors;
-        ++session->wkc_total_errors;
         ++session->report->wkc_error_count;
         session->report->wkc_consecutive_errors = session->wkc_consecutive_errors;
         if (session->wkc_consecutive_errors > session->report->wkc_max_consecutive_errors) {
@@ -493,36 +498,52 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
          * 检查是否超过配置的容错阈值。
          * 连续段用联合计数：一个回帧都没有的周期同样是"连续故障"的一部分，把它从
          * 连续段里剔出去会人为切断连续段、把一次长时间故障记账成多条短故障。
-         * 累计量按类取：整帧缺失用 no_frame 专用累计，短帧用"联合累计 - 整帧缺失累计"，
-         * 这样两类各自的累计阈值都只被自己那类故障推动。两类阈值默认与 wkc_recovery
-         * 同值，因此默认配置下的行为与拆分前一致。
+         * 累计量按类走各自的滑动窗口：整帧缺失用 no_frame 窗口，短帧用 wkc 窗口，
+         * 两类阈值只被自己那类故障推动。
+         *
+         * 窗口而不是会话累计：累计语义让长跑必然自杀——一次发生在第 11 秒的孤立
+         * 错误会一直挂在账上，等到第 50 次把一次本来健康的会话判死，而其间零连续
+         * 错误、零截止时间超时、跟随误差正常（2026-09-16 台架现场）。健康与否要看
+         * 眼下的错误密度，不是历史总量。
          */
-        bool should_fail = false;
         if (session->error_recovery_policy != NULL &&
             session->error_recovery_policy->wkc_recovery.enabled) {
             const emaster_error_recovery_policy_t *policy = session->error_recovery_policy;
             uint32_t consecutive_threshold;
             uint32_t total_threshold;
-            uint64_t class_total;
+            uint64_t window_count;
+            uint64_t now_ns = 0U;
+
+            /*
+             * receive_end 是上面同一次时钟调用的结果，转换不会再失败；真失败了就用 0，
+             * 窗口不推进——事件仍落在当前桶里，判定偏保守而不是偏松。
+             */
+            (void)monotonic_ns(&receive_end, &now_ns);
             if (is_no_frame) {
                 consecutive_threshold = policy->no_frame_recovery.consecutive_error_threshold;
                 total_threshold = policy->no_frame_recovery.total_error_threshold;
-                class_total = session->no_frame_total_errors;
+                window_count = emaster_cyclic_window_record(&session->no_frame_window, now_ns);
+                if (window_count > session->report->wkc_no_frame_window_max) {
+                    session->report->wkc_no_frame_window_max = window_count;
+                }
             } else {
                 consecutive_threshold = policy->wkc_recovery.consecutive_error_threshold;
                 total_threshold = policy->wkc_recovery.total_error_threshold;
-                class_total = session->wkc_total_errors - session->no_frame_total_errors;
+                window_count = emaster_cyclic_window_record(&session->wkc_window, now_ns);
+                if (window_count > session->report->wkc_short_frame_window_max) {
+                    session->report->wkc_short_frame_window_max = window_count;
+                }
             }
             if (session->wkc_consecutive_errors >= consecutive_threshold ||
-                class_total >= total_threshold) {
-                should_fail = true;
+                window_count >= total_threshold) {
+                wkc_threshold_exceeded = true;
             }
         } else {
             /* 未配置策略或WKC恢复未启用，首次错误即停机（保守默认行为） */
-            should_fail = true;
+            wkc_threshold_exceeded = true;
         }
 
-        if (should_fail) {
+        if (wkc_threshold_exceeded) {
             (void)fail_exchange(session, phase, EMASTER_CONTROL_SESSION_WKC_MISMATCH, true);
         }
     } else {
@@ -687,13 +708,14 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     /*
      * WKC 容错策略：单次或少量WKC错误可以容忍，只有持续或频繁错误才停机。
      * 这样可以避免瞬态干扰导致的误停机，同时保持对严重通信故障的响应。
+     *
+     * 判据复用初段算出的结果而不是在这里重算：滑动窗口的记账只能做一次，重算既会
+     * 把同一个错误数两遍，也会让这里的语义和初段各自漂移（此前这里用的是两类混合的
+     * 会话累计量，整帧缺失没有被单独看待）。副作用是"未配置策略"现在与初段一致地
+     * 首次错误即停机——此前这里会容忍，与同文件初段的注释相互矛盾。
      */
     if (!matched) {
-        if (session->error_recovery_policy != NULL &&
-            (session->wkc_consecutive_errors >=
-             session->error_recovery_policy->wkc_recovery.consecutive_error_threshold ||
-             session->wkc_total_errors >=
-             session->error_recovery_policy->wkc_recovery.total_error_threshold)) {
+        if (wkc_threshold_exceeded) {
             emaster_soem_session_latch_failure(session,
                                                 EMASTER_CONTROL_SESSION_WKC_MISMATCH);
             return EMASTER_CONTROL_SESSION_WKC_MISMATCH;
