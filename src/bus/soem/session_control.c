@@ -120,7 +120,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
     mode_confirmation_deadline_cycle =
         session->report->cycle_count + session->transition_cycles;
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        const ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)];
         int8_t mode_display;
         uint16_t status_word;
         int32_t actual_position;
@@ -162,7 +163,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 return emaster_soem_session_publish_feedback(session, status);
             }
             for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-                const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+                const ec_slavet *slave = &session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis_index)];
                 int8_t mode_display;
                 uint16_t status_word;
                 int32_t actual_position;
@@ -594,8 +596,10 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         session->controller_outputs[axis_index].control_word,
                         emaster_soem_axis_target_value(&session->plan->axes[axis_index],
                                                        axis_result),
-                        session->context.slavelist[axis_index + 1U].outputs,
-                        session->context.slavelist[axis_index + 1U].Obytes)) {
+                        session->context.slavelist[
+                            emaster_soem_session_axis_slave(session, axis_index)].outputs,
+                        session->context.slavelist[
+                            emaster_soem_session_axis_slave(session, axis_index)].Obytes)) {
                     status = EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
                     return status;
                 }

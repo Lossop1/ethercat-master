@@ -169,7 +169,8 @@ static void record_first_mismatch_scene(emaster_soem_session_t *session)
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
     {
         emaster_control_session_axis_result_t *result = &session->axes[axis];
-        const ec_slavet *slave = &session->context.slavelist[axis + 1U];
+        const ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis)];
 
         result->first_mismatch_al_read = true;
         result->first_mismatch_al_state = slave->state;
@@ -377,7 +378,8 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
             }
             for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
             {
-                uint16_t configadr = session->context.slavelist[axis + 1U].configadr;
+                uint16_t configadr =
+                    session->context.slavelist[emaster_soem_session_axis_slave(session, axis)].configadr;
                 uint8_t error_block[16];
                 int wkc = ecx_FPRD(&session->context.port, configadr, 0x0300U, sizeof(error_block),
                                    error_block, frame_timeout_us);
@@ -550,7 +552,8 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         if (!emaster_cyclic_timing_stats_record(
                 &session->axes[axis].timing, &timing, session->plan->cycle_ns,
                 operation->process_data_phase_ns, operation->sync0_shift_ns,
-                session->context.slavelist[axis + 1U].pdelay))
+                session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis)].pdelay))
         {
             return fail_exchange(session, phase, EMASTER_CONTROL_SESSION_AUDIT_FAILED, true);
         }

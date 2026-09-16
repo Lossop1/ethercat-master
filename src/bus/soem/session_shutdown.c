@@ -78,7 +78,8 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
     ecx_readstate(&session->context);
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
-        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        const ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)];
 
         printf("[SHUTDOWN] %s 轴%zu: AL state=%u, status_code=0x%04X\n", label,
                axis_index + 1U, (unsigned int)slave->state,
@@ -300,7 +301,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
         attempt = attempt_begin(session, trace);
 
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-            ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+            ec_slavet *slave = &session->context.slavelist[
+                emaster_soem_session_axis_slave(session, axis_index)];
 
             /* 失败时 controller_outputs 保持上周期值，此时直接返回不发帧。
              * 这一拍连帧都没发，过程数据没有出现新的缺口，只记断在哪一轴哪一步。 */
@@ -393,9 +395,11 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             }
             for (axis_index = 0U; axis_index < trace->mismatch_al_axis_count; ++axis_index) {
                 trace->mismatch_al_state[axis_index] =
-                    session->context.slavelist[axis_index + 1U].state;
+                    session->context.slavelist[
+                        emaster_soem_session_axis_slave(session, axis_index)].state;
                 trace->mismatch_al_status_code[axis_index] =
-                    session->context.slavelist[axis_index + 1U].ALstatuscode;
+                    session->context.slavelist[
+                        emaster_soem_session_axis_slave(session, axis_index)].ALstatuscode;
             }
         }
         /* 记账之后才判失败：本帧的去向、以及出错当拍的现场都已经记进报告。 */
@@ -404,7 +408,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             return false;
         }
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-            const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+            const ec_slavet *slave = &session->context.slavelist[
+                emaster_soem_session_axis_slave(session, axis_index)];
             emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
             emaster_cia402_state_t state;
             int32_t actual_position = 0;
@@ -838,9 +843,11 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         ecx_readstate(&session->context);
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             session->axes[axis_index].shutdown_al_state =
-                session->context.slavelist[axis_index + 1U].state;
+                session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis_index)].state;
             session->axes[axis_index].shutdown_al_status_code =
-                session->context.slavelist[axis_index + 1U].ALstatuscode;
+                session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis_index)].ALstatuscode;
         }
         session->context.slavelist[0].state = EC_STATE_PRE_OP;
         session->report->diagnostic_preop_reached =

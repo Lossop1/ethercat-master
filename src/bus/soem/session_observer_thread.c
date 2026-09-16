@@ -302,7 +302,7 @@ static void *observer_thread_func(void *arg)
             int wkc_motor_temp = 0;
             int wkc_motor_speed = 0;
             int wkc_speed_command = 0;
-            uint16_t slave_position = (uint16_t)(axis + 1U);
+            uint16_t slave_position = emaster_soem_session_axis_slave(session, axis);
 
             /* 读取 6078h: 电流实际值 */
             int size_current = (int)sizeof(current_6078h);

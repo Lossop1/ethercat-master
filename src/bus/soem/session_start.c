@@ -30,7 +30,8 @@ static emaster_control_session_status_t prepare_op_position(
 
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
-        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        const ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)];
         emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
         int8_t mode_display;
         uint16_t status_word;
@@ -117,7 +118,8 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
 
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
         const emaster_session_axis_plan_t *axis = &session->plan->axes[axis_index];
-        ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)];
 
         session->axes[axis_index].output_initialized = emaster_cia_process_image_prepare_output(
             axis, &session->images[axis_index], slave->outputs, slave->Obytes);
@@ -148,7 +150,8 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         return status;
     }
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        const ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)];
         int8_t mode_display;
         uint16_t status_word;
         int32_t actual_position;
@@ -198,8 +201,10 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         if (!emaster_cia_process_image_update_output(
                 &session->plan->axes[axis_index], &session->images[axis_index], UINT16_C(0),
                 session->axes[axis_index].target_position,
-                session->context.slavelist[axis_index + 1U].outputs,
-                session->context.slavelist[axis_index + 1U].Obytes)) {
+                session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis_index)].outputs,
+                session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis_index)].Obytes)) {
             status = EMASTER_CONTROL_SESSION_PROCESS_MAP_FAILED;
             return status;
         }

@@ -105,6 +105,24 @@ typedef struct {
     pthread_mutex_t observer_mutex;
 } emaster_soem_session_t;
 
+/*
+ * 第 axis_index 个配置轴对应总线上哪个从站（SOEM slavelist 下标，1 基）。
+ *
+ * 别再写 axis_index + 1U。那只在"接线顺序与配置顺序一致"时才碰巧正确，而
+ * emaster_soem_session_map_topology 是按身份（vendor/product/revision）在发现表里
+ * 找匹配的，本来就允许从站跳跃或与配置顺序不同。映射结果存在 axes[].position，
+ * 它是这个问题的唯一真相。位置在会话配置期写一次，此后只读，观测线程读它安全。
+ *
+ * 前提：仅在 emaster_soem_session_configure 走完映射之后调用；映射失败会让会话在
+ * 配置期就终止，所以此后 position 必为非零的真实总线位置（0 是广播/邮箱从站）。
+ */
+static inline uint16_t emaster_soem_session_axis_slave(
+    const emaster_soem_session_t *session,
+    size_t axis_index)
+{
+    return session->axes[axis_index].position;
+}
+
 /* 原子更新会话状态并通知应用层；通知回调不得阻塞周期线程 */
 void emaster_soem_session_set_state(
     emaster_soem_session_t *session,

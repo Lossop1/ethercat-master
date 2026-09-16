@@ -283,7 +283,8 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
     }
     session->report->io_map_size = (size_t)io_map_size;
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-        const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+        const ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)];
         const emaster_session_axis_plan_t *axis = &session->plan->axes[axis_index];
 
         session->axes[axis_index].process_map_match =
@@ -336,7 +337,8 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         session->report->dc_configured = true;
         session->report->dc_reference_slave = session->context.grouplist[0].DCnext;
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-            const ec_slavet *slave = &session->context.slavelist[axis_index + 1U];
+            const ec_slavet *slave = &session->context.slavelist[
+                emaster_soem_session_axis_slave(session, axis_index)];
 
             if (session->plan->axes[axis_index].operation_profile->sync_strategy !=
                 EMASTER_SYNC_STRATEGY_DC) {
