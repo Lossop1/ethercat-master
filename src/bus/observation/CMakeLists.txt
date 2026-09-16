@@ -6,8 +6,13 @@ add_library(emaster_observation STATIC
     frame.c
     ring.c
     slow.c
-    wire.c)
+    wire.c
+    server.c)
 add_library(emaster::observation ALIAS emaster_observation)
+
+# server.c 用 pthread 起监听线程。仍然不依赖 SOEM。
+find_package(Threads REQUIRED)
+target_link_libraries(emaster_observation PUBLIC Threads::Threads)
 
 target_compile_features(emaster_observation PUBLIC c_std_11)
 target_include_directories(

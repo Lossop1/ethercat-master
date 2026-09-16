@@ -51,6 +51,34 @@ static inline bool emaster_command_socket_path(const char *deployment_id,
 }
 
 /*
+ * 由部署 ID 构造**观测**套接字路径（命令套接字的姊妹通道）。
+ *
+ * 两个套接字必须由同一个部署 ID 推导、且格式串各自只写一份：命令通道可写、
+ * 影响控制；观测通道只读、纯旁路。把它们拼在同一个路径上会让"连错主站"从
+ * 一个可诊断的错误变成一次静默的误控制。因此命令用 /tmp/emaster-<id>.sock，
+ * 观测用 /tmp/emaster-<id>-obs.sock，后者不可能与前者碰撞（部署 ID 不含
+ * "-obs" 后缀是配置校验保证的约定）。
+ */
+static inline bool emaster_observation_socket_path(const char *deployment_id,
+                                                   char *buffer,
+                                                   size_t capacity)
+{
+    int written;
+
+    if (buffer == NULL || capacity == 0U)
+    {
+        return false;
+    }
+    buffer[0] = '\0';
+    if (deployment_id == NULL || deployment_id[0] == '\0')
+    {
+        return false;
+    }
+    written = snprintf(buffer, capacity, "/tmp/emaster-%s-obs.sock", deployment_id);
+    return written > 0 && (size_t)written < capacity;
+}
+
+/*
  * CLI 共用选项解析：把 --socket <路径> / --deployment <ID> 从 argv 里摘掉，
  * 其余参数原地左移，使调用方原有的位置参数解析完全不用改（返回新的 argc）。
  *

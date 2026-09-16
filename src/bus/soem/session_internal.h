@@ -9,6 +9,7 @@
 #include "emaster/multiaxis/coordinator.h"
 #include "emaster/motion/velocity_profile.h"
 #include "emaster/observation/ring.h"
+#include "emaster/observation/server.h"
 #include "emaster/safety/gate.h"
 #include "session_observer.h"
 
@@ -113,6 +114,11 @@ typedef struct {
      * 的增长。堆上一次分配，生命周期与会话相同。
      */
     emaster_observation_ring_t *observation_ring;
+    /*
+     * 只读套接字服务器。它的监听线程在周期线程之外读 observation_ring，
+     * 因此**必须先销毁它再释放缓冲**，见 observation_close。
+     */
+    emaster_observation_server_t *observation_server;
     /* 上一帧的周期号，用于判定本拍相对上一帧是不是跳了拍（CYCLE_GAP）。 */
     uint64_t observation_last_cycle;
     bool observation_last_cycle_valid;

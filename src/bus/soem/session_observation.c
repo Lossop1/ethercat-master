@@ -2,6 +2,9 @@
 
 #include "session_internal.h"
 
+#include "emaster/bus/command_socket_path.h"
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -178,6 +181,49 @@ bool emaster_soem_session_observation_open(emaster_soem_session_t *session)
     session->report->observation.ring_capacity = (uint32_t)EMASTER_OBSERVATION_RING_CAPACITY;
     session->report->observation.publish_budget_ns =
         (uint64_t)session->plan->cycle_ns / EMASTER_OBSERVATION_PUBLISH_BUDGET_DIVISOR;
+
+    /*
+     * 运输层。路径只从 emaster_observation_socket_path() 来——会话是唯一的建立点，
+     * 这里再拼一次路径就会重演命令通道那两个服务器互相 unlink 的旧错。
+     *
+     * 建不起来不影响控制：观测缓冲照常发布，只是没有客户端能读到。
+     */
+    {
+        char socket_path[EMASTER_SOCKET_PATH_CAPACITY];
+        emaster_observation_info_t info;
+        uint16_t axis_count = (uint16_t)session->plan->axis_count;
+
+        /* 帧的轴数上限与环形缓冲一致；超出的轴在线上就不存在，这里不假装有。 */
+        if (axis_count > (uint16_t)EMASTER_OBSERVATION_MAX_AXES)
+        {
+            axis_count = (uint16_t)EMASTER_OBSERVATION_MAX_AXES;
+        }
+        if (axis_count > 0U &&
+            emaster_observation_socket_path(session->plan->deployment->deployment_id,
+                                            socket_path, sizeof(socket_path)))
+        {
+            memset(&info, 0, sizeof(info));
+            (void)snprintf(info.deployment_id, sizeof(info.deployment_id), "%s",
+                           session->plan->deployment->deployment_id);
+            (void)snprintf(info.interface_name, sizeof(info.interface_name), "%s",
+                           session->plan->deployment->ethercat_interface);
+            info.axis_count = axis_count;
+            /*
+             * 每周期一枚观测帧（cycle 每拍 +1），所以增量语义是 1。将来若引入抽帧
+             * 部署，这里就是那个常量的来源；在那之前不虚构一个可配项。
+             */
+            info.stride = 1U;
+            info.ring_capacity = (uint32_t)EMASTER_OBSERVATION_RING_CAPACITY;
+            session->observation_server = emaster_observation_server_create(
+                socket_path, session->observation_ring, &info);
+            if (session->observation_server != NULL)
+            {
+                fprintf(stdout, "观测通道已启动：%s（只读，%u 轴，%u 槽）\n", socket_path,
+                        (unsigned)axis_count, (unsigned)EMASTER_OBSERVATION_RING_CAPACITY);
+                (void)fflush(stdout);
+            }
+        }
+    }
     return true;
 }
 
@@ -187,6 +233,14 @@ void emaster_soem_session_observation_close(emaster_soem_session_t *session)
     {
         return;
     }
+    /*
+     * 顺序是硬约束：服务器的监听线程一直读着环形缓冲，必须先把它停掉、join 掉，
+     * 才能释放缓冲。反过来的话，客户端在停机前后一次 DUMP 就会读到已释放的内存。
+     * 而**不**把这一步放进停机序言：那条线程是纯只读的，join 一个线程会让序言多等
+     * 一个 poll 周期——正是前面花大力气消掉的那类缺口。
+     */
+    emaster_observation_server_destroy(session->observation_server);
+    session->observation_server = NULL;
     free(session->observation_ring);
     session->observation_ring = NULL;
     session->observation_last_cycle_valid = false;

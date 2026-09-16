@@ -29,6 +29,30 @@
 #define WIRE_OFF_DEADLINE_NS   40U
 #define WIRE_OFF_INTERVAL_NS   48U
 
+/*
+ * DUMP 事务头字段偏移。载荷之前固定 24 字节：
+ *
+ *   0   2  魔数 'E','O'
+ *   2   1  版本
+ *   3   1  类型（= KIND_DUMP）
+ *   4   2  header_bytes（本头长度，客户端按它跳到帧区）
+ *   6   2  axis_count
+ *   8   8  first_index（本段第一帧的 publish_index）
+ *  16   4  frame_count
+ *  20   4  frame_bytes（每条 FRAME 的长度，含 56 字节帧头）
+ *
+ * header_bytes 是留给后向兼容的：将来若要加字段，新字段追加在 24 字节之后，
+ * 旧客户端按本字段跳过它们，而不是把附加字段当头一条帧的开头。
+ */
+#define DUMP_OFF_MAGIC       0U
+#define DUMP_OFF_VERSION     2U
+#define DUMP_OFF_KIND        3U
+#define DUMP_OFF_HEADER_BYTES 4U
+#define DUMP_OFF_AXIS_COUNT  6U
+#define DUMP_OFF_FIRST_INDEX 8U
+#define DUMP_OFF_FRAME_COUNT 16U
+#define DUMP_OFF_FRAME_BYTES 20U
+
 /* 轴条目内部的偏移（相对条目起点）。 */
 #define AXIS_OFF_ACTUAL_POSITION 0U
 #define AXIS_OFF_TARGET_POSITION 4U
@@ -144,6 +168,112 @@ bool emaster_observation_wire_encode_frame(const emaster_observation_frame_t *fr
     if (written != NULL)
     {
         *written = total;
+    }
+    return true;
+}
+
+bool emaster_observation_wire_encode_dump(uint64_t first_index,
+                                          uint32_t frame_count,
+                                          uint16_t axis_count,
+                                          uint8_t *buffer,
+                                          size_t capacity,
+                                          size_t *written)
+{
+    size_t total = (size_t)EMASTER_OBSERVATION_WIRE_DUMP_HEADER_BYTES;
+
+    if (buffer == NULL || capacity < total)
+    {
+        return false;
+    }
+    if (axis_count > (uint16_t)EMASTER_OBSERVATION_MAX_AXES)
+    {
+        axis_count = (uint16_t)EMASTER_OBSERVATION_MAX_AXES;
+    }
+    if (frame_count > EMASTER_OBSERVATION_WIRE_MAX_DUMP_FRAMES)
+    {
+        /* 报出去的帧数必须是真会发出去的帧数，宁可在这里拒绝也不发一个对不上的头。 */
+        return false;
+    }
+
+    buffer[DUMP_OFF_MAGIC] = EMASTER_OBSERVATION_WIRE_MAGIC_0;
+    buffer[DUMP_OFF_MAGIC + 1U] = EMASTER_OBSERVATION_WIRE_MAGIC_1;
+    buffer[DUMP_OFF_VERSION] = (uint8_t)EMASTER_OBSERVATION_WIRE_VERSION;
+    buffer[DUMP_OFF_KIND] = (uint8_t)EMASTER_OBSERVATION_WIRE_KIND_DUMP;
+    wire_store_u16(buffer, DUMP_OFF_HEADER_BYTES, (uint16_t)total);
+    wire_store_u16(buffer, DUMP_OFF_AXIS_COUNT, axis_count);
+    wire_store_u64(buffer, DUMP_OFF_FIRST_INDEX, first_index);
+    wire_store_u32(buffer, DUMP_OFF_FRAME_COUNT, frame_count);
+    wire_store_u32(buffer, DUMP_OFF_FRAME_BYTES, (uint32_t)emaster_observation_wire_frame_bytes(axis_count));
+
+    if (written != NULL)
+    {
+        *written = total;
+    }
+    return true;
+}
+
+bool emaster_observation_wire_decode_dump(const uint8_t *buffer,
+                                          size_t length,
+                                          emaster_observation_wire_dump_t *dump)
+{
+    uint16_t header_bytes;
+    uint16_t axis_count;
+    uint32_t frame_count;
+    uint32_t frame_bytes;
+
+    if (buffer == NULL || length < (size_t)EMASTER_OBSERVATION_WIRE_DUMP_HEADER_BYTES)
+    {
+        return false;
+    }
+    if (buffer[DUMP_OFF_MAGIC] != EMASTER_OBSERVATION_WIRE_MAGIC_0 ||
+        buffer[DUMP_OFF_MAGIC + 1U] != EMASTER_OBSERVATION_WIRE_MAGIC_1)
+    {
+        return false;
+    }
+    if (buffer[DUMP_OFF_VERSION] != (uint8_t)EMASTER_OBSERVATION_WIRE_VERSION)
+    {
+        return false;
+    }
+    if (buffer[DUMP_OFF_KIND] != (uint8_t)EMASTER_OBSERVATION_WIRE_KIND_DUMP)
+    {
+        return false;
+    }
+
+    /*
+     * header_bytes 允许比本版本长（将来的附加字段），但不允许比它短——短了说明要么是
+     * 写坏了，要么是另一个东西冒充事务头，两种都不能按帧区解析。
+     */
+    header_bytes = wire_load_u16(buffer, DUMP_OFF_HEADER_BYTES);
+    if ((size_t)header_bytes < (size_t)EMASTER_OBSERVATION_WIRE_DUMP_HEADER_BYTES ||
+        (size_t)header_bytes > length)
+    {
+        return false;
+    }
+    axis_count = wire_load_u16(buffer, DUMP_OFF_AXIS_COUNT);
+    if (axis_count > (uint16_t)EMASTER_OBSERVATION_MAX_AXES)
+    {
+        return false;
+    }
+    frame_bytes = wire_load_u32(buffer, DUMP_OFF_FRAME_BYTES);
+    if ((size_t)frame_bytes != emaster_observation_wire_frame_bytes(axis_count))
+    {
+        return false;
+    }
+    frame_count = wire_load_u32(buffer, DUMP_OFF_FRAME_COUNT);
+    if (frame_count > EMASTER_OBSERVATION_WIRE_MAX_DUMP_FRAMES)
+    {
+        /* 挡住畸形的帧数：照着一个损坏的数字读下去等于让客户端去追一个不存在的流。 */
+        return false;
+    }
+
+    if (dump != NULL)
+    {
+        dump->version = buffer[DUMP_OFF_VERSION];
+        dump->header_bytes = header_bytes;
+        dump->axis_count = axis_count;
+        dump->frame_count = frame_count;
+        dump->frame_bytes = frame_bytes;
+        dump->first_index = wire_load_u64(buffer, DUMP_OFF_FIRST_INDEX);
     }
     return true;
 }

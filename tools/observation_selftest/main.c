@@ -727,6 +727,21 @@ static void test_ring_concurrency(void)
 /* 单次发布的耗时上界：周期的 1%。 */
 #define PUBLISH_BUDGET_NS UINT64_C(10000)
 
+/*
+ * 读者在场时允许的相对抬升：p50 最多是独跑的这么多倍，另加一点固定余量。
+ *
+ * 8 倍不是"实测到的代价"，实测是 4.2–5.8 倍（WSL/2 vCPU）与 6.0–7.8 倍（Orange Pi，
+ * 12 核；p50 31 → 183–241 ns），来源是观测环 head 所在缓存行被反复作废——真实且预期。
+ *
+ * 两台机器的**绝对值**差了 5 倍，比值却是小机器更小、大机器更大：比值本身不是稳定的
+ * 机器无关量。所以判据写成"倍数 + 固定项"，由固定项在比值抖动时兜底（Orange Pi 上
+ * 8×31 = 248 ns 已接近实测上限，全靠这 500 ns 撑开余量）。
+ *
+ * 它是**烟雾报警器**而不是性能规格：写者真开始等读者是几十倍到毫秒级，不是 5 倍。
+ */
+#define PUBLISH_CONTENTION_FACTOR 8U
+#define PUBLISH_CONTENTION_SLACK_NS UINT64_C(500)
+
 /* 每 BATCH 帧取一次时钟：逐帧测会把 clock_gettime 本身算进被测对象。 */
 #define PUBLISH_BATCH 1000U
 #define PUBLISH_BATCH_MAX 4096U
@@ -838,10 +853,12 @@ static void test_writer_independence(void)
     static publish_span_t contended;
     reader_stats_t stats;
     pthread_t threads[TEST_WRITER_READERS];
-    uint64_t per_frame_alone;
-    uint64_t per_frame_contended;
+    uint64_t p50_alone;
+    uint64_t p50_contended;
     uint64_t p99_alone;
     uint64_t p99_contended;
+    uint64_t mean_alone;
+    uint64_t mean_contended;
     unsigned thread_index;
 
     section("写者独立性：四个自旋读者不得拖慢发布");
@@ -867,15 +884,19 @@ static void test_writer_independence(void)
     }
 
     p99_alone = span_percentile_per_frame(&alone, 99U);
-    per_frame_alone = span_total_per_frame(&alone, TEST_CONCURRENT_FRAMES);
+    p50_alone = span_percentile_per_frame(&alone, 50U);
+    mean_alone = span_total_per_frame(&alone, TEST_CONCURRENT_FRAMES);
     p99_contended = span_percentile_per_frame(&contended, 99U);
-    per_frame_contended = span_total_per_frame(&contended, TEST_CONCURRENT_FRAMES);
+    p50_contended = span_percentile_per_frame(&contended, 50U);
+    mean_contended = span_total_per_frame(&contended, TEST_CONCURRENT_FRAMES);
 
-    printf("  独跑         %" PRIu64 " ns/帧（p99 批 %" PRIu64 "，最慢批 %" PRIu64 "）\n",
-           per_frame_alone, p99_alone, span_max_per_frame(&alone));
-    printf("  %u 读者自旋 %" PRIu64 " ns/帧（p99 批 %" PRIu64 "，最慢批 %" PRIu64 "）\n",
-           (unsigned)TEST_WRITER_READERS, per_frame_contended, p99_contended,
-           span_max_per_frame(&contended));
+    printf("  独跑         p50 %" PRIu64 " ns/帧，p99 批 %" PRIu64 "，最慢批 %" PRIu64
+           "（均值 %" PRIu64 "）\n",
+           p50_alone, p99_alone, span_max_per_frame(&alone), mean_alone);
+    printf("  %u 读者自旋 p50 %" PRIu64 " ns/帧，p99 批 %" PRIu64 "，最慢批 %" PRIu64
+           "（均值 %" PRIu64 "）\n",
+           (unsigned)TEST_WRITER_READERS, p50_contended, p99_contended,
+           span_max_per_frame(&contended), mean_contended);
 
     /*
      * 判据分两层，各自对应一种真实的失效模式：
@@ -883,8 +904,8 @@ static void test_writer_independence(void)
      * 1. **绝对上界**：批耗时分位折算到单帧不得超过周期的 1%（10 µs）。抓的是
      *    "写者被挡住"——真出现等读者的情况，会是几十微秒到毫秒级的**持续**抬升，
      *    分位数一定会越界。
-     * 2. **相对上界**：读者在场时不得比独跑慢一个数量级（4 倍 + 200 ns）。抓的是
-     *    缓存行争用失控，比第一条敏感，但也更依赖机器状态，所以给足余量。
+     * 2. **相对上界**：读者在场时 p50 相对独跑不得超出 PUBLISH_CONTENTION_FACTOR 倍。
+     *    抓的是缓存行争用失控。
      *
      * 若干个满速自旋读者是最恶劣的争用形态，真实部署是 50 Hz–1 kHz 的按需拉取，远达
      * 不到这个强度。刻意用最恶劣的形态，判据才有意义。
@@ -892,13 +913,25 @@ static void test_writer_independence(void)
      * 这两条都**不是**"写者耗时与读者无关"——那句话是错的，缓存行争用确实存在。
      * 能成立的是"写者不等待读者、代码路径不因读者而变"，这里量的是它的后果：常数倍
      * 的缓存行往返，而不是与读者行为相关的停顿。
+     *
+     * **相对判据必须用 p50，不能用均值。** 均值在这里有结构性偏差：它有偏地把调度器
+     * 换出算作争用代价，而且偏差方向与待测量同向——争用越重，写者这一臂的墙钟时间越
+     * 长，被 OS 换出的窗口就越多，均值被抬得越高。实测（WSL/2 vCPU）同一份代码均值在
+     * 508–704 ns/帧 之间抖，p50 只在 373–551 之间，20 次里 9 次是均值那一项假红。
+     * 均值与最慢批仍然打印出来供人看——它们是诊断信息，不是判据。
+     *
+     * 上界 10 µs 那一项同理：在 2 vCPU 的 WSL 上 p99 批实测到 5.4 ms（1 写者 + 4 自旋
+     * 读者 5 个线程抢 2 个核），余量只剩 1.9 倍；同一份代码在 Orange Pi 上 p99 折算
+     * 190 ns/帧、与 p50 几乎重合。也就是说这一项在小机器上量的是核数，不是代码。
+     * 它若翻红，先看 p50、head、撕裂三处是否**同时**动了：真出现写者停顿，三者会一起
+     * 变；只有 p99 孤单地高，那是调度。
      */
     CHECK(p99_contended <= PUBLISH_BUDGET_NS,
           "读者在场时 p99 批耗时折算 %" PRIu64 " ns/帧，越过周期 1%% 的上界 %" PRIu64 " ns",
           p99_contended, PUBLISH_BUDGET_NS);
-    CHECK(per_frame_contended <= per_frame_alone * 4U + 200U,
-          "读者在场时发布耗时 %" PRIu64 " ns/帧 远超独跑 %" PRIu64 " ns/帧",
-          per_frame_contended, per_frame_alone);
+    CHECK(p50_contended <= p50_alone * PUBLISH_CONTENTION_FACTOR + PUBLISH_CONTENTION_SLACK_NS,
+          "读者在场时 p50 %" PRIu64 " ns/帧，超过独跑 %" PRIu64 " ns/帧 的 %u 倍上界",
+          p50_contended, p50_alone, (unsigned)PUBLISH_CONTENTION_FACTOR);
     CHECK(emaster_observation_ring_head(&ring) == TEST_CONCURRENT_FRAMES,
           "写者发布的帧数不对：head=%" PRIu64, emaster_observation_ring_head(&ring));
     if (atomic_load(&stats.torn) > 0U)
@@ -1298,6 +1331,119 @@ static void test_wire_malformed(void)
     }
 }
 
+/*
+ * DUMP 事务头。
+ *
+ * 这一节存在的理由是一个真出过的故障：没有事务头时，客户端读完最后一帧无从知道流已经
+ * 结束，只能继续等下一帧——而观测连接是长连接，服务端不关，于是它永远等下去。所以这里
+ * **把"帧数由头给出"当成协议的正常路径来测**，特别是 frame_count 为 0 的空窗口：
+ * 它不是错误分支，是最常见的一种回答，而且正是过去会退化成一行文本、让客户端卡死的那条。
+ */
+static void test_wire_dump_header(void)
+{
+    uint8_t buffer[256];
+    uint8_t mutated[256];
+    emaster_observation_wire_dump_t dump;
+    size_t written = 0U;
+
+    /* 空窗口：必须编码成功，且帧数为 0 —— 服务端靠它结束一次没有数据的 DUMP。 */
+    CHECK(emaster_observation_wire_encode_dump(1234U, 0U, TEST_AXES, buffer, sizeof(buffer),
+                                               &written),
+          "空窗口的 DUMP 头应能编码");
+    CHECK(written == EMASTER_OBSERVATION_WIRE_DUMP_HEADER_BYTES, "DUMP 头长度不对");
+    CHECK(emaster_observation_wire_decode_dump(buffer, written, &dump), "DUMP 头应能解码");
+    CHECK(dump.frame_count == 0U, "空窗口的帧数应为 0");
+    CHECK(dump.first_index == 1234U, "first_index 未原样带回");
+    CHECK(dump.axis_count == TEST_AXES, "DUMP 头的轴数不对");
+    CHECK(dump.frame_bytes == emaster_observation_wire_frame_bytes(TEST_AXES),
+          "DUMP 头报的帧长与轴数不自洽");
+
+    /* 满窗口：帧数上限那一档必须接受（服务端会把 count 钳到这里）。 */
+    CHECK(emaster_observation_wire_encode_dump(0U, EMASTER_OBSERVATION_WIRE_MAX_DUMP_FRAMES,
+                                               TEST_AXES, buffer, sizeof(buffer), &written),
+          "帧数等于上限时应能编码");
+    CHECK(emaster_observation_wire_decode_dump(buffer, written, &dump) &&
+              dump.frame_count == EMASTER_OBSERVATION_WIRE_MAX_DUMP_FRAMES,
+          "帧数等于上限时应能解码");
+
+    /* 超过上限：宁可拒绝，也不发一个客户端会照着追下去的数字。 */
+    CHECK(!emaster_observation_wire_encode_dump(0U, EMASTER_OBSERVATION_WIRE_MAX_DUMP_FRAMES + 1U,
+                                                TEST_AXES, buffer, sizeof(buffer), &written),
+          "帧数超过上限时应拒绝编码");
+
+    /* 容量不足不能写坏调用者的缓冲。 */
+    CHECK(!emaster_observation_wire_encode_dump(0U, 0U, TEST_AXES, buffer,
+                                                EMASTER_OBSERVATION_WIRE_DUMP_HEADER_BYTES - 1U,
+                                                &written),
+          "容量不足时应拒绝编码");
+    CHECK(!emaster_observation_wire_encode_dump(0U, 0U, TEST_AXES, NULL, sizeof(buffer),
+                                                &written),
+          "空缓冲指针应被拒绝");
+
+    /* 畸形输入逐项拒绝。每次都从一枚合法的头出发，只改一处。 */
+    CHECK(emaster_observation_wire_encode_dump(7U, 3U, TEST_AXES, mutated, sizeof(mutated),
+                                               &written),
+          "基准 DUMP 头应能编码");
+    CHECK(emaster_observation_wire_decode_dump(mutated, written, &dump) && dump.frame_count == 3U,
+          "基准 DUMP 头应能解码");
+
+    {
+        size_t length = written;
+
+        /* 长度不足。 */
+        CHECK(!emaster_observation_wire_decode_dump(mutated, length - 1U, &dump),
+              "长度不足时应拒绝解码");
+
+        /* 魔数改一个字节。 */
+        memcpy(buffer, mutated, length);
+        buffer[0] = (uint8_t)'X';
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump), "魔数错应被拒绝");
+
+        /* 版本 +1。 */
+        memcpy(buffer, mutated, length);
+        buffer[2] = (uint8_t)(EMASTER_OBSERVATION_WIRE_VERSION + 1U);
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump), "版本不认识应被拒绝");
+
+        /* 类型改成 FRAME：事务头与帧不能互认。 */
+        memcpy(buffer, mutated, length);
+        buffer[3] = (uint8_t)EMASTER_OBSERVATION_WIRE_KIND_FRAME;
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump), "类型错应被拒绝");
+
+        /* header_bytes 小于本版本：说明是别的东西冒充事务头。 */
+        memcpy(buffer, mutated, length);
+        buffer[4] = (uint8_t)(EMASTER_OBSERVATION_WIRE_DUMP_HEADER_BYTES - 1U);
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump),
+              "header_bytes 过小应被拒绝");
+
+        /* header_bytes 大于实际长度：照着它跳会跑到缓冲外面去。 */
+        memcpy(buffer, mutated, length);
+        buffer[4] = (uint8_t)(length + 1U);
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump),
+              "header_bytes 超过实际长度应被拒绝");
+
+        /* 轴数超上限。 */
+        memcpy(buffer, mutated, length);
+        buffer[6] = (uint8_t)(EMASTER_OBSERVATION_MAX_AXES + 1U);
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump),
+              "轴数超上限应被拒绝");
+
+        /* frame_bytes 与轴数不一致：客户端要按它分配读取量，不能只信这一个字段。 */
+        memcpy(buffer, mutated, length);
+        buffer[20] = (uint8_t)((buffer[20] + 1U) & 0xFFU);
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump),
+              "frame_bytes 与轴数不自洽应被拒绝");
+
+        /* 帧数超过环形容量。 */
+        memcpy(buffer, mutated, length);
+        buffer[16] = 0xFFU;
+        buffer[17] = 0xFFU;
+        buffer[18] = 0xFFU;
+        buffer[19] = 0xFFU;
+        CHECK(!emaster_observation_wire_decode_dump(buffer, length, &dump),
+              "帧数超过容量应被拒绝");
+    }
+}
+
 /* ---------------------------------------------------------------- main */
 
 int main(void)
@@ -1310,6 +1456,7 @@ int main(void)
     test_slow_seqlock();
     test_wire_roundtrip();
     test_wire_malformed();
+    test_wire_dump_header();
 
     printf("\n%d 项断言，%d 项失败\n", g_checks, g_failures);
     if (g_failures != 0)
