@@ -239,21 +239,12 @@ typedef struct
     uint8_t pdi_error_counter;
     uint8_t pdi_error_code;
     uint8_t lost_link_counter[4];
-    /* P4.3: SDO 慢速通道观测数据（非 RT 线程周期读取） */
-    bool sdo_current_read;
-    int16_t sdo_current_6078h;
-    bool sdo_voltage_read;
-    uint32_t sdo_voltage_6079h;       /* DC link voltage, mV */
-    bool sdo_mosfet_temp_read;
-    int16_t sdo_mosfet_temp_200b01h;  /* MOSFET temperature, 0.1°C */
-    bool sdo_motor_temp_read;
-    int16_t sdo_motor_temp_200b02h;   /* Motor temperature, 0.1°C */
-    bool sdo_motor_speed_read;
-    int32_t sdo_motor_speed_200b08h;  /* Actual motor speed, rpm */
-    bool sdo_speed_command_read;
-    int32_t sdo_speed_command_200b09h; /* Speed command, rpm */
-    uint64_t sdo_read_count;
-    uint64_t sdo_read_time_us;
+    /*
+     * P4.3 的 SDO 慢速通道暂存字段（sdo_*_read / sdo_*_200b** / sdo_read_count /
+     * sdo_read_time_us）已删除。它们存在的唯一理由是"观测线程写、周期线程加锁抄一遍"，
+     * 而那把锁正是实时路径上唯一一处无界等待。慢速量现在由观测线程发布到
+     * emaster_observation_slow_t 快照，停机时一次性回填到下面这几个字段。
+     */
     /* P2.5: 轴级故障恢复 */
     emaster_axis_status_t axis_status;
     bool fault_isolated;               /* 此轴已隔离，不影响其他轴 */

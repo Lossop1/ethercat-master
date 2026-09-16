@@ -13,8 +13,12 @@
  * 功能：按设备配置声明的慢速遥测清单（设备配置的 slow_telemetry 字段），对每个
  *   从站逐条读取其语义属于周期遥测的供应商对象；对象号、宽度和单位都来自配置，通用代码
  *   不写死任何供应商对象号。清单缺省即不读，行为与每次读失败一致。
- * 数据存储：按条目的 semantic 写入 session->axes[].sdo_* 和 drive_diagnostic
- * 线程安全：使用 observer_mutex 保护共享数据
+ * 数据存储：按条目的 semantic 写进本轮快照（emaster_observation_slow_axis_t），
+ *   一轮结束后整体发布到 session->observation_slow。**不写 session->axes[]**，
+ *   因此不需要与周期线程同步任何东西。
+ * 线程安全：慢速量走 seqlock（写者只做两次序号存 + 一次屏障，从不等待读者）；
+ *   sm2_/sm3_ 同步探针字段只有本线程写、只在 join 之后被读，靠 join 建立的
+ *   happens-before 就够，不加锁。
  *
  * 另有一个低频探针：每 OBSERVER_SYNC_PROBE_INTERVAL 轮读一次 1C32/1C33 的同步违例
  * 计数器，记录运行期"首次读到非零"的时刻。停机后那一次读回答不了驱动器是什么时候
@@ -31,7 +35,7 @@
  * 因此停止标志在每次读之前检查一次，把 join 的等待上限压到单次 SDO 往返；
  * 观测读的邮箱超时也从 EC_TIMEOUTRXM（700ms）收紧到 OBSERVER_MAILBOX_TIMEOUT_US，
  * 让这个上限真正有界。正常往返约 3ms，30ms 已有约十倍裕量；诊断样本读不到就按
- * 未读到记（sdo_*_read=false），不值得拿驱动器掉出 OP 去换。
+ * 未读到记（快照里该轴 valid=false），不值得拿驱动器掉出 OP 去换。
  */
 #define OBSERVER_MAILBOX_TIMEOUT_US 30000
 
@@ -232,71 +236,68 @@ static bool observer_telemetry_is_observed(emaster_telemetry_semantic_t semantic
 }
 
 /*
- * 把一条遥测读数写进它对应的命名槽位。读失败只清掉该槽位的读取标志，字段保留旧值，
+ * 把一条遥测读数写进本轮快照里它对应的槽位。读失败只清 valid，字段保留上一轮的值，
  * 与"这一条没读到"同义；没有对应槽位的语义不写任何字段。
+ *
+ * 写的是**本轮的局部快照**（emaster_observation_slow_axis_t），不是 session->axes[]：
+ * 快照在本轮轴循环结束后整体发布一次，于是"同一快照里所有轴同源"由发布粒度保证，
+ * 而不是靠逐字段加锁去凑。
  */
-static void observer_store_telemetry(emaster_soem_session_t *session, size_t axis,
+static void observer_store_telemetry(emaster_observation_slow_axis_t *slot,
                                      const emaster_slow_telemetry_t *entry, int wkc,
-                                     int64_t value)
+                                     int64_t value, bool *axis_valid)
 {
     bool succeeded = wkc > 0;
+
+    if (succeeded)
+    {
+        /* 一轴一条读到了就算这一轴本轮活着：valid 说的是"这轴本轮读没读到"，
+         * 不是"每个字段都读到了"——后者会把单条偶发失败记成整轴无数据。 */
+        *axis_valid = true;
+    }
 
     switch (entry->semantic)
     {
         case EMASTER_TELEMETRY_ACTUAL_CURRENT:
-            session->axes[axis].sdo_current_read = succeeded;
             if (succeeded)
             {
-                session->axes[axis].sdo_current_6078h = (int16_t)value;
+                slot->actual_current = (int32_t)value;
             }
             break;
         case EMASTER_TELEMETRY_ERROR_CODE:
             if (succeeded)
             {
-                uint16_t error_code = (uint16_t)value;
-
-                session->axes[axis].drive_diagnostic.cia402_error_code = error_code;
-                /* P2.6: 如果错误码非零，打印警告 */
-                if (error_code != 0U && session->axes[axis].sdo_read_count < 3U)
-                {
-                    fprintf(stderr, "[P2.6] 警告：轴%zu 检测到 CiA402 错误码 0x%04X\n", axis,
-                            (unsigned)error_code);
-                }
+                slot->error_code = (uint16_t)value;
             }
             break;
         case EMASTER_TELEMETRY_BUS_VOLTAGE:
-            session->axes[axis].sdo_voltage_read = succeeded;
             if (succeeded)
             {
-                session->axes[axis].sdo_voltage_6079h = (uint32_t)value;
+                slot->dc_link_voltage = (int32_t)value;
             }
             break;
         case EMASTER_TELEMETRY_MOSFET_TEMPERATURE:
-            session->axes[axis].sdo_mosfet_temp_read = succeeded;
             if (succeeded)
             {
-                session->axes[axis].sdo_mosfet_temp_200b01h = (int16_t)value;
+                slot->mosfet_temperature = (int32_t)value;
             }
             break;
         case EMASTER_TELEMETRY_MOTOR_TEMPERATURE:
-            session->axes[axis].sdo_motor_temp_read = succeeded;
             if (succeeded)
             {
-                session->axes[axis].sdo_motor_temp_200b02h = (int16_t)value;
+                slot->motor_temperature = (int32_t)value;
             }
             break;
         case EMASTER_TELEMETRY_ACTUAL_VELOCITY:
-            session->axes[axis].sdo_motor_speed_read = succeeded;
             if (succeeded)
             {
-                session->axes[axis].sdo_motor_speed_200b08h = (int32_t)value;
+                slot->motor_speed = (int32_t)value;
             }
             break;
         case EMASTER_TELEMETRY_TARGET_VELOCITY:
-            session->axes[axis].sdo_speed_command_read = succeeded;
             if (succeeded)
             {
-                session->axes[axis].sdo_speed_command_200b09h = (int32_t)value;
+                slot->speed_command = (int32_t)value;
             }
             break;
         case EMASTER_TELEMETRY_NONE:
@@ -373,7 +374,8 @@ static bool observer_read_sync_counters(emaster_soem_session_t *session, uint16_
 
 /*
  * 记一次探针结果：第一次读到任何非零（含"周期时间过小""移位时间过短"两个方向）时留下
- * 交换号与该时刻的读数，之后只更新最后一次读数。调用者持有 observer_mutex。
+ * 交换号与该时刻的读数，之后只更新最后一次读数。不取锁：这些字段是本线程私有的，
+ * 唯一的读者在 join 之后（见文件头）。
  * 返回 true 表示这次就是首次非零，调用者据此打印一次日志。
  */
 static bool observer_record_sync_probe(uint64_t *first_error_exchange,
@@ -453,6 +455,15 @@ static void *observer_thread_func(void *arg)
     fprintf(stderr, "[P4.3] axis_count=%zu\n", session->plan->axis_count);
     fflush(stderr);
 
+    /*
+     * 本轮快照的累积区。**只属于本线程**，跨轮保留：没读到的字段保持上一轮的值，
+     * 与旧实现里"读失败就留着 session->axes[] 里的旧值"逐字等价。每轮轴循环结束后
+     * 整体发布一次，消费者因此天然拿到"所有轴同源"的一批值。
+     */
+    emaster_observation_slow_state_t slow_state;
+
+    memset(&slow_state, 0, sizeof(slow_state));
+
     for (;;)
     {
         uint64_t iteration_start_ns;
@@ -494,6 +505,15 @@ static void *observer_thread_func(void *arg)
             {
                 telemetry_count = OBSERVER_TELEMETRY_CACHE_MAX;
             }
+            /*
+             * 快照里这一轴的位置。轴数超过快照上限时本轮不写样本——多出来的轴在
+             * 观测通道与报告里本来就不存在（环形缓冲同样按 16 轴截断），这里不假装
+             * 有，但也绝不让索引越界。
+             */
+            emaster_observation_slow_axis_t *slot =
+                axis < (size_t)EMASTER_OBSERVATION_MAX_AXES ? &slow_state.axes[axis] : NULL;
+            bool axis_valid = false;
+
             memset(telemetry_wkc, 0, sizeof(telemetry_wkc));
             memset(telemetry_value, 0, sizeof(telemetry_value));
 
@@ -513,11 +533,13 @@ static void *observer_thread_func(void *arg)
                 telemetry_value[entry_index] = observer_decode_telemetry(buffer, entry->type);
             }
 
-            /* 前3次读取始终打印以验证通道工作 */
-            if (session->axes[axis].sdo_read_count < 3U)
+            /* 前3次读取始终打印以验证通道工作。
+             * 计数用轮次而不是逐轴计数：一轴一轮只读一次，两者本是同一个数，而轮次
+             * 不需要每轴一份额外状态。 */
+            if (iteration < 3U)
             {
                 fprintf(stderr, "[P4.3] 轴%zu 第%lu次读取:\n", axis,
-                        (unsigned long)(session->axes[axis].sdo_read_count + 1U));
+                        (unsigned long)(iteration + 1U));
                 for (size_t entry_index = 0U; entry_index < telemetry_count; ++entry_index)
                 {
                     if (!observer_telemetry_is_observed(telemetry[entry_index].semantic))
@@ -535,19 +557,37 @@ static void *observer_thread_func(void *arg)
              * 是无缓冲的——这一轮里最可能被 I/O 挡住的就是这一段。
              */
             observer_enter_phase(session, EMASTER_OBSERVER_PHASE_SAMPLE);
-            /* 加锁写入结果 */
-            pthread_mutex_lock(&session->observer_mutex);
+            /*
+             * 写本轮快照。**不取锁**：这份 slow_state 是本线程私有的，发布时才有
+             * 别的线程看得见，而发布走的是 seqlock（写者只做两次序号存 + 一次屏障）。
+             * 原先这里取 observer_mutex，而周期线程每拍也取它——那把锁没有继承优先级，
+             * 持锁方又是本线程（会在锁内做 fprintf），周期线程等它就成了一段无界等待。
+             */
             for (size_t entry_index = 0U; entry_index < telemetry_count; ++entry_index)
             {
-                observer_store_telemetry(session, axis, &telemetry[entry_index],
+                if (slot == NULL)
+                {
+                    break;
+                }
+                observer_store_telemetry(slot, &telemetry[entry_index],
                                          telemetry_wkc[entry_index],
-                                         telemetry_value[entry_index]);
+                                         telemetry_value[entry_index], &axis_valid);
+                if (telemetry_wkc[entry_index] > 0 &&
+                    iteration < 3U &&
+                    telemetry[entry_index].semantic == EMASTER_TELEMETRY_ERROR_CODE &&
+                    telemetry_value[entry_index] != 0)
+                {
+                    fprintf(stderr, "[P2.6] 警告：轴%zu 检测到 CiA402 错误码 0x%04X\n", axis,
+                            (unsigned)(uint16_t)telemetry_value[entry_index]);
+                }
+            }
+            if (slot != NULL)
+            {
+                slot->valid = axis_valid;
             }
 
-            session->axes[axis].sdo_read_count++;
-
-            /* 每20次读取打印一次（约1秒间隔） */
-            if (session->axes[axis].sdo_read_count % 20U == 0U)
+            /* 每20轮打印一次（约1秒间隔） */
+            if (iteration % 20U == 0U)
             {
                 bool first_field = true;
 
@@ -563,10 +603,8 @@ static void *observer_thread_func(void *arg)
                     observer_print_telemetry_value(stderr, &telemetry[entry_index],
                                                    telemetry_value[entry_index]);
                 }
-                fprintf(stderr, " (读取次数=%lu)\n",
-                        (unsigned long)session->axes[axis].sdo_read_count);
+                fprintf(stderr, " (读取次数=%lu)\n", (unsigned long)(iteration + 1U));
             }
-            pthread_mutex_unlock(&session->observer_mutex);
 
             if (probe_sync)
             {
@@ -590,8 +628,13 @@ static void *observer_thread_func(void *arg)
                 /* 两次读数之后不是读，是算：相位从这里退回 SAMPLE，别把上一拍的读当现场。 */
                 observer_enter_phase(session, EMASTER_OBSERVER_PHASE_SAMPLE);
 
-                pthread_mutex_lock(&session->observer_mutex);
                 /*
+                 * 不取锁。这一族字段（sm2_/sm3_/sm_sync_probe_count）只有本线程写、
+                 * 只有停机后序列化报告时读，而报告落盘发生在 join 之后——写者的
+                 * 全部写对读者可见靠的是 pthread_join 建立的 happens-before，
+                 * 不需要另外的同步。原先那把锁在这里也保护不到什么：周期线程从来
+                 * 没读过它们。
+                 *
                  * 计数的是"这一轴成功读到过同步计数的轮数"（1C32/1C33 任一成功即可），
                  * 用来说明 first_error_exchange=0 确实是"全程读到非零之前都没事"，
                  * 而不是"探针一次都没读成功"。
@@ -618,7 +661,6 @@ static void *observer_thread_func(void *arg)
                         &session->axes[axis].sm3_last_missed,
                         &session->axes[axis].sm3_last_sync_error, &sm3_probe, exchange_now);
                 }
-                pthread_mutex_unlock(&session->observer_mutex);
 
                 /* 首次非零只在日志里报一次，不必等几百 MB 的报告落地才能看到时刻。 */
                 if (first_sm2)
@@ -640,6 +682,22 @@ static void *observer_thread_func(void *arg)
 
         ++iteration;
         trace->iteration_count = iteration;
+        /*
+         * 一轮结束才发布，且只发布一次。
+         *
+         * 发布粒度是"轮"而不是"轴"：一批慢速量要么整批换新，要么整批不动，消费者
+         * 因此不会拿到"轴1是本轮的、轴2是上一轮的"这种拼出来的状态。轴上时间偏差
+         * 本来就有（一轮里逐轴串行读），这个粒度如实保留了它，而不是假装没有。
+         *
+         * 放在睡眠之前：这一轮读到的值立刻可见，不用等 50 ms 的睡眠走完。
+         */
+        slow_state.cycle = session->exchange;
+        slow_state.monotonic_ns = observer_now_ns();
+        slow_state.axis_count = session->plan->axis_count > (size_t)EMASTER_OBSERVATION_MAX_AXES
+                                    ? (uint32_t)EMASTER_OBSERVATION_MAX_AXES
+                                    : (uint32_t)session->plan->axis_count;
+        slow_state.read_count = (uint32_t)(iteration & UINT64_C(0xFFFFFFFF));
+        emaster_observation_slow_publish(&session->observation_slow, &slow_state);
         {
             /* 单轮工作耗时（不含睡眠）：50 ms 周期里真正占核的部分，也是"同优先级 FIFO
              * 线程互相遮挡"时最该被看见的量。 */
@@ -675,17 +733,17 @@ static void *observer_thread_func(void *arg)
 
 bool emaster_soem_session_start_observer(emaster_soem_session_t *session)
 {
-    if (pthread_mutex_init(&session->observer_mutex, NULL) != 0)
-    {
-        return false;
-    }
+    /*
+     * 快照必须在任何线程碰它之前归零。放在这里而不是会话初始化处：本函数是观测
+     * 线程的唯一入口，归零与"线程从此可能发布"挨着，读者不会读到未初始化的序号。
+     */
+    emaster_observation_slow_init(&session->observation_slow);
 
     session->observer_running = true;
 
     if (pthread_create(&session->observer_thread, NULL, observer_thread_func, session) != 0)
     {
         session->observer_running = false;
-        pthread_mutex_destroy(&session->observer_mutex);
         return false;
     }
 
@@ -738,7 +796,13 @@ void emaster_soem_session_reap_observer(emaster_soem_session_t *session)
     }
 
     pthread_join(session->observer_thread, NULL);
-    pthread_mutex_destroy(&session->observer_mutex);
+    /*
+     * join 之后的**唯一**回填点：报告序列化读的是 session->axes[]，而慢速量现在住在
+     * 快照里，这一步是两者之间唯一的桥。放这里而不是别处，是因为它恰好就是"观测线程
+     * 已经不再写任何东西"的那一点——读者要的是 join 建立的 happens-before，早一步
+     * 就没有了。
+     */
+    emaster_soem_session_observation_flush_slow(session);
     session->observer_thread_created = false;
 }
 

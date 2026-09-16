@@ -192,38 +192,16 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                     &session->axes[axis_index], actual_position))
                     feedback_valid = false;
 
-                /* P4.3: 从 SDO 观测线程读取监控数据。
-                 * 6078h (actual_current)、6079h (dc_link_voltage)、200Bh (温度) 未映射进 TxPDO
-                 * （设备 ESI 将三个模块都声明为 Fixed="true"，且 supports_pdo_configuration=false）。
-                 * observer_thread 以 ~50ms 周期通过 SDO 读取这些对象，加锁保护 sdo_* 字段。
-                 * 此处周期线程读取这些值填充到报告字段，避免周期内 SDO 阻塞。 */
-                pthread_mutex_lock(&session->observer_mutex);
-                if (session->axes[axis_index].sdo_current_read)
-                {
-                    session->axes[axis_index].actual_current = session->axes[axis_index].sdo_current_6078h;
-                }
-                if (session->axes[axis_index].sdo_voltage_read)
-                {
-                    session->axes[axis_index].dc_link_voltage = session->axes[axis_index].sdo_voltage_6079h;
-                }
-                if (session->axes[axis_index].sdo_mosfet_temp_read)
-                {
-                    session->axes[axis_index].mosfet_temperature = session->axes[axis_index].sdo_mosfet_temp_200b01h;
-                }
-                if (session->axes[axis_index].sdo_motor_temp_read)
-                {
-                    session->axes[axis_index].motor_temperature = session->axes[axis_index].sdo_motor_temp_200b02h;
-                }
-                if (session->axes[axis_index].sdo_motor_speed_read)
-                {
-                    session->axes[axis_index].actual_velocity = session->axes[axis_index].sdo_motor_speed_200b08h;
-                }
-                if (session->axes[axis_index].sdo_speed_command_read)
-                {
-                    session->axes[axis_index].target_velocity = session->axes[axis_index].sdo_speed_command_200b09h;
-                }
-                pthread_mutex_unlock(&session->observer_mutex);
-
+                /*
+                 * P4.3 的慢速遥测（6078h 电流、6079h 母线电压、200Bh 温度、200Bh:08/09
+                 * 速度）原先在这里逐轴加锁抄一遍。整块已删除：那把 observer_mutex 没有
+                 * 继承优先级，而持锁的观测线程会在锁内做 fprintf 和邮箱往返，周期线程
+                 * 等它就成了实时路径上唯一一处**无界**等待。
+                 *
+                 * 慢速量现在住在 seqlock 快照里，读到它的地方有两处，都不是本循环：
+                 * 处理 status 命令时按需读一次，以及停机时 join 之后的 flush_slow 回填
+                 * 报告字段。两者都在下面对应的位置，理由写在那里。
+                 */
                 session->status_words[axis_index] = status_word;
                 {
                     emaster_cia402_status_t decoded_status;
@@ -638,7 +616,14 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                              * 命令在周期线程处理，任何邮箱访问都会挤占周期预算。
                              * planned 用于区分「主站写入的目标」和「PDO 实际目标」，
                              * 两者不一致说明输出映射有问题而不是驱动器不动。
+                             *
+                             * 唯一一处非 PDO 的量是 err=0x%04x，它来自慢速快照：读是
+                             * seqlock，不取锁、不阻塞、有界重试两次，而且只在真的有命令
+                             * 要回答时发生——原先是每拍每轴各取放一次锁。
                              */
+                            emaster_observation_slow_state_t slow;
+                            bool slow_ok = emaster_observation_slow_read(
+                                &session->observation_slow, &slow);
                             int offset = snprintf(response.message, sizeof(response.message),
                                 "state=%d cycle=%lu axes=%zu enabled=%d completed=%d",
                                 (int)session->report->state,
@@ -651,6 +636,33 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                  axis_index < session->plan->axis_count; ++axis_index) {
                                 const emaster_control_session_axis_result_t *axis =
                                     &session->axes[axis_index];
+                                const bool slow_has_axis =
+                                    slow_ok && axis_index < (size_t)slow.axis_count &&
+                                    axis_index < (size_t)EMASTER_OBSERVATION_MAX_AXES;
+                                /*
+                                 * vel 的口径按模式分，两种模式里这个字段本来就不是同一个量：
+                                 *
+                                 * - CST（模式 9）：set_feedback 每拍把 PDO 的 606Ch 解进
+                                 *   actual_velocity，那就是最干净的值。旧的慢速拷贝会在其后
+                                 *   用 SDO 读到的转速把它盖掉——盖掉的是新值，留下的是旧值；
+                                 *   现在不盖了。
+                                 * - 其余（CSP 等）：actual_velocity 只有慢速通道这一个来源，
+                                 *   快照给它。
+                                 */
+                                const bool velocity_from_slow =
+                                    !(session->plan->axes[axis_index].operation_mode != NULL &&
+                                      session->plan->axes[axis_index].operation_mode->value ==
+                                          INT8_C(9));
+                                /* 快照没读到（观测线程没发布过，或这次撞上写入中途）就
+                                 * 退回 0；err 是诊断量，宁可显示"没读到"也不显示一个猜的。 */
+                                const unsigned int error_code =
+                                    slow_has_axis
+                                        ? (unsigned int)slow.axes[axis_index].error_code
+                                        : 0U;
+                                const int32_t reported_velocity =
+                                    (velocity_from_slow && slow_has_axis)
+                                        ? slow.axes[axis_index].motor_speed
+                                        : axis->actual_velocity;
                                 int written;
 
                                 if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
@@ -661,12 +673,13 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    "|a%u:pos=%d,vel=%d,torque=%d,status=0x%04x,"
                                                    "target_pos=%d,planned=%d,err=0x%04x,state=%d",
                                                    (unsigned int)(axis_index + 1U),
-                                                   axis->actual_position, axis->actual_velocity,
+                                                   axis->actual_position,
+                                                   reported_velocity,
                                                    (int)axis->actual_torque,
                                                    (unsigned int)axis->status_word,
                                                    axis->target_position,
                                                    session->target_positions[axis_index],
-                                                   (unsigned int)axis->drive_diagnostic.cia402_error_code,
+                                                   error_code,
                                                    (int)axis->cia402_state);
                                 if (written < 0) {
                                     break;

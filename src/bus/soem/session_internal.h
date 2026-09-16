@@ -10,6 +10,7 @@
 #include "emaster/motion/velocity_profile.h"
 #include "emaster/observation/ring.h"
 #include "emaster/observation/server.h"
+#include "emaster/observation/slow.h"
 #include "emaster/safety/gate.h"
 #include "session_observer.h"
 
@@ -104,7 +105,23 @@ typedef struct {
      * 所以这里不需要比 running 更强的同步。有了它，停机序言才能把 join 拆成
      * "置标志 → 每周期看一眼 → 回收"三段，中间照常发帧。 */
     volatile bool observer_exited;
-    pthread_mutex_t observer_mutex;
+    /*
+     * 慢速遥测快照（SDO 轮询拿到的电流/电压/温度/速度/错误码）。
+     *
+     * 取代原先"观测线程加锁写 session->axes[]、周期线程加锁抄一遍"的做法：那把锁
+     * 没有 PRIO_INHERIT，而持锁的观测线程会在锁内做 fprintf 和邮箱往返，周期线程等
+     * 它就成了实时路径上唯一一处**无界**等待。现在写者（观测线程）只做两次序号存
+     * 和一次屏障，读者（停机后回填报告的 flush_slow、处理 status 命令时的周期线程）
+     * 有界重试两次，写者永不等待。
+     *
+     * 内联而不是堆分配：整个快照约 600 B，而本结构本来就是栈局部变量；对比之下
+     * observation_ring 有 108 KiB，那个才必须上堆。内联顺带消掉了"什么时候分配、
+     * 谁来释放、线程启动前有没有初始化"这一整类问题。
+     *
+     * 注意它与 observation_ring 的开关**无关**：报告里的这几列一直都有，不能因为
+     * 观测通道开关关着就消失。
+     */
+    emaster_observation_slow_t observation_slow;
     /*
      * 观测通道的环形缓冲。开关关闭时为 NULL，周期路径上只有一次指针判空。
      *
@@ -240,6 +257,16 @@ void emaster_soem_session_stop_observer(emaster_soem_session_t *session);
 void emaster_soem_session_request_observer_stop(emaster_soem_session_t *session);
 bool emaster_soem_session_observer_exited(const emaster_soem_session_t *session);
 void emaster_soem_session_reap_observer(emaster_soem_session_t *session);
+
+/*
+ * 把慢速快照回填进报告字段。**必须在观测线程 join 之后调用**（reap 里就是那一点）：
+ * 回填读的是快照，而报告序列化读的是 session->axes[]，这一步是两者之间唯一的桥。
+ *
+ * 只在停机时做一次是有意的。原先那条路（周期线程每拍加锁抄一遍）建立了"报告字段
+ * 始终是最新值"的假象，代价是实时路径上的一把无继承优先级锁；而报告本身是停机后
+ * 才落盘的，运行期的中间值没有任何消费者。
+ */
+void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session);
 
 /* 拓扑映射：动态从站发现和轴匹配 */
 typedef struct {

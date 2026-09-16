@@ -227,6 +227,61 @@ bool emaster_soem_session_observation_open(emaster_soem_session_t *session)
     return true;
 }
 
+void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session)
+{
+    emaster_observation_slow_state_t state;
+    size_t axis_index;
+
+    if (session == NULL || session->plan == NULL)
+    {
+        return;
+    }
+    /*
+     * 读不到就什么都不写，而不是写一份零。快照的读者只有两次机会，而这里的调用者
+     * 是刚 join 完的单线程——读不到意味着观测线程一次都没发布过（例如设备配置里
+     * 没有遥测清单）。那时 session->axes[] 里的字段本来就是 0，保持不变即可，
+     * 用零去覆盖只会把"从来没读过"和"读到的是零"混成一件事。
+     */
+    if (!emaster_observation_slow_read(&session->observation_slow, &state))
+    {
+        return;
+    }
+
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+    {
+        emaster_control_session_axis_result_t *axis;
+
+        if (axis_index >= (size_t)EMASTER_OBSERVATION_MAX_AXES ||
+            axis_index >= (size_t)state.axis_count)
+        {
+            /*
+             * 快照的轴数在发布时按上限截断过。截断之外的轴没有慢速数据可回填——
+             * 与它们没有被读过的旧行为一致，只是现在这件事是显式的。
+             */
+            break;
+        }
+        if (state.axes[axis_index].valid)
+        {
+            axis = &session->axes[axis_index];
+            axis->actual_current = (int16_t)state.axes[axis_index].actual_current;
+            axis->dc_link_voltage = (uint32_t)state.axes[axis_index].dc_link_voltage;
+            axis->mosfet_temperature = (int16_t)state.axes[axis_index].mosfet_temperature;
+            axis->motor_temperature = (int16_t)state.axes[axis_index].motor_temperature;
+            axis->actual_velocity = state.axes[axis_index].motor_speed;
+            axis->target_velocity = state.axes[axis_index].speed_command;
+            /*
+             * 603F 也回填，但**只在停机诊断没有给出更新值时**才有意义——而那个诊断
+             * 跑在本函数之后（停机序言之后），它会覆盖这里。顺序是刻意的：先落一个
+             * "运行期最后看到的值"，再让停机快照去盖。
+             */
+            if (state.axes[axis_index].error_code != 0U)
+            {
+                axis->drive_diagnostic.cia402_error_code = state.axes[axis_index].error_code;
+            }
+        }
+    }
+}
+
 void emaster_soem_session_observation_close(emaster_soem_session_t *session)
 {
     if (session == NULL)
