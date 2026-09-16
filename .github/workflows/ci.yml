@@ -36,6 +36,12 @@ jobs:
       - name: 观测通道离线自测
         run: ./build/linux-debug/tools/observation_selftest/observation-selftest
 
+      # 单元测试：周期恢复语义、错误预算滑动窗口。两条都复刻了现场故障，且都在
+      # 两个方向上钉住判别力（既要抓住真故障，也要放过健康的长跑）。不依赖 SOEM
+      # 与硬件，因此必须进 CI——留在文件头的手工编译命令里就等于没跑过。
+      - name: 单元测试
+        run: ctest --test-dir build/linux-debug --output-on-failure
+
       - name: 静态分析
         run: >-
           cppcheck --enable=warning,performance,portability --error-exitcode=1

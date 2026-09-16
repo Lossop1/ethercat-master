@@ -23,6 +23,9 @@ option(EMASTER_BUILD_HARDWARE_TOOLS
        "构建可访问 EtherCAT 网络的 Linux/SOEM 诊断工具"
        ${_emaster_hardware_default})
 
+# 离线单元测试：不依赖 SOEM、不访问总线，任何平台都能建、都能跑。
+option(EMASTER_BUILD_TESTS "构建离线单元测试" ON)
+
 # 设备配置是可扩展的输入集合。CONFIGURE_DEPENDS 使新增或删除型号后 CMake 自动重新配置，
 # 避免在构建脚本中维护单个设备文件名。
 file(GLOB EMASTER_DEVICE_CONFIG_FILES CONFIGURE_DEPENDS
@@ -105,3 +108,9 @@ endif()
 add_subdirectory(src/bus/observation)
 add_subdirectory(tools/observation_selftest)
 add_subdirectory(tools/fingerprint)
+
+# 测试放在最后：它们链接上面的库，顺序反了就成了"目标不存在"。
+if(EMASTER_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
