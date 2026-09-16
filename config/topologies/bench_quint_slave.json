@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "topology_id": "bench-quint-slave",
+  "status": "observed",
+  "slaves": [
+    {
+      "position": 1,
+      "axis_id": "bench_axis_01",
+      "joint_assignment": null,
+      "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"
+    },
+    {
+      "position": 2,
+      "axis_id": "bench_axis_02",
+      "joint_assignment": null,
+      "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"
+    },
+    {
+      "position": 3,
+      "axis_id": "bench_axis_03",
+      "joint_assignment": null,
+      "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"
+    },
+    {
+      "position": 4,
+      "axis_id": "bench_axis_04",
+      "joint_assignment": null,
+      "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"
+    },
+    {
+      "position": 5,
+      "axis_id": "bench_axis_05",
+      "joint_assignment": null,
+      "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1"
+    }
+  ]
+}

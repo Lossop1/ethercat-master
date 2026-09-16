@@ -12,7 +12,7 @@
 # /tmp/<TAG>_outcome.txt，结束时写 /tmp/<TAG>_done 记录退出码，用 tail 观察。
 #
 # 参数（环境变量）：
-#   DEPLOYMENT  部署 ID，默认 orangepi-bench-triple-30deg
+#   DEPLOYMENT  部署 ID，默认 orangepi-bench-quint-30deg（台架现有 5 个从站）
 #   DURATION    往返总时长（秒），默认 600
 #   TRAVERSE    单程耗时（秒），默认 3
 #   DEGREES     单轴位移（输出轴度数），默认 30
@@ -25,7 +25,7 @@
 set -u
 
 REPO=/home/orangepi/ethercat-master
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-triple-30deg}
+DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 DURATION=${DURATION:-600}
 TRAVERSE=${TRAVERSE:-3}
 DEGREES=${DEGREES:-30}
