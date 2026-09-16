@@ -51,7 +51,18 @@ typedef enum
      * 本拍没有写位置目标（例如已进入安全停机、输出被冻结）。此时
      * target_position 保持上一拍的值，**不要当成新目标**。
      */
-    EMASTER_OBSERVATION_AXIS_FLAG_TARGET_UNKNOWN = UINT32_C(1) << 4U
+    EMASTER_OBSERVATION_AXIS_FLAG_TARGET_UNKNOWN = UINT32_C(1) << 4U,
+    /*
+     * 这套 PDO 映射里没有映射速度反馈（606Ch），actual_velocity 不是量测值。
+     *
+     * 为什么必须单独标出来而不是留 0：固定 PDO 集合只映射 6041h/6064h，而动态集合
+     * 额外映射 606Ch/6077h。同一份代码在两种部署下都会跑，缺字段时留 0 会让"这套
+     * 部署不提供速度"和"速度确实是 0"变成同一个值——策略拿它训练就是拿常量当真值。
+     * 这是部署属性，在配置期就已知，所以这里标一次即可，不需要每拍重新判断。
+     */
+    EMASTER_OBSERVATION_AXIS_FLAG_VELOCITY_UNAVAILABLE = UINT32_C(1) << 5U,
+    /* 同理，6077h 力矩反馈未映射。 */
+    EMASTER_OBSERVATION_AXIS_FLAG_TORQUE_UNAVAILABLE = UINT32_C(1) << 6U
 } emaster_observation_axis_flag_t;
 
 /* 帧级标志。 */

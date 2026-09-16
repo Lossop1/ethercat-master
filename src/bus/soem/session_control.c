@@ -280,6 +280,19 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                  : EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED);
             }
             consecutive_deadline_skips = 0U;
+            /*
+             * 观测发布点。位置是刻意选的，四件事都要成立：
+             *
+             * - 在轴解码循环之后：axes[] 里是本拍刚解出来的反馈；
+             * - 在时钟采样之后：与协调器共用同一时基，now_ns/deadline_ns 是这一拍的；
+             * - 在本拍截止时间检查之后：只有成功走完交换的拍才发帧，跳拍的 continue
+             *   在上面，消费者因此从 cycle 缺口里看到真实的断点，而不是被填平；
+             * - 在协调器/安全/输出块之前：不落在周期尾部那段截止关键的路径上，
+             *   也不被周期里最重的部分拖累。
+             *
+             * 开关关闭时这是一次指针判空。见 session_observation.c。
+             */
+            emaster_soem_session_observation_publish(session, now_ns, deadline_ns);
             frame.sequence = session->report->cycle_count;
             frame.deadline_ns = deadline_ns;
             frame.axis_count = session->plan->axis_count;

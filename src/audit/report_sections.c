@@ -1091,6 +1091,32 @@ bool emaster_run_report_write(FILE *stream,
         report->tail_uncovered_max_exchange,
         report->deadline_miss_tail_uncovered_ns) >= 0);
     /*
+     * 观测通道的自证段。enabled 是这一轮 A/B 走的是哪条臂的唯一凭据（与
+     * shutdown_prologue 的 fast_mode/inline_mode 同一个手法）；publish_max_ns 与
+     * publish_over_budget_count 是发布点自身的成本证据——发布在周期线程里，它的开销
+     * 属于控制回路，不该只存在于离线自测的结论里。
+     *
+     * publish_budget_ns 一并写出，是为了让"超过预算几次"这个计数始终可解释：
+     * 阈值是周期/100，换了周期它就该跟着变，而不是留在判据里当常量。
+     */
+    REQUIRE_WRITE(fprintf(
+        stream,
+        "\"observation\":{\"enabled\":%s,\"ring_capacity\":%u"
+        ",\"published_frames\":%" PRIu64
+        ",\"first_publish_exchange\":%" PRIu64
+        ",\"publish_max_ns\":%" PRIu64
+        ",\"publish_max_exchange\":%" PRIu64
+        ",\"publish_budget_ns\":%" PRIu64
+        ",\"publish_over_budget_count\":%" PRIu64 "},",
+        report->observation.enabled ? "true" : "false",
+        (unsigned)report->observation.ring_capacity,
+        report->observation.published_frames,
+        report->observation.first_publish_exchange,
+        report->observation.publish_max_ns,
+        report->observation.publish_max_exchange,
+        report->observation.publish_budget_ns,
+        report->observation.publish_over_budget_count) >= 0);
+    /*
      * 停机段的仪表（缺口为什么是 5～6 ms 而不是 1 ms）：序言分段计时、停机循环逐周期
      * 现场、观测线程的停止相位、各线程调度累计值。mark_* 都是相对序言起点的累计位置，
      * start_valid 为假时全部为 0（"没测到"，不是"耗时为零"）。

@@ -578,6 +578,36 @@ typedef struct
     uint64_t switches;
 } emaster_thread_schedstat_t;
 
+/*
+ * 观测通道的自证段。
+ *
+ * 存在的理由与 shutdown_prologue 里的 fast_mode/inline_mode 完全一样：一轮 A/B 结果
+ * 必须能在报告里自证走的是哪条臂，而不是靠命令行复述或日志。除此之外，这里还留下
+ * "发布这一行到底贵不贵"的直接证据——发布发生在周期线程内，它的成本属于控制回路，
+ * 不该只存在于离线自测的结论里。
+ *
+ * 为什么不记分位数：分位要在实时路径上维护直方图或缓存样本，而周期路径上多一个
+ * 数据结构的代价比多一条比较大得多。取极值 + 超阈值计数回答的是同一个问题（"贵到
+ * 什么程度、超了多少次"），代价是一次比较和一次可能加的加法。台架判据里的分位由
+ * 这两条计数与 published_frames 反推，不需要实时期维护。
+ */
+typedef struct
+{
+    /* 本轮开关是否打开（EMASTER_OBSERVATION）。关闭时其余字段全为 0。 */
+    bool enabled;
+    /* 环形缓冲槽数，= 历史窗口的周期数。 */
+    uint32_t ring_capacity;
+    /* 实际发布出去的帧数。不等于 cycle_count：截止恢复跳发的拍不发帧。 */
+    uint64_t published_frames;
+    uint64_t first_publish_exchange;
+    /* 单次发布（含组帧）的耗时极值与所在交换号。 */
+    uint64_t publish_max_ns;
+    uint64_t publish_max_exchange;
+    /* 阈值 = 周期 / 100，随部署周期伸缩，记下来免得判据随配置漂移。 */
+    uint64_t publish_budget_ns;
+    uint64_t publish_over_budget_count;
+} emaster_observation_report_t;
+
 typedef struct
 {
     emaster_control_session_status_t status;
@@ -697,6 +727,7 @@ typedef struct
     int first_mismatch_wkc;
     /* 首次截止超时对应的周期号（0 = 未出现）。 */
     uint64_t first_deadline_missed_exchange;
+    emaster_observation_report_t observation;
     emaster_shutdown_prologue_t shutdown_prologue;
     emaster_shutdown_cycle_trace_t shutdown_cycles;
     emaster_observer_stop_trace_t observer_stop;

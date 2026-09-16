@@ -100,11 +100,17 @@ static emaster_control_session_status_t allocate_session(emaster_soem_session_t 
         status = EMASTER_CONTROL_SESSION_CONTROLLER_FAILED;
         return status;
     }
+    /*
+     * 观测通道。开关关闭或分配失败时返回 false，会话照常继续——观测是旁路，它的
+     * 缺席不该让控制回路停摆。返回值只用于报告自证（report.observation.enabled）。
+     */
+    (void)emaster_soem_session_observation_open(session);
     return EMASTER_CONTROL_SESSION_OK;
 }
 
 static void release_session(emaster_soem_session_t *session) {
     /* P4.5: 销毁错误环互斥锁 */
+    emaster_soem_session_observation_close(session);
     (void)pthread_mutex_destroy(&session->error_ring_mutex);
     free(session->status_words);
     free(session->motion_axes);

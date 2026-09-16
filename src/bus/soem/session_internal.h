@@ -8,6 +8,7 @@
 #include "emaster/config/error_recovery_config.h"
 #include "emaster/multiaxis/coordinator.h"
 #include "emaster/motion/velocity_profile.h"
+#include "emaster/observation/ring.h"
 #include "emaster/safety/gate.h"
 #include "session_observer.h"
 
@@ -103,7 +104,41 @@ typedef struct {
      * "置标志 → 每周期看一眼 → 回收"三段，中间照常发帧。 */
     volatile bool observer_exited;
     pthread_mutex_t observer_mutex;
+    /*
+     * 观测通道的环形缓冲。开关关闭时为 NULL，周期路径上只有一次指针判空。
+     *
+     * 不在本结构里内联而用指针：缓冲是 256 槽 × 432 B ≈ 108 KiB，而本结构是
+     * emaster_soem_control_session() 的栈局部变量。内联进来会让单个会话的栈占用
+     * 再涨一百多 KB——在默认 8 MB 的主线程栈上不会立刻出事，但这是个没人会再注意到
+     * 的增长。堆上一次分配，生命周期与会话相同。
+     */
+    emaster_observation_ring_t *observation_ring;
+    /* 上一帧的周期号，用于判定本拍相对上一帧是不是跳了拍（CYCLE_GAP）。 */
+    uint64_t observation_last_cycle;
+    bool observation_last_cycle_valid;
 } emaster_soem_session_t;
+
+/*
+ * 建立观测通道的环形缓冲。返回 false 时通道未启用（开关关闭或分配失败），
+ * 会话照常运行——观测是旁路，不能因为它启动失败就让控制回路停摆。
+ */
+bool emaster_soem_session_observation_open(emaster_soem_session_t *session);
+
+/* 释放环形缓冲并把报告字段归位。可重复调用。 */
+void emaster_soem_session_observation_close(emaster_soem_session_t *session);
+
+/*
+ * 发布本拍观测。**周期线程专用**，wait-free、不取锁、不分配。
+ *
+ * 必须在轴解码循环之后调用：此处 axes[] 里的反馈是本拍刚解出来的，而
+ * control_word/target_position 是本拍**之前**由协调器写下的，也就是此刻真正在
+ * 总线上生效的那一份输出。这个配对不是巧合——反馈落在这拍、指令是上一拍算的，
+ * 而上一拍算的指令正好在这一拍驱动着电机。策略要的"看着这个状态做了那个动作"
+ * 就是这个配对；用本拍还没算出来的指令去配本拍的状态反而不成立。
+ */
+void emaster_soem_session_observation_publish(emaster_soem_session_t *session,
+                                              uint64_t now_ns,
+                                              uint64_t deadline_ns);
 
 /*
  * 第 axis_index 个配置轴对应总线上哪个从站（SOEM slavelist 下标，1 基）。
