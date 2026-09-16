@@ -1,0 +1,67 @@
+# 台架证据 2026-09-14：长时运行中驱动器掉出 OP（与停机序言无关的第二个缺陷）
+
+部署 orangepi-bench-triple-30deg，三轴，1 ms 周期，入口为最终场景（套接字 ->
+set_external_target -> 外部目标缓冲区 -> position_target_source -> CSP）。
+两轮的差别只有一处：观测线程是否发邮箱。
+
+## 第 1 轮：观测线程正常（邮箱流量在），255 s
+
+- 外部目标 11678 条（30° 位移 + 240 s 保持，50 Hz），被拒 0 条；位置稳定在
+  662578 / 478985 / 330995（±100 counts 编码器噪声）。
+- 停机序言正常：join 0.661 ms，停机入口与安全停机前三个 AL 坐标全部 8 / 0x0000
+  ——上一个缺陷的修法在本轮成立。
+- 但第一个安全停机帧即 WKC 不符：交换号 255423，三轴 AL=20 / 0x001A。
+- 报告（orangepi-triple-30deg-latest.json，196433685 字节，已被第 2 轮覆盖）：
+  - sm2_diagnostic（驱动器 1C32，输出 SM）：三轴 sync_error=true，
+    sm_event_missed=6 / 5 / 6；cycle_time_too_small=0；shift_time_too_short=0
+  - sm3_diagnostic（1C33，输入 SM）：轴1/3 sync_error=false、missed=0；轴2 missed=5
+  - timing：samples=255423，deadline_missed_count=1，sync0_late_count=0，
+    wkc_mismatch_count=1，first_sync0_late_exchange=0
+  - diagnostic_preop_reached=false（驱动器已掉出 OP），但因 safe_op_reached=true，
+    停机 SDO 诊断仍然执行成功——上一轮放宽的判据在这里起作用
+  - safe_output_sent=true / safe_state_reached=true / status_code=0 / control_state=6
+    （注意：safe_state_reached 为真只说明状态字读到了"未使能"，驱动器实际已在
+    SAFE-OP，报告里要靠 shutdown_al=20/26 才能看出掉出 OP）
+  - omitted_pdo_samples=773798（审计容量耗尽，后半程样本全部没留下）
+
+## 第 2 轮（A/B：观测线程保留但不发邮箱），243.7 s
+
+临时改动（未提交，跑完已 git checkout 还原）：observer_sdo_read 直接 return 0，
+线程、互斥、50 ms 循环照旧，只去掉 21 次邮箱往返/轮。重建后同一部署同一入口。
+
+- 客户端被服务端断开于 t+230 s（主站自己先故障退出）：发出 11394 条目标，被拒 0 条。
+- 交换号 243693：**只有轴 1** 掉出 OP（AL=20 / 0x001A），轴 2/3 保持 8 / 0x0000，
+  WKC=7（期望 9；一个从站掉出 OP 少计 2）。轴 1 正是 DC 参考从站
+  （dc.reference_slave_position=1）。
+- 报告：
+  - sm2_diagnostic：轴1 sync_error=true / sm_event_missed=6；轴2 与轴3 全 0 全 false
+  - sm3_diagnostic：三轴全部 sync_error=false / missed=0
+  - timing：samples=243697，deadline_missed_count=1，sync0_late_count=8/7/7 且
+    first_sync0_late_exchange=1、last_sync0_late_exchange=8/7/7 ——**全部迟到样本都在
+    前 8 个周期**，即启动瞬态；运行期间没有一帧被判迟到
+  - first_cycle_failure：status_code=16（WKC_MISMATCH），phase=cyclic_operation，
+    exchange=243697，wkc=7
+  - first_runtime_failure：三轴状态字 0x1237（Operation Enabled）、
+    fault_present=false ——主站眼里的驱动器没有任何故障
+  - 通信不可用（WKC 不符）→ 停机路径整个不执行：safe_output_sent=false、
+    safe_state_reached=false、停止请求=失败（客户端还在发目标时主站就退出了）
+
+## 两轮合起来说明什么
+
+1. 邮箱流量不是必要条件：第 2 轮一点邮箱流量都没有，轴 1 仍然累计 6 次 SM2 事件丢失
+   并掉出 OP。邮箱流量只是让轴 2/3 也一起掉出（第 1 轮三轴同为 5~6）。
+2. 掉出 OP 的触发量级是一致的：约 6 次 SM2 事件丢失 → AL 0x1A，两轮都在运行
+   ~240~255 s 时发生，丢失速率约 1 次 / 40 s（占 243697 个周期的 0.002%）。
+3. 主站的时序判据认为一切正常：运行期间 sync0_late_count=0、deadline_missed_count=1。
+   即"主站算出的裕量为正"与"驱动器记到 6 次 SM 事件丢失"同时成立——主站的裕量模型
+   没有覆盖驱动器实际使用的判据（这点之前把 4/4/5 个迟到样本当成肇因时也踩过一次）。
+4. 掉出 OP 之后主站的反应是致命的：WKC 不符连续 5 次触发策略锁存 → 会话以
+   WKC_MISMATCH 结束 → 停机路径因"通信不可用"整段跳过 → 驱动器一个停用帧都收不到。
+   这是与第一个缺陷独立的第二条待修路径。
+
+## 复现方法
+
+- 日志：run_long_ab_no_mailbox.log（第 2 轮，96 万字节）
+- 第 1 轮的报告与日志在启动第 2 轮时被覆盖，上面第 1 轮的数值来自当场抽取的输出。
+- 抽取脚本：scripts/_tmp_extract_report.py（上传到 Pi 的 /tmp/extract_report.py），
+  报告 100~200 MB 且单行，本地 grep 会超时，必须在 Pi 上就地抽。

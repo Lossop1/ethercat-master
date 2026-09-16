@@ -1,0 +1,101 @@
+加两处仪表后复跑：掉出 OP 发生在周期运行期，且帧异常在前、驱动器掉出在后
+================================================================================
+
+运行条件
+  日期/部署：2026-09-14，orangepi-bench-triple-30deg（三轴 30°，CSP 1 ms，DC SYNC0 位移 250 µs）
+  入口与流向：最终场景入口 —— /tmp/motion_client.py -> 命令套接字 -> set_external_target
+              -> 外部目标缓冲 -> 周期回调 position_target_source -> CSP 目标
+  客户端：--degrees -30 --duration 5 --rate 50 --hold 660；共发出 20036 条目标，被拒 0 条
+  本次代码：commit 664deb1（观测线程 1C32/1C33 低频探针 + 停机序言缺口计量 + 去掉每轮 [P4.3] 打印）
+  时长：客户端 t+0 .. t+415 s 正常报告，随后 "发送中断：服务端关闭了连接"（主站先失败）
+  报告副本：Pi 上 runtime/reports/archive/20260914-run424144-wkc-dropout.json（196,998,327 字节）
+  日志：同目录 run_424s_wkc_dropout.log（1,408,747 字节，已下载）
+
+一、主站侧的终局数据
+  cycle_count = 424144（last_exchange = 424144），expected_wkc = 9，actual_wkc = 5
+  wkc_error_count = 5，wkc_max_consecutive_errors = 5  → 5 次不符**全部是连续的末尾 5 个周期**
+    （424140..424144），此前 424139 个周期一次 WKC 不符都没有
+  sync0_late_count = 0，deadline_missed_count = 1（每轴）
+  status = 16（WKC_MISMATCH），fault_latched = true，control_state = 7（FAULTED）
+  first_cycle_failure：exchange = 424144，phase = cyclic_operation，wkc = 5
+
+二、因果顺序：帧异常在前，驱动器掉出在后
+  交换号 424140（连续段第一个不符）当下做了一次**新鲜**的 ecx_readstate
+  （session_exchange.c:174-182，只在连续段首次触发）：
+      [WKC] 首次不符 交换号=424140 轴1: AL state=8, status_code=0x0000
+      [WKC] 首次不符 交换号=424140 轴2: AL state=8, status_code=0x0000
+      [WKC] 首次不符 交换号=424140 轴3: AL state=8, status_code=0x0000
+  三轴此刻全在 OP，而这一帧的 WKC 已经不足 → **先是过程数据帧出了问题**（WKC 少计），
+  不是"驱动器先掉出 OP 导致 WKC 少计"。AL 状态寄存器在状态转换开始时就会改写，所以
+  这个读取若发生在掉出之后必然读到 20 / 0x1A。
+  此后几毫秒内（周期回路在 424144 退出，观测线程 join 0.940 ms）：
+      [SHUTDOWN] 停机入口 轴1: AL state=20, status_code=0x001A
+      [SHUTDOWN] 停机入口 轴2: AL state=8,  status_code=0x0000
+      [SHUTDOWN] 停机入口 轴3: AL state=20, status_code=0x001A
+      安全停机前快照与之逐字相同
+  即轴 1、轴 3 在这 ~5 个周期（≈5 ms）内掉出 OP，轴 2 全程留在 OP。WKC 5 = 轴 2 贡献 3 +
+  轴 1/3 各贡献 1，与"两轴掉出"一致（前一轮三轴全掉时 WKC = 3）。
+
+三、仪表一：运行期 1C32/1C33 探针（本次新增）
+  每轴 probe_count = 92（1C32 与 1C33 各读 4 个子索引，成功才计数），三轴一致：
+      sm2: {first_error_exchange: 0, first_error_missed: 0, first_error_sync_error: false,
+            last_missed: 0, last_sync_error: false}
+      sm3: {first_error_exchange: 0, first_error_missed: 0, first_error_sync_error: false,
+            last_missed: 0, last_sync_error: false}
+  → **整个运行期（含末次探针）三轴两个 SM 的同步违例计数器全部为零**，日志里一条
+    "运行期首次读到 1C32/1C33 非零"都没打印。探针间隔 50 轮（约 5 s，92 轮 × 50 × 约 92 ms
+    与 424 s 运行时长吻合），因此末次探针落在失败前约 5 s 之内。
+  停机后按老路径再读一次（退出 OP 之后的快照）：
+      sm2_diagnostic  轴1: sync_error=true, sm_event_missed=6   ← 与轴 1 掉出对应
+      sm2_diagnostic  轴2: sync_error=false, sm_event_missed=0  ← 唯一留在 OP 的轴
+      sm2_diagnostic  轴3: sync_error=true, sm_event_missed=6
+      sm3_diagnostic  三轴全部 sync_error=false, missed=0
+  结论：**6 次 SM2 事件丢失不是运行期慢慢累积的**——运行期每一轮读到都是 0，计数器是在
+  失败瞬间的 ≤5 s 窗口内从 0 跳到 6 的。计数从 0 到 6（1 ms 周期下就是 6 个周期）与掉出
+  同时发生，量级和 WKC 连续不符的 5 个周期一致。探针的分辨率（约 5 s）不足以把窗口再收窄，
+  但它足以否掉"运行期就已经带着同步错误"这一支。
+
+四、仪表二：停机序言缺口
+  shutdown_prologue_gap_ns = 0（= 未测到），shutdown_observer_join_ns = 939,877 ns（0.940 ms）
+  缺口为 0 不是"缺口很小"，而是**这条路径上一个安全停机帧都没发**：status 在停机入口是
+  WKC_MISMATCH，communication_usable 判定为 false，stop_process_data 整段跳过。
+  报告里对应 safe_output_sent = false、safe_state_reached = false，日志对应
+  "停机阶段未发出安全输出（通信不可用），不能据此认为驱动器已停用。"
+  本轮因此无法、也不需要回答序言缺口——事件发生在序言之前。
+
+五、与 683 s 那轮的对照（同一部署，同一入口）
+  项目                    683s 轮（无探针）        本次 424s 轮（有探针）
+  cycle_count             683748                   424144
+  round_trip 最大         1,076,344 ns             1,076,863 ns
+  send_lateness 最大      101,685 ns               103,292 ns
+  sync0_margin 最小       64,946 ns                46,432 ns
+  deadline_missed_count   3                        1
+  wkc_error_count         6（1 次孤立 + 末尾 5）    5（全部末尾连续）
+  掉出 OP 的时机          安全停机内部（约 68 周期后）  周期运行期（424140 .. 424144）
+  停机路径                safe_output_sent=true     safe_output_sent=false（通信判不可用）
+  两次的 round_trip 极值几乎相同（1.0763/1.0769 ms）→ 单个周期往返超 1 ms 是两轮的常态
+  离群值（两轮各出现一次），不是本轮的判别因素；3 次 deadline_missed 的那轮反而没在运行期掉出。
+  两轮唯一共有、且与掉出同时出现的信号是：驱动器 1C32 的 sm_event_missed = 6 与 sync_error = true。
+
+六、本轮把问题收敛到什么程度
+  已确定：
+  1. 掉出 OP 可以发生在**周期运行期**，不必有停机序言参与（本轮之前只在停机序言里见过）。
+  2. 触发序列是"过程数据帧异常（WKC 少计，三轴仍在 OP）→ 相关轴的 SM2 事件丢失计数在数毫秒内
+     冲到 6 → 驱动器置 AL 0x1A 掉到 SAFE-OP → WKC 进一步少计 → 主站连续 5 次不符终止会话"。
+     即 WKC 不符是链路侧的原因、驱动器掉出是链路侧的后果，不是"驱动器先掉出导致 WKC 少计"。
+  3. 探针证实运行期没有缓慢劣化：计数器在整个 424 s 里读到都是 0。
+  待查：
+  1. **是什么让那一帧的数个周期没有到达驱动器 SM2**：主站侧只看到 WKC 少计，报告里
+     round_trip/send_lateness 的极值没有交换号坐标（只有 min/max 与分布桶），无法判断异常
+     是否落在 424140 附近；也没有"丢帧/短帧发生在哪个周期的哪一步"的亚步骤计时。
+  2. 驱动器侧 SM2 事件监督的阈值与判据（6 次是否为阈值；是否在计数达阈值时立即掉出）仍无实测。
+  3. 探针本身每 50 轮给三轴增加 24 次邮箱往返。前一轮 A/B 显示邮箱流量会加重 SM2 事件丢失，
+     因此本轮无法完全排除探针参与了触发；但 683 s 轮（无探针）同样以这套序列收尾，
+     现象不是探针造出来的。
+
+七、证据清单
+  reports/_triple_fix/run_424s_wkc_dropout.log                    本次主站日志（全）
+  reports/_triple_fix/evidence_683s_run.txt                       683.7 s 轮证据
+  reports/_triple_fix/run_683s_no_dropout.log                     683.7 s 轮日志
+  Pi: runtime/reports/archive/20260914-run424144-wkc-dropout.json  本次报告（197 MB）
+  Pi: runtime/reports/archive/20260914-run683748-safestop-dropout.json  683.7 s 轮报告

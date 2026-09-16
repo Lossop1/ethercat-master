@@ -15,3 +15,10 @@ compile_commands.json
 
 # 供应商原始资料属于本地受控输入，当前没有再分发授权记录。
 /docs/lz-joint/
+
+# 台架产物的落点：报告本体（可达 265 MB）、归档与原始日志都不进仓库。
+# 用 "_*/*" 而不是 "_*/"：写成后者的形式会把目录自身排除掉，
+# 而 gitignore 不允许对被排除目录里的文件做反向放行，evidence_*.txt 就再也加不进来。
+/reports/_*/*
+!/reports/_*/evidence_*.txt
+/reports/**/*.log

@@ -1,0 +1,86 @@
+# 台架证据 2026-09-14：683.7 s 长时运行（运行期无掉出 OP），掉出发生在安全停机阶段内部
+
+部署 orangepi-bench-triple-30deg，三轴，1 ms 周期，入口为最终场景
+（套接字 -> set_external_target -> 外部目标缓冲区 -> position_target_source -> CSP）。
+客户端：-30° 用 5 s 走完，随后保持 590 s，50 Hz 重发；`发出 28362 条目标，被拒 0 条`，
+18:05:01 正常退出（退出码 0）。18:06 人为 SIGINT 停机。
+
+本次运行的目的（上一会话决定）：查"长时运行掉出 OP"是否与时长强相关。
+
+## 一、运行期：683,748 周期 / 683.7 s，没有掉出 OP
+
+- 停机入口与安全停机前两次 AL 快照，三轴全部 `8 / 0x0000`——周期运行结束时三个驱动器都在 OP。
+- timing：`samples=683748`，`sync0_late_count=0`，`deadline_missed_count=3`，
+  `first/last_sync0_late_exchange=0`。
+- 运行期只有一次孤立 WKC 不符：交换号 304234，三轴同时快照 `AL state=8, status_code=0x0000`
+  （驱动器都在 OP，属单帧丢失），低于策略阈值 5，被容错策略恢复。
+  全轮 `wkc_error_count=6`、`wkc_max_consecutive_errors=5`（另外 5 次是结尾那一串）。
+- 观测线程读取次数 7440/轴且连续（21 次邮箱往返/轮），电流/电压/温度取值正常。
+- **结论（时长特征）**：683.7 s 没有出现掉出 OP，而此前两轮分别在 240 s、255 s 掉了。
+  所以"约 4 分钟"不是固定时间阈值，也不会随运行时长线性累积；触发是稀有的随机事件
+  （三轮合计：1 次 / 约 687 s 运行 / 3 轴 = 远低于"每 40 s 一次"的旧估计）。
+
+## 二、停机期：序言已修好，掉出落在安全停机阶段之内
+
+时间坐标（两次 AL 快照 + 审计阶段样本数）：
+
+1. `[SHUTDOWN] 停机入口`：三轴 `8 / 0x0000`。
+2. `停止观测线程耗时 1.217 ms`（有界；旧代码路径是上百毫秒）。
+3. `[SHUTDOWN] 安全停机前`：三轴仍为 `8 / 0x0000`。
+   → **停机序言没有打掉驱动器**，上一个缺陷的修法在 11.4 分钟后依然成立。
+4. 安全停机随后运行约 72 个周期（`safe_stop` 审计样本 73 条，该阶段已解封容量）内 WKC 一直是 9
+   ——即前约 68 个周期三个驱动器仍在 OP、过程数据正常交换。
+5. 这 68 个周期里主站写出的控制字是 `0x0007`（Disable Operation），而驱动器一直回报状态字
+   `0x1237`（Operation Enabled；bit10 目标到达=0）——**驱动器没有确认这次状态切换**。
+6. 交换号 683744 开始新一串 WKC 不符，三轴**同时** `AL state=20, status_code=0x001A`
+   （WKC 掉到 3 = 三个从站全部掉出 OP）。
+7. 连续 5 次不符 → 交换函数在 683748 返回 WKC_MISMATCH → `stop_process_data` 返回 false。
+
+报告字段：
+- `safe_output_sent=true`、`safe_state_reached=false`、`result.status_code=26`（SAFE_STOP_FAILED）、
+  `fault_latched=true`、`restore_init_succeeded=true`、`sync0_disabled=true`、
+  `actual_wkc=3`、`control_state=7`。
+- `first_cycle_failure`：`status_code=16`（WKC_MISMATCH）、`phase=safe_stop`、`exchange=683748`、`wkc=3`。
+- `first_runtime_failure`：`status_code=16`、`cycle_count=exchange=683748`、
+  三轴 `control_word=0x0007`、`status_word=0x1237`、`observed_state=5`、`state_known=true`、
+  `fault_present=false`（主站眼里驱动器没有故障）。
+- 停机后 AL 快照：三轴 `state=20, status_code=26`（0x1A）。
+
+注意 `status_word=0x1237` 是**最后一周期**的过程数据解码值（console 的 6041/6040 两列取自
+`axis->status_word` / `axis->control_word`，不是 SDO 读回）。
+
+## 三、驱动器侧计数器（1C32/1C33）——只在停机后读到，时序不明
+
+- `sm2_diagnostic`（1C32，输出 SM）：三轴 `read_succeeded=true`、`sync_error=true`、
+  `sm_event_missed=6`、`cycle_time_too_small=0`、`shift_time_too_short=0`。
+- `sm3_diagnostic`（1C33，输入 SM）：三轴全清洁（`sync_error=false`、`missed=0`）。
+- 这两个计数器**整个运行期一次都没读**，只在最终诊断（掉出 OP 之后）读了一次，
+  所以本轮无法区分这 6 次丢失是发生在运行期、停机序言、还是安全停机阶段之内。
+
+## 四、四轮放在一起
+
+| 运行 | 时长 | 掉出 OP | 1C32 sync_error / missed |
+| --- | --- | --- | --- |
+| 39,835 周期（有界 join 复验） | ~40 s | 无；安全停机成功，`safe_state_reached=true` | false / 0 |
+| 255 s（观测线程正常） | 255 s | 第一个安全停机帧之前，三轴 AL=20/0x1A | true / 6、5、6 |
+| 243.7 s（A/B：不发邮箱） | 243.7 s | 交换 243693，只有轴 1（DC 参考从站） | true / 6（轴1），0，0 |
+| 683.7 s（本轮） | 683.7 s | 安全停机开始后约 68 个周期，三轴同时 | true / 6、6、6 |
+
+观察：凡是最终诊断读到 `sync_error=true` 的那一轮，停机都失败；唯一读到全零的那一轮停机成功。
+但计数器是事后读的，这条相关性还不能当因果。
+
+## 五、下一步需要的两处仪表（都是小改动）
+
+1. **运行期定期读 1C32/1C33**（观测线程里低频率读，例如每 10 轮一次），把"首次非零"的时刻
+   写进报告。这能判定驱动器是在运行期就已经带上同步错误（于是"静置后不执行 607A"这类现象
+   可能是"仍在 OP 但忽略输出"，而不只是掉出 SAFE-OP），还是丢失只出现在停机瞬间。
+2. **记录整个停机序言的过程数据缺口**（最后一条周期帧的发送时刻 → 第一条安全停机帧的发送时刻），
+   不只记观测线程 join。join 现在是 1.2 ms，但序言里还有两次 `ecx_readstate` 快照和观测线程
+   收尾；驱动器的同步容差到底是多少我们并不知道，而现在只量了其中一个窗口。
+
+## 六、其它现场数字
+
+- 报告 197,064,511 字节；`omitted_pdo_samples=11,834,227`（审计容量在运行早期就耗尽；
+  安全停机阶段的样本是靠那里解封容量才留下的，73 条）。
+- 证据文件：`run_683s_no_dropout.log`（本地，2.2 MB）；
+  报告副本在 Pi 上 `runtime/reports/archive/20260914-run683748-safestop-dropout.json`。

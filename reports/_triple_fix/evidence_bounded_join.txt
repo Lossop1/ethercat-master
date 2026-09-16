@@ -1,0 +1,83 @@
+# 台架证据 2026-09-14：停机序言有界阻塞修复后的三轴 30° 运行
+# 报告 orangepi-triple-30deg-latest.json（62433688 字节），由 /tmp/extract_report.py 就地抽取
+
+报告 /home/orangepi/ethercat-master/runtime/reports/orangepi-triple-30deg-latest.json 大小 62433688 字节
+
+== 停机后 AL 快照 (3) ==
+  "shutdown_al":{"state":8,"status_code":0}
+  "shutdown_al":{"state":8,"status_code":0}
+  "shutdown_al":{"state":8,"status_code":0}
+
+== 停机入口 AL 快照 (3) ==
+  "shutdown_al_entry":{"state":8,"status_code":0}
+  "shutdown_al_entry":{"state":8,"status_code":0}
+  "shutdown_al_entry":{"state":8,"status_code":0}
+
+== 安全停机前 AL 快照 (3) ==
+  "shutdown_al_pre_stop":{"state":8,"status_code":0}
+  "shutdown_al_pre_stop":{"state":8,"status_code":0}
+  "shutdown_al_pre_stop":{"state":8,"status_code":0}
+
+== 停止观测线程耗时 ns (1) ==
+  "shutdown_observer_join_ns":64329
+
+== SM2 同步诊断（驱动器 1C32） (3) ==
+  "sm2_diagnostic":{"read_succeeded":true,"sync_error":false,"sm_event_missed":0,"cycle_time_too_small":0,"shift_time_too_short":0}
+  "sm2_diagnostic":{"read_succeeded":true,"sync_error":false,"sm_event_missed":0,"cycle_time_too_small":0,"shift_time_too_short":0}
+  "sm2_diagnostic":{"read_succeeded":true,"sync_error":false,"sm_event_missed":0,"cycle_time_too_small":0,"shift_time_too_short":0}
+
+== SM3 同步诊断（驱动器 1C33） (3) ==
+  "sm3_diagnostic":{"read_succeeded":true,"sync_error":false,"sm_event_missed":0,"cycle_time_too_small":0,"shift_time_too_short":0}
+  "sm3_diagnostic":{"read_succeeded":true,"sync_error":false,"sm_event_missed":0,"cycle_time_too_small":0,"shift_time_too_short":0}
+  "sm3_diagnostic":{"read_succeeded":true,"sync_error":false,"sm_event_missed":0,"cycle_time_too_small":0,"shift_time_too_short":0}
+"status_code":\d+                        ['"status_code":0', '"status_code":0', '"status_code":0', '"status_code":0', '"status_code":0', '"status_code":0']
+"control_state":\d+                      ['"control_state":6']
+"safe_output_sent":\w+                   ['"safe_output_sent":true']
+"safe_state_reached":\w+                 ['"safe_state_reached":true']
+"diagnostic_preop_reached":\w+           ['"diagnostic_preop_reached":true']
+"restore_init_succeeded":\w+             ['"restore_init_succeeded":true']
+"sync0_disabled":\w+                     ['"sync0_disabled":true']
+"wkc_error_count":\d+                    ['"wkc_error_count":1']
+"wkc_max_consecutive_errors":\d+         ['"wkc_max_consecutive_errors":1']
+"cycle_count":\d+                        ['"cycle_count":39835']
+"expected_wkc":\d+                       ['"expected_wkc":9']
+"actual_wkc":-?\d+                       ['"actual_wkc":9']
+"omitted_pdo_samples":\d+                ['"omitted_pdo_samples":0']
+"all_axes_enabled_reached":\w+           ['"all_axes_enabled_reached":true']
+"op_reached":\w+                         ['"op_reached":true']
+"safe_op_reached":\w+                    ['"safe_op_reached":true']
+"motion_completed":\w+                   ['"motion_completed":false']
+"cycle_deadline_missed":\w+              ['"cycle_deadline_missed":false']
+
+== first_cycle_failure ==
+  null
+
+== 审计阶段计数 ==
+  preop_configuration      93
+  safeop_initialization    99
+  operation_request        36
+  cyclic_operation         182759
+  safe_stop                53
+  final_diagnostic         6
+
+== 每轴时序统计 ==
+  "timing":{"samples":39835,"host_time_samples":39835,"dc_time_samples":39835,"wkc_mismatch_count":1,"deadline_missed_count":0,"first_exchange":1,"last_exchange":39835,"last_scheduled_send_ns":25845787146254,"last_host_send_start_ns":25845787150332,"last_host_send_end_ns":25845787152332,"last_host_receive_end_ns":25845787427635,"last_dc_time_ns":842693878168049700,"ranges":{"send_duration_ns":{"present":true,"min":1340,"max":17069}
+  "timing":{"samples":39835,"host_time_samples":39835,"dc_time_samples":39835,"wkc_mismatch_count":1,"deadline_missed_count":0,"first_exchange":1,"last_exchange":39835,"last_scheduled_send_ns":25845787146254,"last_host_send_start_ns":25845787150332,"last_host_send_end_ns":25845787152332,"last_host_receive_end_ns":25845787427635,"last_dc_time_ns":842693878168049700,"ranges":{"send_duration_ns":{"present":true,"min":1340,"max":17069}
+  "timing":{"samples":39835,"host_time_samples":39835,"dc_time_samples":39835,"wkc_mismatch_count":1,"deadline_missed_count":0,"first_exchange":1,"last_exchange":39835,"last_scheduled_send_ns":25845787146254,"last_host_send_start_ns":25845787150332,"last_host_send_end_ns":25845787152332,"last_host_receive_end_ns":25845787427635,"last_dc_time_ns":842693878168049700,"ranges":{"send_duration_ns":{"present":true,"min":1340,"max":17069}
+
+=== 停机相关日志 ===
+3491:[WKC] 首次不符 交换号=18312 轴1: AL state=8, status_code=0x0000
+3492:[WKC] 首次不符 交换号=18312 轴2: AL state=8, status_code=0x0000
+3493:[WKC] 首次不符 交换号=18312 轴3: AL state=8, status_code=0x0000
+3494:[SHUTDOWN] 停机入口 轴1: AL state=8, status_code=0x0000
+3495:[SHUTDOWN] 停机入口 轴2: AL state=8, status_code=0x0000
+3496:[SHUTDOWN] 停机入口 轴3: AL state=8, status_code=0x0000
+3497:[SHUTDOWN] 停止观测线程耗时 0.064 ms（该窗口内不发送过程数据）
+3498:[SHUTDOWN] 安全停机前 轴1: AL state=8, status_code=0x0000
+3499:[SHUTDOWN] 安全停机前 轴2: AL state=8, status_code=0x0000
+3500:[SHUTDOWN] 安全停机前 轴3: AL state=8, status_code=0x0000
+
+=== 末行汇总 ===
+总线状态：SAFE-OP=通过，OP=通过，全部运行使能到达=通过，运动开始=通过，运动完成=失败，WKC=期望 9/最后交换 9，周期数=39835，停止请求=通过，安全输出=通过，停用确认=通过，Sync0关闭=通过，恢复INIT=通过
+CiA 402 周期控制会话已安全停止并恢复 INIT。
+运行配置与通信审计报告已保存：runtime/reports/orangepi-triple-30deg-latest.json
