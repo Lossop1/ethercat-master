@@ -39,6 +39,8 @@ OUT=/tmp/${TAG}_outcome.txt
 DONE=/tmp/${TAG}_done
 CLIENT_LOG=/tmp/${TAG}_client.log
 STAMP=$(date '+%Y%m%d-%H%M%S')
+# 归档挑选要用：只认这次运行开始之后才写出来的归档，见下面的收尾段。
+START_EPOCH=$(date +%s)
 
 # 报告路径从部署配置里读，避免换部署时忘了同步（四轴用的就是另一个路径）。
 # 按 deployment_id 找文件，不能按文件名猜：文件名用下划线，ID 用连字符。
@@ -156,10 +158,31 @@ else
     echo "主站已自行退出"
 fi
 
-ARCHIVE=${REPO}/runtime/reports/archive/${STAMP}-run-${TAG}.json
-if [ -f "$REPORT" ]; then
-    cp "$REPORT" "$ARCHIVE"
-    echo "报告归档：$ARCHIVE ($(stat -c %s "$ARCHIVE") 字节)"
+# 归档不在这里做：主站 publish 时会自己留一份历史副本（硬链接，名字是
+# <报告主干>-<UTC>.json，保留份数由部署的 report_archive_keep 决定）。
+# 脚本只把本次运行那一份找出来、把 TAG 补进名字。
+#
+# 两件事各自都不能省：
+#   找"本次那一份"——老的写法是 cp "$REPORT"，只要报告存在就拷。主站启动失败
+#   时 $REPORT 是上一轮留下的旧文件，于是这一轮会把上一轮的报告当成本轮产物
+#   归档，时间和内容都对不上。改成按 mtime 过滤（严格晚于脚本启动）之后，
+#   这种误认不可能发生。
+#   补 TAG——同一部署的多次台架运行（冒烟/长跑/换参数）只靠 UTC 时间戳分不出
+#   来是哪一个。TAG 加在时间戳之后，归档名的前缀仍是报告主干，主站的削旧照样
+#   认得出它。
+ARCHIVE_DIR=$(dirname "$REPORT")/archive
+STEM=$(basename "$REPORT" .json)
+FRESH=$(find "$ARCHIVE_DIR" -maxdepth 1 -name "${STEM}-*.json" \
+    -newermt "@$START_EPOCH" -printf '%f\n' 2>/dev/null | sort | tail -1)
+if [ -n "$FRESH" ]; then
+    TAGGED="${FRESH%.json}-${TAG}.json"
+    if mv "$ARCHIVE_DIR/$FRESH" "$ARCHIVE_DIR/$TAGGED" 2>/dev/null; then
+        echo "报告归档：$ARCHIVE_DIR/$TAGGED ($(stat -c %s "$ARCHIVE_DIR/$TAGGED") 字节)"
+    else
+        echo "报告归档：$ARCHIVE_DIR/$FRESH（补 TAG 失败，用主站原名；文件本身没问题）"
+    fi
+elif [ -f "$REPORT" ]; then
+    echo "警告：报告在但找不到本次运行的归档（$ARCHIVE_DIR/${STEM}-*.json），保留份数可能为 0"
 else
     echo "警告：报告未生成：$REPORT"
 fi
