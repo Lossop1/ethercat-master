@@ -2,6 +2,8 @@
 
 #include "session_internal.h"
 
+#include "emaster/bus/command_socket_path.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -295,10 +297,18 @@ emaster_control_session_status_t emaster_soem_control_session(
 
     /* 创建实时命令服务器：允许运行期间接收外部命令 */
     {
-        char socket_path[256];
-        (void)snprintf(socket_path, sizeof(socket_path), "/tmp/emaster-%s.sock",
-                       plan->deployment->deployment_id);
-        session->command_server = emaster_command_server_create(socket_path);
+        /* 路径只有一个构造点（command_socket_path.h），CLI 工具用的是同一个函数。
+         * 会话是唯一在这里建服务器的；main 那边不再另建一个——两个服务器绑同一路径
+         * 时，后建的那个会 unlink 掉前者的套接字文件，先建的从此收不到任何连接。 */
+        char socket_path[EMASTER_SOCKET_PATH_CAPACITY];
+
+        if (!emaster_command_socket_path(plan->deployment->deployment_id,
+                                         socket_path, sizeof(socket_path)))
+        {
+            socket_path[0] = '\0';
+        }
+        session->command_server =
+            socket_path[0] != '\0' ? emaster_command_server_create(socket_path) : NULL;
         if (session->command_server != NULL) {
             fprintf(stdout, "命令服务器已启动：%s\n", socket_path);
             (void)fflush(stdout);

@@ -103,6 +103,75 @@ def pdo_set_values(pdo_set: dict[str, Any], profile_id: str) -> dict[str, object
     }
 
 
+TELEMETRY_TYPE_VALUES = {
+    "u8": "EMASTER_TELEMETRY_TYPE_U8",
+    "i8": "EMASTER_TELEMETRY_TYPE_I8",
+    "u16": "EMASTER_TELEMETRY_TYPE_U16",
+    "i16": "EMASTER_TELEMETRY_TYPE_I16",
+    "u32": "EMASTER_TELEMETRY_TYPE_U32",
+    "i32": "EMASTER_TELEMETRY_TYPE_I32",
+}
+
+TELEMETRY_SEMANTIC_VALUES = {
+    "none": "EMASTER_TELEMETRY_NONE",
+    "actual_current": "EMASTER_TELEMETRY_ACTUAL_CURRENT",
+    "error_code": "EMASTER_TELEMETRY_ERROR_CODE",
+    "bus_voltage": "EMASTER_TELEMETRY_BUS_VOLTAGE",
+    "mosfet_temperature": "EMASTER_TELEMETRY_MOSFET_TEMPERATURE",
+    "motor_temperature": "EMASTER_TELEMETRY_MOTOR_TEMPERATURE",
+    "actual_velocity": "EMASTER_TELEMETRY_ACTUAL_VELOCITY",
+    "target_velocity": "EMASTER_TELEMETRY_TARGET_VELOCITY",
+    "extended_error_code": "EMASTER_TELEMETRY_EXTENDED_ERROR_CODE",
+    "servo_error_code": "EMASTER_TELEMETRY_SERVO_ERROR_CODE",
+}
+
+
+def slow_telemetry_values(document: dict[str, Any], profile_id: str) -> list[dict[str, object]]:
+    """提取可选的慢速遥测对象表；缺省表示该设备不声明遥测对象，生成 NULL。"""
+    entries = document.get("slow_telemetry")
+    if entries is None:
+        return []
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"设备 {profile_id} 的 slow_telemetry 必须是非空数组")
+    values = []
+    names: set[str] = set()
+    addresses: set[tuple[int, int]] = set()
+    for ordinal, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条必须是对象")
+        kind = f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条"
+        name = required_string(entry, "name", kind)
+        index = parse_unsigned(entry.get("index"), f"{kind} index", 0xFFFF)
+        subindex = entry.get("subindex")
+        if not isinstance(subindex, int) or isinstance(subindex, bool) or not 0 <= subindex <= 0xFF:
+            raise ValueError(f"{kind} subindex 超出范围")
+        telemetry_type = entry.get("type")
+        if telemetry_type not in TELEMETRY_TYPE_VALUES:
+            raise ValueError(f"{kind} 类型无效")
+        semantic = entry.get("semantic")
+        if semantic not in TELEMETRY_SEMANTIC_VALUES:
+            raise ValueError(f"{kind} 语义无效")
+        unit = entry.get("unit")
+        if not isinstance(unit, str):
+            raise ValueError(f"{kind} unit 必须是字符串")
+        address = (index, subindex)
+        if name in names or address in addresses:
+            raise ValueError(f"{kind} 名称或地址重复")
+        names.add(name)
+        addresses.add(address)
+        values.append(
+            {
+                "name": c_string(name),
+                "index": index,
+                "subindex": subindex,
+                "type": TELEMETRY_TYPE_VALUES[telemetry_type],
+                "semantic": TELEMETRY_SEMANTIC_VALUES[semantic],
+                "unit": c_string(unit),
+            }
+        )
+    return values
+
+
 def profile_values(document: dict[str, Any]) -> dict[str, object]:
     """提取设备事实，并保留全部 PDO 方案供运行方案选择。"""
     profile_id = required_string(document, "profile_id", "设备配置")
@@ -150,6 +219,7 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
         else "false",
         "safe_stop_status_mask": safe_stop_status_mask,
         "safe_stop_status_value": safe_stop_status_value,
+        "slow_telemetry": slow_telemetry_values(document, profile_id),
     }
 
 
@@ -220,6 +290,16 @@ def pdo_set_initializer(pdo_set: dict[str, object], profile_ordinal: int, pdo_se
 
 def profile_initializer(values: dict[str, object], ordinal: int) -> str:
     """生成一个设备事实目录结构体初始化器。"""
+    if values["slow_telemetry"]:
+        telemetry_initializer = (
+            f"        .slow_telemetry = profile_{ordinal}_slow_telemetry,\n"
+            f"        .slow_telemetry_count = sizeof(profile_{ordinal}_slow_telemetry) / "
+            f"sizeof(profile_{ordinal}_slow_telemetry[0]),\n"
+        )
+    else:
+        telemetry_initializer = (
+            "        .slow_telemetry = NULL,\n        .slow_telemetry_count = 0U,\n"
+        )
     return f"""    {{
         .profile_id = {values['profile_id']},
         .model = {values['model']},
@@ -237,7 +317,7 @@ def profile_initializer(values: dict[str, object], ordinal: int) -> str:
         .supports_distributed_clocks = {values['supports_dc']},
         .safe_stop_status_mask = UINT16_C(0x{values['safe_stop_status_mask']:04X}),
         .safe_stop_status_value = UINT16_C(0x{values['safe_stop_status_value']:04X}),
-    }}"""
+{telemetry_initializer}    }}"""
 
 
 def generate(documents: list[dict[str, Any]]) -> str:
@@ -263,6 +343,20 @@ def generate(documents: list[dict[str, Any]]) -> str:
             )
             + "\n};"
         )
+        if value["slow_telemetry"]:
+            declarations.append(
+                f"static const emaster_slow_telemetry_t "
+                f"profile_{profile_ordinal}_slow_telemetry[] = {{\n"
+                + ",\n".join(
+                    "    {"
+                    f"{entry['name']}, UINT16_C(0x{entry['index']:04X}), "
+                    f"UINT8_C({entry['subindex']}), {entry['type']}, "
+                    f"{entry['semantic']}, {entry['unit']}"
+                    "}"
+                    for entry in value["slow_telemetry"]
+                )
+                + "\n};"
+            )
 
     initializers = ",\n".join(
         profile_initializer(value, ordinal) for ordinal, value in enumerate(values)

@@ -71,6 +71,26 @@ def optional_positive_integer(
     return True, value
 
 
+def optional_non_negative_integer(
+    value: object, field: str, maximum: int
+) -> tuple[bool, int]:
+    """解析可选非负整数，同时返回存在标志。
+
+    与 optional_unsigned 的区别是它读十进制 JSON 数字而不是十六进制字符串，与
+    optional_positive_integer 的区别是它接受 0——CPU 核编号 0 和"超时为 0 表示
+    用默认值"都要求这一条。真的用 0 表示"未配置"的地方不能换用它。
+    """
+    if value is None:
+        return False, 0
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 0 <= value <= maximum
+    ):
+        raise ValueError(f"{field} 必须是非负整数或 null")
+    return True, value
+
+
 def topology_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """提取并稳定排序拓扑，保留由配置决定的任意从站数量。"""
     values = []
@@ -786,6 +806,36 @@ def deployment_values(
             )
         fault_policy_value = 0 if fault_policy_str == "global_stop" else 1
 
+        # 实时调度参数：属于主机，不属于设备。整块可选，缺省即"不做任何实时设置"。
+        realtime = document.get("realtime")
+        if realtime is not None and not isinstance(realtime, dict):
+            raise ValueError(f"部署 {deployment_id} 的 realtime 必须是对象或 null")
+        realtime = realtime or {}
+        priority_present, realtime_priority = optional_positive_integer(
+            realtime.get("scheduler_priority"),
+            f"部署 {deployment_id} 的 realtime.scheduler_priority",
+            99,
+        )
+        core_present, realtime_cpu_core = optional_non_negative_integer(
+            realtime.get("cpu_core"),
+            f"部署 {deployment_id} 的 realtime.cpu_core",
+            65535,
+        )
+        realtime_required = realtime.get("required", False)
+        if not isinstance(realtime_required, bool):
+            raise ValueError(
+                f"部署 {deployment_id} 的 realtime.required 必须是布尔值"
+            )
+
+        # 外部目标失活超时：0 与"未配置"同义，都走内置默认值——不做"永不超时"。
+        timeout_present, external_target_timeout_ms = optional_non_negative_integer(
+            document.get("external_target_timeout_ms"),
+            f"部署 {deployment_id} 的 external_target_timeout_ms",
+            600000,
+        )
+        if external_target_timeout_ms == 0:
+            timeout_present = False
+
         values.append(
             {
                 "id": deployment_id,
@@ -804,6 +854,13 @@ def deployment_values(
                 "motion_profile_id": motion_profile_id,
                 "error_recovery_policy_id": error_recovery_policy_id,
                 "fault_policy": fault_policy_value,  # P2.5
+                "realtime_priority_present": priority_present,
+                "realtime_priority": realtime_priority,
+                "realtime_cpu_core_present": core_present,
+                "realtime_cpu_core": realtime_cpu_core,
+                "realtime_required": realtime_required,
+                "external_target_timeout_present": timeout_present,
+                "external_target_timeout_ms": external_target_timeout_ms,
             }
         )
     return sorted(values, key=lambda item: item["id"])

@@ -1,7 +1,7 @@
 /*
  * 人工监控入口：常驻显示主站实时状态
  *
- * 用法：sudo emaster-watch [刷新间隔ms，默认200]
+ * 用法：sudo emaster-watch [刷新间隔ms，默认200] [--deployment <部署ID> | --socket <路径>]
  *
  * 存在原因：操作者需要一个简单命令就能启动实时监控，
  * 不需要记忆socket路径、参数格式等细节。
@@ -19,7 +19,11 @@
 #include <errno.h>
 #include <time.h>
 
-#define SOCKET_PATH "/tmp/emaster-orangepi-bench-dual.sock"
+#include "emaster/bus/command_socket_path.h"
+
+/* 套接字路径由 --socket / --deployment / $EMASTER_DEPLOYMENT 决定，见
+ * command_socket_path.h。这里不再写死某个部署，main 解析失败就直接退出。 */
+static char g_socket_path[EMASTER_SOCKET_PATH_CAPACITY];
 #define DEFAULT_REFRESH_MS 200
 #define RESPONSE_MAX 2048
 #define MAX_AXES 16
@@ -55,8 +59,8 @@ static void print_header(void)
 
 static void print_usage(const char *prog)
 {
-    fprintf(stderr, "用法: sudo %s [刷新间隔ms]\n", prog);
-    fprintf(stderr, "示例: sudo %s 200\n\n", prog);
+    fprintf(stderr, "用法: sudo %s [刷新间隔ms] [选项]\n", prog);
+    fprintf(stderr, "示例: sudo %s 200 --deployment orangepi-bench-dual\n\n", prog);
     fprintf(stderr, "说明:\n");
     fprintf(stderr, "  - 位置单位: 脉冲 (pulse)\n");
     fprintf(stderr, "  - 速度单位: 脉冲/秒 (pulse/s)\n");
@@ -64,6 +68,10 @@ static void print_usage(const char *prog)
     fprintf(stderr, "  - 跟随误差 = 实际位置 - PDO目标，反映驱动器响应情况\n");
     fprintf(stderr, "  - 状态字 0x1237 = Operation Enabled (正常使能)\n");
     fprintf(stderr, "  - 必须用 sudo 运行（socket 属主为 root）\n");
+    fprintf(stderr, "\n选项:\n");
+    fprintf(stderr, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+            EMASTER_DEPLOYMENT_ENV);
+    fprintf(stderr, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
 }
 
 /* 查询拓扑：解析 "axes=N|a1:bus=B,enc=E,gear=G1/G2,torque=T|..." */
@@ -155,13 +163,22 @@ int main(int argc, char **argv)
     topology_t topo;
     size_t i;
 
+    if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0))
+    {
+        print_usage(argv[0]);
+        return 0;
+    }
+    /* 先摘掉 --socket / --deployment，argv[1] 才是刷新间隔。 */
+    if (!emaster_cli_resolve_socket(&argc, argv, g_socket_path, sizeof(g_socket_path)))
+    {
+        fprintf(stderr, "错误：无法确定命令套接字路径\n");
+        fprintf(stderr, "  加 --deployment <部署ID>，或 --socket <路径>，"
+                        "或设环境变量 %s\n", EMASTER_DEPLOYMENT_ENV);
+        return 2;
+    }
+
     if (argc > 1)
     {
-        if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)
-        {
-            print_usage(argv[0]);
-            return 0;
-        }
         refresh_ms = strtol(argv[1], NULL, 10);
         if (refresh_ms < 50 || refresh_ms > 5000)
         {
@@ -190,11 +207,11 @@ int main(int argc, char **argv)
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path) - 1);
 
     if (connect(sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
-        fprintf(stderr, "无法连接到主站 %s\n", SOCKET_PATH);
+        fprintf(stderr, "无法连接到主站 %s\n", g_socket_path);
         fprintf(stderr, "请确认:\n");
         fprintf(stderr, "  1. 主站是否在运行\n");
         fprintf(stderr, "  2. 是否使用了 sudo\n");

@@ -10,13 +10,10 @@
  * P4.3: SDO 慢速观测线程
  *
  * 架构：独立非 RT 线程，50ms 轮询周期
- * 功能：对每个从站依次读取：
- *   - 6078h: 电流实际值 (int16)
- *   - 603Fh: CiA402 错误码 (uint16) —— P2.6
- *   - 6079h: 母线电压 (uint32, mV)
- *   - 200Bh:01h: MOSFET 温度 (int16, 0.1°C)
- *   - 200Bh:02h: 电机温度 (int16, 0.1°C)
- * 数据存储：写入 session->axes[].sdo_* 和 drive_diagnostic
+ * 功能：按设备配置声明的慢速遥测清单（设备配置的 slow_telemetry 字段），对每个
+ *   从站逐条读取其语义属于周期遥测的供应商对象；对象号、宽度和单位都来自配置，通用代码
+ *   不写死任何供应商对象号。清单缺省即不读，行为与每次读失败一致。
+ * 数据存储：按条目的 semantic 写入 session->axes[].sdo_* 和 drive_diagnostic
  * 线程安全：使用 observer_mutex 保护共享数据
  *
  * 另有一个低频探针：每 OBSERVER_SYNC_PROBE_INTERVAL 轮读一次 1C32/1C33 的同步违例
@@ -142,6 +139,196 @@ static int observer_sdo_read(emaster_soem_session_t *session, uint16_t slave, ui
         observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_MAILBOX);
     }
     return wkc;
+}
+
+/* 观测线程缓存本轮遥测读数的上界；超出上界的条目按"本轮未读"处理，不改变其它条目。 */
+#define OBSERVER_TELEMETRY_CACHE_MAX 16U
+
+/* 按配置声明的类型给出读取字节宽度；未知类型返回 0，调用者据此跳过读取。 */
+static int observer_telemetry_width(emaster_telemetry_type_t type)
+{
+    switch (type)
+    {
+        case EMASTER_TELEMETRY_TYPE_U8:
+        case EMASTER_TELEMETRY_TYPE_I8:
+            return (int)sizeof(uint8_t);
+        case EMASTER_TELEMETRY_TYPE_U16:
+        case EMASTER_TELEMETRY_TYPE_I16:
+            return (int)sizeof(uint16_t);
+        case EMASTER_TELEMETRY_TYPE_U32:
+        case EMASTER_TELEMETRY_TYPE_I32:
+            return (int)sizeof(uint32_t);
+    }
+    return 0;
+}
+
+/*
+ * 把读到的原始字节解码成带符号的 64 位中间值。此前的代码把各宽度的原生整型直接交给
+ * ecx_SDOread，这里的 memcpy 保持同样的"字节按本机字节序解释成该宽度"的语义。
+ */
+static int64_t observer_decode_telemetry(const uint8_t *buffer, emaster_telemetry_type_t type)
+{
+    switch (type)
+    {
+        case EMASTER_TELEMETRY_TYPE_U8:
+            return (int64_t)buffer[0];
+        case EMASTER_TELEMETRY_TYPE_I8:
+        {
+            int8_t value;
+            memcpy(&value, buffer, sizeof(value));
+            return (int64_t)value;
+        }
+        case EMASTER_TELEMETRY_TYPE_U16:
+        {
+            uint16_t value;
+            memcpy(&value, buffer, sizeof(value));
+            return (int64_t)value;
+        }
+        case EMASTER_TELEMETRY_TYPE_I16:
+        {
+            int16_t value;
+            memcpy(&value, buffer, sizeof(value));
+            return (int64_t)value;
+        }
+        case EMASTER_TELEMETRY_TYPE_U32:
+        {
+            uint32_t value;
+            memcpy(&value, buffer, sizeof(value));
+            return (int64_t)value;
+        }
+        case EMASTER_TELEMETRY_TYPE_I32:
+        {
+            int32_t value;
+            memcpy(&value, buffer, sizeof(value));
+            return (int64_t)value;
+        }
+    }
+    return 0;
+}
+
+/*
+ * 观测线程只周期读取属于遥测的语义。扩展/伺服错误码由停机诊断
+ * （emaster_session_observer_read_drive）按同一份清单读取：这里再读一遍会多出邮箱往返，
+ * 而邮箱流量本身会加重驱动器的 SM2 事件丢失，仪表不得改变被观测对象的量级。
+ */
+static bool observer_telemetry_is_observed(emaster_telemetry_semantic_t semantic)
+{
+    switch (semantic)
+    {
+        case EMASTER_TELEMETRY_ACTUAL_CURRENT:
+        case EMASTER_TELEMETRY_ERROR_CODE:
+        case EMASTER_TELEMETRY_BUS_VOLTAGE:
+        case EMASTER_TELEMETRY_MOSFET_TEMPERATURE:
+        case EMASTER_TELEMETRY_MOTOR_TEMPERATURE:
+        case EMASTER_TELEMETRY_ACTUAL_VELOCITY:
+        case EMASTER_TELEMETRY_TARGET_VELOCITY:
+            return true;
+        case EMASTER_TELEMETRY_NONE:
+        case EMASTER_TELEMETRY_EXTENDED_ERROR_CODE:
+        case EMASTER_TELEMETRY_SERVO_ERROR_CODE:
+            return false;
+    }
+    return false;
+}
+
+/*
+ * 把一条遥测读数写进它对应的命名槽位。读失败只清掉该槽位的读取标志，字段保留旧值，
+ * 与"这一条没读到"同义；没有对应槽位的语义不写任何字段。
+ */
+static void observer_store_telemetry(emaster_soem_session_t *session, size_t axis,
+                                     const emaster_slow_telemetry_t *entry, int wkc,
+                                     int64_t value)
+{
+    bool succeeded = wkc > 0;
+
+    switch (entry->semantic)
+    {
+        case EMASTER_TELEMETRY_ACTUAL_CURRENT:
+            session->axes[axis].sdo_current_read = succeeded;
+            if (succeeded)
+            {
+                session->axes[axis].sdo_current_6078h = (int16_t)value;
+            }
+            break;
+        case EMASTER_TELEMETRY_ERROR_CODE:
+            if (succeeded)
+            {
+                uint16_t error_code = (uint16_t)value;
+
+                session->axes[axis].drive_diagnostic.cia402_error_code = error_code;
+                /* P2.6: 如果错误码非零，打印警告 */
+                if (error_code != 0U && session->axes[axis].sdo_read_count < 3U)
+                {
+                    fprintf(stderr, "[P2.6] 警告：轴%zu 检测到 CiA402 错误码 0x%04X\n", axis,
+                            (unsigned)error_code);
+                }
+            }
+            break;
+        case EMASTER_TELEMETRY_BUS_VOLTAGE:
+            session->axes[axis].sdo_voltage_read = succeeded;
+            if (succeeded)
+            {
+                session->axes[axis].sdo_voltage_6079h = (uint32_t)value;
+            }
+            break;
+        case EMASTER_TELEMETRY_MOSFET_TEMPERATURE:
+            session->axes[axis].sdo_mosfet_temp_read = succeeded;
+            if (succeeded)
+            {
+                session->axes[axis].sdo_mosfet_temp_200b01h = (int16_t)value;
+            }
+            break;
+        case EMASTER_TELEMETRY_MOTOR_TEMPERATURE:
+            session->axes[axis].sdo_motor_temp_read = succeeded;
+            if (succeeded)
+            {
+                session->axes[axis].sdo_motor_temp_200b02h = (int16_t)value;
+            }
+            break;
+        case EMASTER_TELEMETRY_ACTUAL_VELOCITY:
+            session->axes[axis].sdo_motor_speed_read = succeeded;
+            if (succeeded)
+            {
+                session->axes[axis].sdo_motor_speed_200b08h = (int32_t)value;
+            }
+            break;
+        case EMASTER_TELEMETRY_TARGET_VELOCITY:
+            session->axes[axis].sdo_speed_command_read = succeeded;
+            if (succeeded)
+            {
+                session->axes[axis].sdo_speed_command_200b09h = (int32_t)value;
+            }
+            break;
+        case EMASTER_TELEMETRY_NONE:
+        case EMASTER_TELEMETRY_EXTENDED_ERROR_CODE:
+        case EMASTER_TELEMETRY_SERVO_ERROR_CODE:
+            /* 没有对应槽位，或由停机诊断读取；本函数不写任何字段。 */
+            break;
+    }
+}
+
+/* 打印一条遥测读数的完整现场：名称、对象地址、wkc 与解码值（附配置声明的单位）。 */
+static void observer_print_telemetry_entry(FILE *stream, const emaster_slow_telemetry_t *entry,
+                                           int wkc, int64_t value)
+{
+    fprintf(stream, "  %s(0x%04X:%02X) wkc=%d val=%" PRIi64, entry->name, (unsigned)entry->index,
+            (unsigned)entry->subindex, wkc, value);
+    if (entry->unit != NULL && entry->unit[0] != '\0')
+    {
+        fprintf(stream, " %s", entry->unit);
+    }
+    fputc('\n', stream);
+}
+
+/* 打印一条遥测读数的紧凑形式，供单行周期日志使用。 */
+static void observer_print_telemetry_value(FILE *stream, const emaster_slow_telemetry_t *entry,
+                                           int64_t value)
+{
+    fprintf(stream, "%s=%" PRIi64, entry->name, value);
+    if (entry->unit != NULL && entry->unit[0] != '\0')
+    {
+        fprintf(stream, " %s", entry->unit);
+    }
 }
 
 /*
@@ -288,76 +475,59 @@ static void *observer_thread_func(void *arg)
         for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
         {
             trace->current_axis = axis;
-            int16_t current_6078h = 0;
-            uint16_t error_code_603f = 0;
-            uint32_t voltage_6079h = 0;
-            int16_t mosfet_temp_200b01h = 0;
-            int16_t motor_temp_200b02h = 0;
-            int32_t actual_motor_speed_200b08h = 0;
-            int32_t speed_command_200b09h = 0;
-            int wkc_current = 0;
-            int wkc_error = 0;
-            int wkc_voltage = 0;
-            int wkc_mosfet_temp = 0;
-            int wkc_motor_temp = 0;
-            int wkc_motor_speed = 0;
-            int wkc_speed_command = 0;
+            /*
+             * 遥测清单来自设备配置：通用代码只按声明读，不写死供应商对象号。
+             * 缓存保存本轮读数，供打印与写样本两段共用；上界只约束仪表读数的规模，
+             * 超出上界的条目按"本轮未读"处理，字段保持上一轮的值，与读失败同义。
+             */
+            const emaster_slave_profile_t *device_profile =
+                session->plan->axes[axis].device_profile;
+            const emaster_slow_telemetry_t *telemetry =
+                device_profile == NULL ? NULL : device_profile->slow_telemetry;
+            size_t telemetry_count =
+                device_profile == NULL ? 0U : device_profile->slow_telemetry_count;
+            int telemetry_wkc[OBSERVER_TELEMETRY_CACHE_MAX];
+            int64_t telemetry_value[OBSERVER_TELEMETRY_CACHE_MAX];
             uint16_t slave_position = emaster_soem_session_axis_slave(session, axis);
 
-            /* 读取 6078h: 电流实际值 */
-            int size_current = (int)sizeof(current_6078h);
-            wkc_current = observer_sdo_read(session, slave_position, 0x6078U, 0x00U,
-                                            &size_current, &current_6078h);
+            if (telemetry_count > OBSERVER_TELEMETRY_CACHE_MAX)
+            {
+                telemetry_count = OBSERVER_TELEMETRY_CACHE_MAX;
+            }
+            memset(telemetry_wkc, 0, sizeof(telemetry_wkc));
+            memset(telemetry_value, 0, sizeof(telemetry_value));
 
-            /* P2.6: 读取 603Fh: CiA402 错误码 */
-            int size_error = (int)sizeof(error_code_603f);
-            wkc_error = observer_sdo_read(session, slave_position, 0x603FU, 0x00U,
-                                          &size_error, &error_code_603f);
+            /* 按清单逐条读取；读到的原始字节按声明宽度解码。 */
+            for (size_t entry_index = 0U; entry_index < telemetry_count; ++entry_index)
+            {
+                const emaster_slow_telemetry_t *entry = &telemetry[entry_index];
+                uint8_t buffer[4] = {0U, 0U, 0U, 0U};
+                int size = observer_telemetry_width(entry->type);
 
-            /* 读取 6079h: 母线电压 (mV) */
-            int size_voltage = (int)sizeof(voltage_6079h);
-            wkc_voltage = observer_sdo_read(session, slave_position, 0x6079U, 0x00U,
-                                            &size_voltage, &voltage_6079h);
-
-            /* 读取 200Bh:01h: MOSFET 温度 (0.1°C) */
-            int size_mosfet_temp = (int)sizeof(mosfet_temp_200b01h);
-            wkc_mosfet_temp = observer_sdo_read(session, slave_position, 0x200BU, 0x01U,
-                                                &size_mosfet_temp, &mosfet_temp_200b01h);
-
-            /* 读取 200Bh:02h: 电机温度 (0.1°C) */
-            int size_motor_temp = (int)sizeof(motor_temp_200b02h);
-            wkc_motor_temp = observer_sdo_read(session, slave_position, 0x200BU, 0x02U,
-                                               &size_motor_temp, &motor_temp_200b02h);
-
-            /* 读取 200Bh:08h: 实际电机速度 (rpm) */
-            int size_motor_speed = (int)sizeof(actual_motor_speed_200b08h);
-            wkc_motor_speed = observer_sdo_read(session, slave_position, 0x200BU, 0x08U,
-                                                &size_motor_speed, &actual_motor_speed_200b08h);
-
-            /* 读取 200Bh:09h: 速度指令 (rpm) */
-            int size_speed_command = (int)sizeof(speed_command_200b09h);
-            wkc_speed_command = observer_sdo_read(session, slave_position, 0x200BU, 0x09U,
-                                                 &size_speed_command, &speed_command_200b09h);
+                if (!observer_telemetry_is_observed(entry->semantic) || size <= 0)
+                {
+                    continue;
+                }
+                telemetry_wkc[entry_index] = observer_sdo_read(
+                    session, slave_position, entry->index, entry->subindex, &size, buffer);
+                telemetry_value[entry_index] = observer_decode_telemetry(buffer, entry->type);
+            }
 
             /* 前3次读取始终打印以验证通道工作 */
             if (session->axes[axis].sdo_read_count < 3U)
             {
-                fprintf(stderr, "[P4.3] 轴%zu 第%lu次读取:\n"
-                       "  6078h(电流) wkc=%d val=%d\n"
-                       "  603Fh(错误) wkc=%d val=0x%04X\n"
-                       "  6079h(电压) wkc=%d val=%u mV\n"
-                       "  200Bh:01h(MOSFET温度) wkc=%d val=%d (%.1f°C)\n"
-                       "  200Bh:02h(电机温度) wkc=%d val=%d (%.1f°C)\n"
-                       "  200Bh:08h(电机速度) wkc=%d val=%d rpm\n"
-                       "  200Bh:09h(速度指令) wkc=%d val=%d rpm\n",
-                       axis, (unsigned long)(session->axes[axis].sdo_read_count + 1U),
-                       wkc_current, current_6078h,
-                       wkc_error, error_code_603f,
-                       wkc_voltage, voltage_6079h,
-                       wkc_mosfet_temp, mosfet_temp_200b01h, mosfet_temp_200b01h / 10.0,
-                       wkc_motor_temp, motor_temp_200b02h, motor_temp_200b02h / 10.0,
-                       wkc_motor_speed, actual_motor_speed_200b08h,
-                       wkc_speed_command, speed_command_200b09h);
+                fprintf(stderr, "[P4.3] 轴%zu 第%lu次读取:\n", axis,
+                        (unsigned long)(session->axes[axis].sdo_read_count + 1U));
+                for (size_t entry_index = 0U; entry_index < telemetry_count; ++entry_index)
+                {
+                    if (!observer_telemetry_is_observed(telemetry[entry_index].semantic))
+                    {
+                        continue;
+                    }
+                    observer_print_telemetry_entry(stderr, &telemetry[entry_index],
+                                                   telemetry_wkc[entry_index],
+                                                   telemetry_value[entry_index]);
+                }
             }
 
             /*
@@ -367,76 +537,11 @@ static void *observer_thread_func(void *arg)
             observer_enter_phase(session, EMASTER_OBSERVER_PHASE_SAMPLE);
             /* 加锁写入结果 */
             pthread_mutex_lock(&session->observer_mutex);
-            if (wkc_current > 0)
+            for (size_t entry_index = 0U; entry_index < telemetry_count; ++entry_index)
             {
-                session->axes[axis].sdo_current_read = true;
-                session->axes[axis].sdo_current_6078h = current_6078h;
-            }
-            else
-            {
-                session->axes[axis].sdo_current_read = false;
-            }
-
-            if (wkc_voltage > 0)
-            {
-                session->axes[axis].sdo_voltage_read = true;
-                session->axes[axis].sdo_voltage_6079h = voltage_6079h;
-            }
-            else
-            {
-                session->axes[axis].sdo_voltage_read = false;
-            }
-
-            if (wkc_mosfet_temp > 0)
-            {
-                session->axes[axis].sdo_mosfet_temp_read = true;
-                session->axes[axis].sdo_mosfet_temp_200b01h = mosfet_temp_200b01h;
-            }
-            else
-            {
-                session->axes[axis].sdo_mosfet_temp_read = false;
-            }
-
-            if (wkc_motor_temp > 0)
-            {
-                session->axes[axis].sdo_motor_temp_read = true;
-                session->axes[axis].sdo_motor_temp_200b02h = motor_temp_200b02h;
-            }
-            else
-            {
-                session->axes[axis].sdo_motor_temp_read = false;
-            }
-
-            if (wkc_motor_speed > 0)
-            {
-                session->axes[axis].sdo_motor_speed_read = true;
-                session->axes[axis].sdo_motor_speed_200b08h = actual_motor_speed_200b08h;
-            }
-            else
-            {
-                session->axes[axis].sdo_motor_speed_read = false;
-            }
-
-            if (wkc_speed_command > 0)
-            {
-                session->axes[axis].sdo_speed_command_read = true;
-                session->axes[axis].sdo_speed_command_200b09h = speed_command_200b09h;
-            }
-            else
-            {
-                session->axes[axis].sdo_speed_command_read = false;
-            }
-
-            /* P2.6: 更新运行期 603F 错误码 */
-            if (wkc_error > 0)
-            {
-                session->axes[axis].drive_diagnostic.cia402_error_code = error_code_603f;
-                /* 如果错误码非零，打印警告 */
-                if (error_code_603f != 0U && session->axes[axis].sdo_read_count < 3U)
-                {
-                    fprintf(stderr, "[P2.6] 警告：轴%zu 检测到 CiA402 错误码 0x%04X\n",
-                           axis, error_code_603f);
-                }
+                observer_store_telemetry(session, axis, &telemetry[entry_index],
+                                         telemetry_wkc[entry_index],
+                                         telemetry_value[entry_index]);
             }
 
             session->axes[axis].sdo_read_count++;
@@ -444,10 +549,22 @@ static void *observer_thread_func(void *arg)
             /* 每20次读取打印一次（约1秒间隔） */
             if (session->axes[axis].sdo_read_count % 20U == 0U)
             {
-                fprintf(stderr, "[P4.3] 轴%zu: 电流=%d, 错误=0x%04X, 电压=%umV, MOSFET=%.1f°C, 电机=%.1f°C (读取次数=%lu)\n",
-                       axis, current_6078h, error_code_603f, voltage_6079h,
-                       mosfet_temp_200b01h / 10.0, motor_temp_200b02h / 10.0,
-                       (unsigned long)session->axes[axis].sdo_read_count);
+                bool first_field = true;
+
+                fprintf(stderr, "[P4.3] 轴%zu:", axis);
+                for (size_t entry_index = 0U; entry_index < telemetry_count; ++entry_index)
+                {
+                    if (!observer_telemetry_is_observed(telemetry[entry_index].semantic))
+                    {
+                        continue;
+                    }
+                    fprintf(stderr, "%s", first_field ? " " : ", ");
+                    first_field = false;
+                    observer_print_telemetry_value(stderr, &telemetry[entry_index],
+                                                   telemetry_value[entry_index]);
+                }
+                fprintf(stderr, " (读取次数=%lu)\n",
+                        (unsigned long)session->axes[axis].sdo_read_count);
             }
             pthread_mutex_unlock(&session->observer_mutex);
 

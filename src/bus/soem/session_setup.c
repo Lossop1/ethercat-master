@@ -438,8 +438,9 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         /* 所有 SAFE-OP 初始化项生效后，再采集模式显示和同一时刻的故障对象。 */
         session->axes[axis_index].safeop_mode_display_sdo_read = emaster_soem_read_i8(
             &sdo, UINT16_C(0x6061), UINT8_C(0), &session->axes[axis_index].safeop_mode_display_sdo);
-        emaster_session_observer_read_drive(&sdo,
-                                            &session->axes[axis_index].safeop_drive_diagnostic);
+        emaster_session_observer_read_drive(
+            &sdo, session->plan->axes[axis_index].device_profile,
+            &session->axes[axis_index].safeop_drive_diagnostic);
 
         /* 读取增益参数 (2008h) - 记录控制环配置 */
         session->axes[axis_index].gain_parameters_read = true;

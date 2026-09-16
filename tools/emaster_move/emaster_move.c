@@ -16,7 +16,11 @@
 #include <sys/un.h>
 #include <errno.h>
 
-#define SOCKET_PATH "/tmp/emaster-orangepi-bench-dual.sock"
+#include "emaster/bus/command_socket_path.h"
+
+/* 套接字路径由 --socket / --deployment / $EMASTER_DEPLOYMENT 决定，见
+ * command_socket_path.h。这里不再写死某个部署，main 解析失败就直接退出。 */
+static char g_socket_path[EMASTER_SOCKET_PATH_CAPACITY];
 #define MAX_AXES 16
 #define COMMAND_MAX 512
 #define RESPONSE_MAX 512
@@ -30,6 +34,10 @@ static void print_usage(const char *prog)
     fprintf(stderr, "  - 范围: 根据电机编码器分辨率，通常 ±2147483647\n");
     fprintf(stderr, "  - 建议配合 'sudo emaster-watch' 实时监控运动过程\n");
     fprintf(stderr, "  - 输入 q 退出\n");
+    fprintf(stderr, "\n选项:\n");
+    fprintf(stderr, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+            EMASTER_DEPLOYMENT_ENV);
+    fprintf(stderr, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
 }
 
 static int send_command(const char *command, char *response, size_t response_size)
@@ -47,11 +55,11 @@ static int send_command(const char *command, char *response, size_t response_siz
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path) - 1);
 
     if (connect(sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
-        fprintf(stderr, "无法连接到主站 %s\n", SOCKET_PATH);
+        fprintf(stderr, "无法连接到主站 %s\n", g_socket_path);
         fprintf(stderr, "请确认:\n");
         fprintf(stderr, "  1. 主站是否在运行\n");
         fprintf(stderr, "  2. 是否使用了 sudo\n");
@@ -181,6 +189,13 @@ int main(int argc, char **argv)
     {
         print_usage(argv[0]);
         return 0;
+    }
+    if (!emaster_cli_resolve_socket(&argc, argv, g_socket_path, sizeof(g_socket_path)))
+    {
+        fprintf(stderr, "错误：无法确定命令套接字路径\n");
+        fprintf(stderr, "  加 --deployment <部署ID>，或 --socket <路径>，"
+                        "或设环境变量 %s\n", EMASTER_DEPLOYMENT_ENV);
+        return 2;
     }
 
     /* 始终进入交互式模式 */

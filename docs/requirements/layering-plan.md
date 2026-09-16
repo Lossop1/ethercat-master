@@ -159,8 +159,9 @@ IMU 不在 EtherCAT 链路上，本轮不纳入。
 | P2.6 | 运行期 603F 恒为 0 | 运行期读取（走 P4 的邮箱通道） | 已验证 |
 
 P2.1 实现细节：外部目标缓冲 `buf->last_update_ns` 记录最后更新时刻；
-`position_target_source` 每周期检查，超过 `EMASTER_EXTERNAL_TARGET_TIMEOUT_NS`（200ms）
-后清除 `buf->available`，返回 `EMASTER_POSITION_TARGET_SOURCE_HOLD`。
+`position_target_source` 每周期检查，超过失活超时后清除 `buf->available`，返回
+`EMASTER_POSITION_TARGET_SOURCE_HOLD`。该超时由部署配置的 `external_target_timeout_ms`
+给出，缺省 200 ms（200 个 1 kHz 周期），不再写死在 `main.c`。
 
 **注意**：P2.2 的 `following_error_counts` 当前在 `main.c:365` 硬编码为 256000（200°），
 注释标为"P4.3 验证：临时放宽"。该临时值未回退，见 P6.3。

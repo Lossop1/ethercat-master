@@ -1,7 +1,7 @@
 /*
  * 角度控制入口：用角度代替脉冲，对用户友好
  *
- * 用法：sudo emaster-move-deg
+ * 用法：sudo emaster-move-deg [--deployment <部署ID> | --socket <路径>]
  *
  * 存在原因：直接输入脉冲（如 458752）对人类不友好，
  * 角度（如 45.5°）更直观。工具启动时查询编码器参数，
@@ -17,7 +17,11 @@
 #include <signal.h>
 #include <errno.h>
 
-#define SOCKET_PATH "/tmp/emaster-orangepi-bench-dual.sock"
+#include "emaster/bus/command_socket_path.h"
+
+/* 套接字路径由 --socket / --deployment / $EMASTER_DEPLOYMENT 决定，见
+ * command_socket_path.h。这里不再写死某个部署，main 解析失败就直接退出。 */
+static char g_socket_path[EMASTER_SOCKET_PATH_CAPACITY];
 #define RESPONSE_MAX 2048
 #define MAX_AXES 16
 
@@ -146,6 +150,20 @@ static void print_header(const topology_t *topo)
     printf("═══════════════════════════════════════════════════════════════════════════════\n\n");
 }
 
+static void print_usage(const char *prog)
+{
+    fprintf(stderr, "用法: sudo %s\n\n", prog);
+    fprintf(stderr, "说明:\n");
+    fprintf(stderr, "  - 启动后持续运行，可反复输入各轴目标角度\n");
+    fprintf(stderr, "  - 角度单位: 度 (°)，换算系数由主站拓扑自动查询\n");
+    fprintf(stderr, "  - 建议配合 'sudo emaster-watch' 实时监控运动过程\n");
+    fprintf(stderr, "  - 输入 q 或 quit 退出\n");
+    fprintf(stderr, "\n选项:\n");
+    fprintf(stderr, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+            EMASTER_DEPLOYMENT_ENV);
+    fprintf(stderr, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+}
+
 int main(int argc, char **argv)
 {
     int sock_fd;
@@ -156,8 +174,18 @@ int main(int argc, char **argv)
     char response[RESPONSE_MAX];
     struct sigaction sa;
 
-    (void)argc;
-    (void)argv;
+    if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0))
+    {
+        print_usage(argv[0]);
+        return 0;
+    }
+    if (!emaster_cli_resolve_socket(&argc, argv, g_socket_path, sizeof(g_socket_path)))
+    {
+        fprintf(stderr, "错误：无法确定命令套接字路径\n");
+        fprintf(stderr, "  加 --deployment <部署ID>，或 --socket <路径>，"
+                        "或设环境变量 %s\n", EMASTER_DEPLOYMENT_ENV);
+        return 2;
+    }
 
     /* 安装信号处理 */
     memset(&sa, 0, sizeof(sa));
@@ -179,11 +207,11 @@ int main(int argc, char **argv)
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path) - 1);
 
     if (connect(sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
-        fprintf(stderr, "无法连接到主站 %s\n", SOCKET_PATH);
+        fprintf(stderr, "无法连接到主站 %s\n", g_socket_path);
         fprintf(stderr, "请确认:\n");
         fprintf(stderr, "  1. 主站是否在运行\n");
         fprintf(stderr, "  2. 是否使用了 sudo\n");

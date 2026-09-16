@@ -30,6 +30,13 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 - `protocol.supports_pdo_configuration`：ESI 的 `CoE/PdoConfig` 能力，决定能否修改映射表条目；两者必须独立判断；
 - `protocol.supports_distributed_clocks`：ESI 声明的能力，不表示所有运行方案都必须启用 DC；
 - `conversion`：设备资料提供的换算来源和默认值，不能替代每台物理从站的采集值；
+- `slow_telemetry`：可选的慢速遥测对象表，声明该型号需要周期性读取的供应商私有对象。每项
+  含 `name`（设备内唯一）、`index`（十六进制字符串）、`subindex`（0..255）、`type`
+  （`u8`/`i8`/`u16`/`i16`/`u32`/`i32`，决定读取宽度）、`semantic`（对象落到哪个会话结果槽位：
+  `none`、`actual_current`、`error_code`、`bus_voltage`、`mosfet_temperature`、
+  `motor_temperature`、`actual_velocity`、`target_velocity`、`extended_error_code`、
+  `servo_error_code`）和 `unit`（可为空字符串）。名称与 `index:subindex` 都必须唯一。该键缺省或
+  为空表示设备不提供遥测，通用代码遍历该表，不写死任何供应商对象号；
 - `source`：设备事实的来源记录，仅供人工追溯，不参与构建和项目配置校验。
 
 构建系统扫描全部 `devices/*.json`，按 `profile_id` 稳定排序后生成只读 C 目录。增加新型号不应修改
@@ -68,6 +75,23 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 - `ethercat_interface`：只承载 EtherCAT 二层帧的物理接口；
 - `management_interface`：可选的管理接口，用于 SSH、NTP 等 IP 服务，禁止与 EtherCAT 接口相同。
 - `run_report_path`：每次会话自动原子覆盖的运行审计报告路径；运行产物目录不纳入 Git。
+- `realtime`：可选。主站进程自己的实时调度参数——**它们属于主机，不属于设备**，同一台
+  驱动器换一台机器就要重挑，所以放在部署而不是设备配置里。整块缺省表示不做任何实时设置，
+  进程照常运行，只是不保证时序。
+  - `scheduler_priority`：`SCHED_FIFO` 优先级，1..99 或 null（null 表示不设）。台架取 80：
+    高于驱动中断（通常 50–60），低于看门狗（通常 90+）；
+  - `cpu_core`：绑定的 CPU 核编号，0..65535 或 null（null 表示不绑）。台架取 11，依据见
+    `tools/master/main.c` 文件头的注释；
+  - `required`：布尔，缺省 false。false 时实时参数未能生效只如实记为警告并继续运行；true 时
+    任何一项失败都拒绝启动。**计时类实验必须用 true**——"以为绑上了其实没绑"不产生报错，
+    只让抖动变大，整轮数据会悄悄作废。核编号是否真的存在取决于运行时主机，不是静态配置能
+    判定的，校验器因此只查范围不查存在性。
+- `external_target_timeout_ms`：可选。外部控制器超过此时间未更新目标即退化为保持（HOLD），
+  1..600000 或 null。缺省 200（等于 200 个 1 kHz 周期）。没有"永不超时"这个选项。
+
+实时参数有没有真的生效，报告里的 `thread_schedstat` 是内核的实况而非进程自述：每个线程
+都有 `policy`、`priority` 和 `cpus_allowed`（如 `"11"`），`required` 为 false 的轮次靠它判断
+这一轮到底绑上没有。
 
 同一主机和 EtherCAT 接口允许出现多条部署记录。台架物理上只有一张 EtherCAT 网卡，而同一台
 主机需要保留多份已验证的场景（单从站、双从站、不加载固定运动的外部控制），它们是互斥的启动

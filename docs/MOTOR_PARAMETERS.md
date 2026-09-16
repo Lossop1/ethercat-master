@@ -50,7 +50,7 @@
 
 ### emaster-watch（监控工具）
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch
+sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch --deployment orangepi-bench-dual
 ```
 **显示内容**：
 - 实际位置：**脉冲**（编码器累积计数）
@@ -61,7 +61,7 @@ sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch
 
 ### emaster-move（控制工具）
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move
+sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move --deployment orangepi-bench-dual
 ```
 **输入格式**：
 ```

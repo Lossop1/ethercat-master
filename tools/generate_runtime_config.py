@@ -296,23 +296,28 @@ def render_deployments(
             if deployment["motion_profile_id"] is not None
             else "NULL"
         )
+        # 字段用具名初始化：位置式写到第八个参数已经要靠数数，再追加实时调度那七项
+        # 就没人能一眼看出哪个 true 对应哪个字段了。运行方案初始化器已经是这个写法。
         initializers.append(
-            "    {"
-            + c_string(deployment["id"])
-            + ", "
-            + c_string(deployment["hostname"])
-            + ", "
-            + c_string(deployment["interface"])
-            + ", "
-            + c_string(deployment["management"])
-            + f", &topologies[{topology_ordinal}], "
-            + f"{operation_pointer}, {operation_count}, {motion_pointer}, "
-            + c_string(deployment["run_report_path"])
-            + ", "
-            + c_string(deployment["error_recovery_policy_id"])
-            + ", "
-            + f"{deployment['fault_policy']}"  # P2.5: fault_policy 枚举值
-            + "}"
+            f"""    {{
+        .deployment_id = {c_string(deployment['id'])},
+        .hostname = {c_string(deployment['hostname'])},
+        .ethercat_interface = {c_string(deployment['interface'])},
+        .management_interface = {c_string(deployment['management'])},
+        .topology = &topologies[{topology_ordinal}],
+        .operation_profiles = {operation_pointer},
+        .operation_profile_count = {operation_count},
+        .motion_profile = {motion_pointer},
+        .run_report_path = {c_string(deployment['run_report_path'])},
+        .error_recovery_policy_id = {c_string(deployment['error_recovery_policy_id'])},
+        .fault_policy = {deployment['fault_policy']},
+        .has_realtime_priority = {'true' if deployment['realtime_priority_present'] else 'false'},
+        .realtime_priority = {c_int32(deployment['realtime_priority'])},
+        .has_realtime_cpu_core = {'true' if deployment['realtime_cpu_core_present'] else 'false'},
+        .realtime_cpu_core = {c_int32(deployment['realtime_cpu_core'])},
+        .realtime_required = {'true' if deployment['realtime_required'] else 'false'},
+        .external_target_timeout_ms = UINT32_C({deployment['external_target_timeout_ms']}),
+    }}"""
         )
     return "\n\n".join(pointer_arrays), ",\n".join(initializers)
 

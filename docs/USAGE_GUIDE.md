@@ -33,7 +33,7 @@ ls -l /tmp/emaster-orangepi-bench-dual.sock
 ### 2. 实时监控
 
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch 500
+sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch 500 --deployment orangepi-bench-dual
 ```
 
 **显示内容**：
@@ -48,7 +48,7 @@ sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch 500
 #### 角度控制（推荐）
 
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg
+sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg --deployment orangepi-bench-dual
 ```
 
 **使用方法**：
@@ -67,7 +67,7 @@ sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg
 #### 脉冲控制（底层接口）
 
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move
+sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move --deployment orangepi-bench-dual
 ```
 
 **使用方法**：

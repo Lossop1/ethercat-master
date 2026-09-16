@@ -55,7 +55,7 @@ for i in {1..10}; do
         echo "✓ Socket已创建：$SOCKET_PATH"
         echo
         echo "查看日志：tail -f $LOG_FILE"
-        echo "发送命令：sudo ~/ethercat-master/build/set_target_client $SOCKET_PATH <pos1> <pos2> ..."
+        echo "发送命令：sudo ~/ethercat-master/build/set_target_client --deployment $DEPLOYMENT <pos1> <pos2> ..."
         exit 0
     fi
     sleep 0.5

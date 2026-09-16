@@ -1,8 +1,8 @@
 /*
  * 简单的外部控制器模拟器：通过命令服务器发送位置目标
  *
- * 用法: set_target_client <socket_path> <pos1> [pos2] [pos3] ...
- * 例如: set_target_client /tmp/emaster-orangepi-bench-dual.sock 1000 2000
+ * 用法: set_target_client <pos1> [pos2] [pos3] ... [--deployment <部署ID> | --socket <路径>]
+ * 例如: set_target_client --deployment orangepi-bench-dual 1000 2000
  */
 
 #include <stdio.h>
@@ -12,6 +12,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <errno.h>
+
+#include "emaster/bus/command_socket_path.h"
 
 static int connect_to_master(const char *socket_path)
 {
@@ -78,15 +80,30 @@ static int send_target_command(int fd, int argc, char **argv)
 int main(int argc, char **argv)
 {
     int fd;
-    const char *socket_path;
+    char socket_path[EMASTER_SOCKET_PATH_CAPACITY];
 
-    if (argc < 3) {
-        fprintf(stderr, "用法: %s <socket_path> <pos1> [pos2] ...\n", argv[0]);
-        fprintf(stderr, "例如: %s /tmp/emaster-orangepi-bench-dual.sock 1000 2000\n", argv[0]);
-        return 1;
+    if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        fprintf(stderr, "用法: %s <pos1> [pos2] ... [选项]\n", argv[0]);
+        fprintf(stderr, "例如: %s --deployment orangepi-bench-dual 1000 2000\n\n", argv[0]);
+        fprintf(stderr, "选项:\n");
+        fprintf(stderr, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+                EMASTER_DEPLOYMENT_ENV);
+        fprintf(stderr, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+        return 0;
+    }
+    /* 先摘掉 --socket / --deployment，剩下的才是各轴目标位置。 */
+    if (!emaster_cli_resolve_socket(&argc, argv, socket_path, sizeof(socket_path))) {
+        fprintf(stderr, "错误：无法确定命令套接字路径\n");
+        fprintf(stderr, "  加 --deployment <部署ID>，或 --socket <路径>，"
+                        "或设环境变量 %s\n", EMASTER_DEPLOYMENT_ENV);
+        return 2;
     }
 
-    socket_path = argv[1];
+    if (argc < 2) {
+        fprintf(stderr, "用法: %s <pos1> [pos2] ... [选项]\n", argv[0]);
+        fprintf(stderr, "例如: %s --deployment orangepi-bench-dual 1000 2000\n", argv[0]);
+        return 1;
+    }
 
     fd = connect_to_master(socket_path);
     if (fd < 0) {
@@ -94,7 +111,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (send_target_command(fd, argc - 2, argv + 2) < 0) {
+    if (send_target_command(fd, argc - 1, argv + 1) < 0) {
         close(fd);
         return 1;
     }

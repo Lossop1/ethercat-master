@@ -13,13 +13,13 @@ sudo ~/ethercat-master/build/bench/tools/master/emaster-master --deployment oran
 ### 监控运行状态
 
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch 500
+sudo ~/ethercat-master/build/bench/tools/emaster_watch/emaster-watch 500 --deployment orangepi-bench-dual
 ```
 
 ### 角度控制（推荐）
 
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg
+sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg --deployment orangepi-bench-dual
 ```
 
 输入目标位置（单位：角度）：
@@ -30,7 +30,7 @@ sudo ~/ethercat-master/build/bench/tools/emaster_move_deg/emaster-move-deg
 ### 脉冲控制（底层接口）
 
 ```bash
-sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move
+sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move --deployment orangepi-bench-dual
 ```
 
 输入目标位置（单位：脉冲）：

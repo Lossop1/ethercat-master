@@ -159,6 +159,83 @@ def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str
     return len(check.errors) == initial_error_count
 
 
+SLOW_TELEMETRY_TYPES = ("u8", "i8", "u16", "i16", "u32", "i32")
+SLOW_TELEMETRY_SEMANTICS = (
+    "none",
+    "actual_current",
+    "error_code",
+    "bus_voltage",
+    "mosfet_temperature",
+    "motor_temperature",
+    "actual_velocity",
+    "target_velocity",
+    "extended_error_code",
+    "servo_error_code",
+)
+
+
+def validate_slow_telemetry(
+    check: Validation, profile: dict[str, Any], profile_id: str
+) -> None:
+    """校验可选的慢速遥测对象表；缺省表示该设备不声明任何供应商遥测对象。"""
+    entries = profile.get("slow_telemetry")
+    if entries is None:
+        return
+    if not isinstance(entries, list) or not entries:
+        check.errors.append(f"设备 {profile_id} 的 slow_telemetry 必须是非空数组")
+        return
+    names: set[str] = set()
+    addresses: set[tuple[int, int]] = set()
+    for ordinal, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            check.errors.append(
+                f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条必须是对象"
+            )
+            continue
+        name = entry.get("name")
+        index_valid = validate_hex_value(
+            check,
+            entry.get("index"),
+            f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条 index",
+            0xFFFF,
+        )
+        subindex = entry.get("subindex")
+        subindex_valid = (
+            isinstance(subindex, int)
+            and not isinstance(subindex, bool)
+            and 0 <= subindex <= 0xFF
+        )
+        check.require(
+            non_empty_string(name) and name not in names,
+            f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条名称无效或重复",
+        )
+        check.require(
+            subindex_valid,
+            f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条 subindex 超出范围",
+        )
+        check.require(
+            entry.get("type") in SLOW_TELEMETRY_TYPES,
+            f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条类型无效",
+        )
+        check.require(
+            entry.get("semantic") in SLOW_TELEMETRY_SEMANTICS,
+            f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条语义无效",
+        )
+        check.require(
+            isinstance(entry.get("unit"), str),
+            f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条 unit 必须是字符串",
+        )
+        if non_empty_string(name):
+            names.add(name)
+        if index_valid and subindex_valid:
+            address = (hex_value(entry["index"]), subindex)
+            check.require(
+                address not in addresses,
+                f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条地址重复",
+            )
+            addresses.add(address)
+
+
 def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
     """校验生成设备目录所需的完整配置结构。"""
     initial_error_count = len(check.errors)
@@ -217,6 +294,8 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
             and 0 < encoder_counts <= 0xFFFFFFFF,
             f"设备 {profile_id} 的默认编码器计数必须是正整数",
         )
+
+    validate_slow_telemetry(check, profile, profile_id)
 
     return len(check.errors) == initial_error_count
 

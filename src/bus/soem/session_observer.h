@@ -14,6 +14,7 @@
  */
 void emaster_session_observer_read_drive(
     emaster_soem_sdo_reader_context_t *reader,
+    const emaster_slave_profile_t *profile,
     emaster_drive_diagnostic_t *diagnostic);
 void emaster_session_observer_read_sync(
     emaster_soem_sdo_reader_context_t *reader,

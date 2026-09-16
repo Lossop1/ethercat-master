@@ -559,7 +559,20 @@ typedef struct
 {
     uint32_t tid;
     int policy;
+    /*
+     * 内核的**原始**优先级，不是 schedule_priority。对 SCHED_FIFO/SCHED_RR，
+     * 内核按 `99 - sched_priority` 存，所以配置里的 80 在这里读出来是 19。
+     * 保持原值不换算：换算公式对 SCHED_OTHER 不成立，而这一列的价值恰恰是
+     * 它跟内核说的话一字不差。要对照配置就读成 `99 - priority`。
+     */
     int priority;
+    /*
+     * 亲和掩码（/proc/self/task/<tid>/status 的 Cpus_allowed_list，形如 "11" 或
+     * "0-11"）。policy/prio 说得清调度策略，说不清"绑没绑上、绑在哪个核"，而部署
+     * 的 realtime.required 为假时绑定失败是允许继续运行的——那种轮次里，这一列是
+     * 报告内唯一能证明线程实际跑在哪些核上的东西，且它是内核的实况而非进程自述。
+     */
+    char cpus_allowed[64];
     uint64_t exec_ns;
     uint64_t wait_ns;
     uint64_t switches;

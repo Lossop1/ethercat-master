@@ -22,7 +22,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define STATUS_DEFAULT_SOCKET "/tmp/emaster-orangemaster.sock"
+#include "emaster/bus/command_socket_path.h"
+
 #define STATUS_RESPONSE_MAX 2048
 #define STATUS_MAX_AXES 16
 
@@ -380,26 +381,28 @@ static bool frame_is_truncated(const char *text)
 
 int main(int argc, char **argv)
 {
-    const char *socket_path = STATUS_DEFAULT_SOCKET;
+    char socket_path[EMASTER_SOCKET_PATH_CAPACITY];
     long watch_ms = 0;
     int fd;
 
     if (argc > 1 && strcmp(argv[1], "--help") == 0)
     {
-        printf("用法：%s [套接字路径] [--watch 毫秒]\n", argv[0]);
-        printf("  默认套接字：/tmp/emaster-<deployment-id>.sock\n");
+        printf("用法：%s [--watch 毫秒] [选项]\n", argv[0]);
+        printf("  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+               EMASTER_DEPLOYMENT_ENV);
+        printf("  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
         printf("  --watch：周期刷新；不指定时只读一次\n");
         return 0;
     }
-    if (argc > 1 && argv[1][0] != '-')
+    /* 先摘掉 --socket / --deployment，剩下的只可能是 --watch。 */
+    if (!emaster_cli_resolve_socket(&argc, argv, socket_path, sizeof(socket_path)))
     {
-        socket_path = argv[1];
+        fputs("错误：无法确定命令套接字路径\n", stderr);
+        fprintf(stderr, "  加 --deployment <部署ID>，或 --socket <路径>，"
+                        "或设环境变量 %s\n", EMASTER_DEPLOYMENT_ENV);
+        return 2;
     }
-    if (argc > 3 && strcmp(argv[2], "--watch") == 0)
-    {
-        watch_ms = strtol(argv[3], NULL, 10);
-    }
-    else if (argc > 1 && strcmp(argv[1], "--watch") == 0 && argc > 2)
+    if (argc > 2 && strcmp(argv[1], "--watch") == 0)
     {
         watch_ms = strtol(argv[2], NULL, 10);
     }

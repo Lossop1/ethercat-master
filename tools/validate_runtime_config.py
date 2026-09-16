@@ -747,6 +747,59 @@ def validate_deployments(
                     f"部署 {deployment_id} 的运动方案必须完整覆盖拓扑中的全部轴",
                 )
 
+        # 实时调度参数属于主机。整块可选：缺省表示不做任何实时设置，进程照常运行，
+        # 只是不保证时序——这与"配了但值无效"是两件事，前者合法，后者必须报错。
+        realtime = deployment.get("realtime")
+        check.require(
+            realtime is None or isinstance(realtime, dict),
+            f"部署 {deployment_id} 的 realtime 必须是对象或 null",
+        )
+        if isinstance(realtime, dict):
+            scheduler_priority = realtime.get("scheduler_priority")
+            check.require(
+                scheduler_priority is None
+                or (
+                    isinstance(scheduler_priority, int)
+                    and not isinstance(scheduler_priority, bool)
+                    and 1 <= scheduler_priority <= 99
+                ),
+                f"部署 {deployment_id} 的 realtime.scheduler_priority 必须是 1..99 的整数或 null",
+            )
+            cpu_core = realtime.get("cpu_core")
+            check.require(
+                cpu_core is None
+                or (
+                    isinstance(cpu_core, int)
+                    and not isinstance(cpu_core, bool)
+                    and 0 <= cpu_core <= 65535
+                ),
+                f"部署 {deployment_id} 的 realtime.cpu_core 必须是 0..65535 的整数或 null",
+            )
+            # 核编号不校验"是否真的存在"：那取决于运行时主机，不是静态配置能判定的。
+            # 绑不上的核由主站按 realtime.required 决定是降级还是拒绝启动。
+            realtime_required = realtime.get("required", False)
+            check.require(
+                isinstance(realtime_required, bool),
+                f"部署 {deployment_id} 的 realtime.required 必须是布尔值",
+            )
+            check.require(
+                not realtime_required
+                or scheduler_priority is not None
+                or cpu_core is not None,
+                f"部署 {deployment_id} 的 realtime.required 为真但没有声明任何实时参数",
+            )
+
+        external_target_timeout_ms = deployment.get("external_target_timeout_ms")
+        check.require(
+            external_target_timeout_ms is None
+            or (
+                isinstance(external_target_timeout_ms, int)
+                and not isinstance(external_target_timeout_ms, bool)
+                and 1 <= external_target_timeout_ms <= 600000
+            ),
+            f"部署 {deployment_id} 的 external_target_timeout_ms 必须是 1..600000 的整数或 null",
+        )
+
         # 同一主机和 EtherCAT 网口允许出现多条部署记录：它们是互斥的启动方案，
         # 一次只能运行一个，物理独占由运行时抢占网卡自然保证，不是静态可判定的冲突。
         # 静态可判定的风险是不同方案的审计报告互相覆盖，因此约束报告路径唯一。

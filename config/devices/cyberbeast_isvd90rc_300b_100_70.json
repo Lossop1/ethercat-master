@@ -151,6 +151,17 @@
     "gear_ratio_object": "0x6091",
     "must_read_from_each_physical_slave": true
   },
+  "slow_telemetry": [
+    {"name": "actual_current", "index": "0x6078", "subindex": 0, "type": "i16", "semantic": "actual_current", "unit": "0.001 A"},
+    {"name": "cia402_error_code", "index": "0x603F", "subindex": 0, "type": "u16", "semantic": "error_code", "unit": ""},
+    {"name": "bus_voltage", "index": "0x6079", "subindex": 0, "type": "u32", "semantic": "bus_voltage", "unit": "mV"},
+    {"name": "mosfet_temperature", "index": "0x200B", "subindex": 1, "type": "i16", "semantic": "mosfet_temperature", "unit": "0.1 degC"},
+    {"name": "motor_temperature", "index": "0x200B", "subindex": 2, "type": "i16", "semantic": "motor_temperature", "unit": "0.1 degC"},
+    {"name": "actual_motor_speed", "index": "0x200B", "subindex": 8, "type": "i32", "semantic": "actual_velocity", "unit": "rpm"},
+    {"name": "speed_command", "index": "0x200B", "subindex": 9, "type": "i32", "semantic": "target_velocity", "unit": "rpm"},
+    {"name": "extended_servo_error_code", "index": "0x203E", "subindex": 0, "type": "u32", "semantic": "extended_error_code", "unit": ""},
+    {"name": "servo_error_code", "index": "0x203F", "subindex": 0, "type": "u32", "semantic": "servo_error_code", "unit": ""}
+  ],
   "source": {
     "esi": "docs/lz-joint/ECAT_CIA402.xml"
   }

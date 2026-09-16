@@ -43,6 +43,47 @@ typedef struct
     int8_t mode_init_value;
 } emaster_pdo_set_profile_t;
 
+/*
+ * 慢速遥测对象在总线上的字面宽度。这里不复用 emaster/config/runtime_config.h 的
+ * emaster_config_sdo_value_type_t：设备目录只链接 emaster::protocol，不得反向依赖运行
+ * 配置层，否则设备事实会被运行方案拉进链接依赖。两套枚举各自独立，语义由使用处解释。
+ */
+typedef enum
+{
+    EMASTER_TELEMETRY_TYPE_U8 = 0,
+    EMASTER_TELEMETRY_TYPE_I8,
+    EMASTER_TELEMETRY_TYPE_U16,
+    EMASTER_TELEMETRY_TYPE_I16,
+    EMASTER_TELEMETRY_TYPE_U32,
+    EMASTER_TELEMETRY_TYPE_I32
+} emaster_telemetry_type_t;
+
+/* 语义决定这个对象落到会话结果的哪个命名槽位；通用总线层不认识供应商对象号。 */
+typedef enum
+{
+    EMASTER_TELEMETRY_NONE = 0,
+    EMASTER_TELEMETRY_ACTUAL_CURRENT,
+    EMASTER_TELEMETRY_ERROR_CODE,
+    EMASTER_TELEMETRY_BUS_VOLTAGE,
+    EMASTER_TELEMETRY_MOSFET_TEMPERATURE,
+    EMASTER_TELEMETRY_MOTOR_TEMPERATURE,
+    EMASTER_TELEMETRY_ACTUAL_VELOCITY,
+    EMASTER_TELEMETRY_TARGET_VELOCITY,
+    EMASTER_TELEMETRY_EXTENDED_ERROR_CODE,
+    EMASTER_TELEMETRY_SERVO_ERROR_CODE
+} emaster_telemetry_semantic_t;
+
+/* 一个供应商私有遥测对象：对象号来自设备配置，解释权归声明它的设备。 */
+typedef struct
+{
+    const char *name;
+    uint16_t index;
+    uint8_t subindex;
+    emaster_telemetry_type_t type;
+    emaster_telemetry_semantic_t semantic;
+    const char *unit;
+} emaster_slow_telemetry_t;
+
 typedef struct
 {
     /* profile_id 是配置间引用使用的稳定键；model 仅用于显示和证据核对。 */
@@ -65,6 +106,9 @@ typedef struct
     /* 供应商状态字位条件仅作设备诊断，停用完成由完整 CiA 402 状态确认。 */
     uint16_t safe_stop_status_mask;
     uint16_t safe_stop_status_value;
+    /* 慢速遥测对象字典。设备不需要就留空；通用代码遍历它，不写死对象号。 */
+    const emaster_slow_telemetry_t *slow_telemetry;
+    size_t slow_telemetry_count;
 } emaster_slave_profile_t;
 
 /* 精确比较身份三元组；空指针和任何字段不一致均返回 false。 */

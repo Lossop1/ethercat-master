@@ -546,6 +546,38 @@ static void capture_thread_schedstat(emaster_control_session_report_t *report)
             }
             (void)fclose(stream);
         }
+        /*
+         * 亲和掩码取自 status 而非 sched：sched 里没有这一项，而且 Cpus_allowed
+         * （十六进制掩码）与 Cpus_allowed_list（"0-11" 这种列表）是两行，后者才有
+         * 人能直接读的形式。比较 18 个字符，刚好把 "Cpus_allowed:" 排除在外。
+         */
+        (void)snprintf(path, sizeof(path), "/proc/self/task/%s/status", entry->d_name);
+        stream = fopen(path, "r");
+        if (stream != NULL)
+        {
+            while (fgets(line, sizeof(line), stream) != NULL)
+            {
+                if (strncmp(line, "Cpus_allowed_list:", 18) == 0)
+                {
+                    char *value = line + 18;
+                    size_t length;
+
+                    while (*value == ' ' || *value == '\t')
+                    {
+                        ++value;
+                    }
+                    length = strcspn(value, "\r\n");
+                    if (length >= sizeof(row->cpus_allowed))
+                    {
+                        length = sizeof(row->cpus_allowed) - 1U;
+                    }
+                    memcpy(row->cpus_allowed, value, length);
+                    row->cpus_allowed[length] = '\0';
+                    break;
+                }
+            }
+            (void)fclose(stream);
+        }
         ++report->thread_schedstat_count;
     }
     (void)closedir(task_dir);
@@ -884,7 +916,9 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
              * 这里是退出 OP 后的诊断快照。计数器可能包含停机和状态转换期间的事件，
              * 不能与 first_cycle_failure 中的首次周期异常等同。
              */
-            emaster_session_observer_read_drive(&sdo, &axis_result->drive_diagnostic);
+            emaster_session_observer_read_drive(
+                &sdo, session->plan->axes[axis_index].device_profile,
+                &axis_result->drive_diagnostic);
             emaster_session_observer_read_sync(&sdo, UINT16_C(0x1C32),
                                                &axis_result->sm2_diagnostic);
             emaster_session_observer_read_sync(&sdo, UINT16_C(0x1C33),

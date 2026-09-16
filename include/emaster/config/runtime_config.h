@@ -194,6 +194,29 @@ typedef struct
     const char *error_recovery_policy_id;
     /* P2.5: 故障隔离策略，默认为 GLOBAL_STOP（向后兼容） */
     emaster_fault_policy_t fault_policy;
+    /*
+     * 实时调度参数属于主机，不属于设备：同样一台驱动器接到别的机器上，核编号和
+     * 优先级都要重挑。此前它们写死在 tools/master/main.c 里（绑 11 核、优先级 80），
+     * 换一台机器要么绑到不存在的核上直接启动失败，要么无声地绑错核。
+     *
+     * has_* 为假表示"这一维度不设置"，而不是"设成 0"：0 号核是合法的绑定目标，
+     * 优先级 0 也是合法的 SCHED_FIFO 优先级，用 0 兼作"未配置"会把两者混为一谈。
+     */
+    bool has_realtime_priority;
+    int32_t realtime_priority;
+    bool has_realtime_cpu_core;
+    int32_t realtime_cpu_core;
+    /*
+     * true：上面任何一项未能生效即拒绝启动。计时类实验必须用它——"以为绑上了其实
+     * 没绑"会让整轮数据失去意义，而这种失败在报告里只体现为抖动变大。
+     * false：失败如实写进报告并继续运行，未绑定的进程仍然能跑，只是不保证时序。
+     */
+    bool realtime_required;
+    /*
+     * 外部目标失活超时（毫秒）：外部控制器超过此时间未更新目标就退化为保持。
+     * 0 表示使用内置默认值（200 ms）。
+     */
+    uint32_t external_target_timeout_ms;
 } emaster_deployment_config_t;
 
 /* 以下接口只返回生成目录中的只读对象，调用者不得释放或修改返回值。 */

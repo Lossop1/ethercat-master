@@ -10,23 +10,113 @@ enum
     EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS = 32
 };
 
+/* 在设备声明里按语义查找一条遥测对象；设备没有声明就返回 NULL，调用者据此跳过。 */
+static const emaster_slow_telemetry_t *observer_find_telemetry(
+    const emaster_slave_profile_t *profile, emaster_telemetry_semantic_t semantic)
+{
+    if (profile == NULL || profile->slow_telemetry == NULL)
+    {
+        return NULL;
+    }
+    for (size_t index = 0U; index < profile->slow_telemetry_count; ++index)
+    {
+        if (profile->slow_telemetry[index].semantic == semantic)
+        {
+            return &profile->slow_telemetry[index];
+        }
+    }
+    return NULL;
+}
+
+/* 按条目声明的宽度读取一个值到 32 位诊断槽位；宽度和符号由配置声明，不在代码里写死。 */
+static bool observer_read_telemetry_u32(emaster_soem_sdo_reader_context_t *reader,
+                                        const emaster_slow_telemetry_t *entry, uint32_t *value)
+{
+    uint8_t u8_value = 0U;
+    int8_t i8_value = 0;
+    uint16_t u16_value = 0U;
+    int16_t i16_value = 0;
+    int32_t i32_value = 0;
+
+    switch (entry->type)
+    {
+        case EMASTER_TELEMETRY_TYPE_U8:
+            if (!emaster_soem_read_u8(reader, entry->index, entry->subindex, &u8_value))
+            {
+                return false;
+            }
+            *value = u8_value;
+            return true;
+        case EMASTER_TELEMETRY_TYPE_I8:
+            if (!emaster_soem_read_i8(reader, entry->index, entry->subindex, &i8_value))
+            {
+                return false;
+            }
+            *value = (uint32_t)i8_value;
+            return true;
+        case EMASTER_TELEMETRY_TYPE_U16:
+            if (!emaster_soem_read_u16(reader, entry->index, entry->subindex, &u16_value))
+            {
+                return false;
+            }
+            *value = u16_value;
+            return true;
+        case EMASTER_TELEMETRY_TYPE_I16:
+            if (!emaster_soem_read_i16(reader, entry->index, entry->subindex, &i16_value))
+            {
+                return false;
+            }
+            *value = (uint32_t)i16_value;
+            return true;
+        case EMASTER_TELEMETRY_TYPE_U32:
+            return emaster_soem_read_u32(reader, entry->index, entry->subindex, value);
+        case EMASTER_TELEMETRY_TYPE_I32:
+            if (!emaster_soem_read_i32(reader, entry->index, entry->subindex, &i32_value))
+            {
+                return false;
+            }
+            *value = (uint32_t)i32_value;
+            return true;
+    }
+    return false;
+}
+
+/*
+ * 读取驱动器诊断对象的停机快照。603F 是 CiA 402 标准错误码对象、1001 是标准对象字典里的
+ * 错误寄存器，仍然写在这里；203E/203F 是供应商私有语义，只能按设备配置声明的 semantic 查找：
+ * 设备没有声明就不读，也不计入失败，否则"没有这两个对象的驱动器"会被记成诊断读失败。
+ * 读取顺序沿用此前的短路链：前一条失败就不再发起后续读。
+ */
 void emaster_session_observer_read_drive(
     emaster_soem_sdo_reader_context_t *reader,
+    const emaster_slave_profile_t *profile,
     emaster_drive_diagnostic_t *diagnostic)
 {
+    const emaster_slow_telemetry_t *entry;
+    bool succeeded;
+
     if (reader == NULL || diagnostic == NULL)
     {
         return;
     }
-    diagnostic->read_succeeded =
-        emaster_soem_read_u16(reader, UINT16_C(0x603F), UINT8_C(0),
-                              &diagnostic->cia402_error_code) &&
-        emaster_soem_read_u8(reader, UINT16_C(0x1001), UINT8_C(0),
-                             &diagnostic->error_register) &&
-        emaster_soem_read_u32(reader, UINT16_C(0x203E), UINT8_C(0),
-                              &diagnostic->extended_servo_error_code) &&
-        emaster_soem_read_u32(reader, UINT16_C(0x203F), UINT8_C(0),
-                              &diagnostic->servo_error_code);
+    succeeded = emaster_soem_read_u16(reader, UINT16_C(0x603F), UINT8_C(0),
+                                      &diagnostic->cia402_error_code) &&
+                emaster_soem_read_u8(reader, UINT16_C(0x1001), UINT8_C(0),
+                                     &diagnostic->error_register);
+    entry = succeeded ? observer_find_telemetry(profile, EMASTER_TELEMETRY_EXTENDED_ERROR_CODE)
+                      : NULL;
+    if (entry != NULL)
+    {
+        succeeded = observer_read_telemetry_u32(reader, entry,
+                                               &diagnostic->extended_servo_error_code);
+    }
+    entry = succeeded ? observer_find_telemetry(profile, EMASTER_TELEMETRY_SERVO_ERROR_CODE)
+                      : NULL;
+    if (entry != NULL)
+    {
+        succeeded = observer_read_telemetry_u32(reader, entry, &diagnostic->servo_error_code);
+    }
+    diagnostic->read_succeeded = succeeded;
 }
 
 void emaster_session_observer_read_sync(

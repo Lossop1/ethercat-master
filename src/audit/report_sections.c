@@ -917,9 +917,11 @@ static bool write_thread_schedstat(FILE *stream, const emaster_control_session_r
         const emaster_thread_schedstat_t *row = &report->thread_schedstat[index];
 
         REQUIRE_WRITE(fprintf(stream,
-            "%s{\"tid\":%" PRIu32 ",\"policy\":%d,\"priority\":%d"
+            "%s{\"tid\":%" PRIu32 ",\"policy\":%d,\"priority\":%d,\"cpus_allowed\":",
+            index == 0U ? "" : ",", row->tid, row->policy, row->priority) >= 0);
+        REQUIRE_WRITE(emaster_json_string(stream, row->cpus_allowed));
+        REQUIRE_WRITE(fprintf(stream,
             ",\"exec_ns\":%" PRIu64 ",\"wait_ns\":%" PRIu64 ",\"switches\":%" PRIu64 "}",
-            index == 0U ? "" : ",", row->tid, row->policy, row->priority,
             row->exec_ns, row->wait_ns, row->switches) >= 0);
     }
     return fputc(']', stream) != EOF;

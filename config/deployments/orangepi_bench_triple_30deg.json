@@ -10,5 +10,11 @@
     ],
     "motion_profile_id": "orangepi-bench.test-triple-30deg",
     "run_report_path": "runtime/reports/orangepi-triple-30deg-latest.json",
-    "error_recovery_policy_id": "default"
+    "error_recovery_policy_id": "default",
+    "external_target_timeout_ms": 200,
+    "realtime": {
+        "scheduler_priority": 80,
+        "cpu_core": 11,
+        "required": true
+    }
 }
