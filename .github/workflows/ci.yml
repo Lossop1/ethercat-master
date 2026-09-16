@@ -30,9 +30,15 @@ jobs:
       - name: 构建
         run: cmake --build --preset linux-debug --parallel 2
 
+      # 观测通道的离线自测。它不需要 EtherCAT 硬件，因此能在 CI 上跑；这条命令的
+      # 价值在于把"读者不得撕裂、不得阻塞写者"这类性质钉进回归，而不是等台架上
+      # 出了问题再回头猜。含对抗性对照探针，跑一次约几秒。
+      - name: 观测通道离线自测
+        run: ./build/linux-debug/tools/observation_selftest/observation-selftest
+
       - name: 静态分析
         run: >-
           cppcheck --enable=warning,performance,portability --error-exitcode=1
           --std=c11 --suppress=missingIncludeSystem
           -I include -I build/linux-debug/generated
-          src/catalog src/bus/soem tools/fingerprint
+          src/catalog src/bus/soem src/bus/observation tools/fingerprint

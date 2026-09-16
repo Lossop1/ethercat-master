@@ -1,0 +1,1153 @@
+/*
+ * 观测通道离线自测。不需要 EtherCAT 硬件，也不需要 SOEM——这是把 emaster::observation
+ * 拆成独立库的主要理由：整条通道除"周期线程发布那一行调用点"以外都能在这里验证。
+ *
+ * 这里验的不是"跑得通"，是四条性质：
+ *
+ * 1. **不撕裂**。读者拿到的 OK 帧必须是一整帧同源数据，不能是两拍拼出来的混合物。
+ * 2. **覆盖语义**。请求已被覆盖的序号必须拿到 STALE，而不是半截帧。
+ * 3. **写者无感**。读者的数量、快慢、是否卡死，都不改变写者的行为。这是
+ *    "观测不扰动控制"的操作性判据。
+ * 4. **协议可检出畸形**。线格式的版本、长度、轴数必须自洽，错一个字节就得整条拒绝，
+ *    而不是按错位偏移解出一堆"看起来合理"的数字。
+ *
+ * 关键手法：每一条"零撕裂"的断言旁边都配一个**故意的错误读者**做对照。没有对照，
+ * "零撕裂"可能只是因为测试根本没制造出竞争——那种通过毫无价值。所以：
+ *
+ *   - 环形缓冲：无校验探针直接读 head % CAP 那一格（写者手上的那格），必须能观察到
+ *     撕裂。它证明危险确实存在，因此 oldest_readable() 抬高一格不是多余的。
+ *   - 慢速 seqlock：跳过序号校验的探针必须能观察到不一致快照。它证明这个交错里撕裂
+ *     确实可达，带校验读者的"零撕裂"才有意义。
+ *
+ * 编译与运行（本机与 Pi 都适用）：
+ *   cmake --build build --target observation-selftest
+ *   ./build/tools/observation_selftest/observation-selftest
+ */
+#define _POSIX_C_SOURCE 200809L
+
+#include "emaster/observation/ring.h"
+#include "emaster/observation/slow.h"
+#include "emaster/observation/wire.h"
+
+#include <inttypes.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+/* 测试里用的轴数与 WKC。真实部署是 4 轴、期望 WKC 12，取同量级更有代表性。 */
+#define TEST_AXES 4U
+#define TEST_WKC 12
+
+/* 并发测试的帧数。取到百万量级是为了让"写者正在写某格槽"这个窄窗口被撞上足够多次。 */
+#define TEST_CONCURRENT_FRAMES UINT64_C(1000000)
+
+/* 慢速 seqlock 测试的发布次数。 */
+#define TEST_SLOW_PUBLISHES UINT64_C(20000)
+
+/* 写者独立性测试里的读者线程数。 */
+#define TEST_WRITER_READERS 4U
+
+/*
+ * 读者每转这么多圈让出一次 CPU。满速自旋的读者会把写者（本进程主线程，普通优先级）
+ * 从 CPU 上挤下去，测出来的就成了操作系统的调度延迟而不是写者的行为——在核数少于
+ * "读者数 + 1" 的 CI runner 上这是必然发生的。让出一次既保留了 head 那一行的争用，
+ * 又不会饿死写者。
+ */
+#define READER_YIELD_INTERVAL 64U
+
+/*
+ * 慢速写者每发布一次空转的圈数。没有它，写者会在读者两次校验之间发布成千上万次，
+ * 交错窗口被压得极窄，对照探针就观察不到不一致快照——测试会因为"没制造出竞争"而
+ * 失去意义（自测里把这条写成了显式断言）。
+ */
+#define SLOW_WRITER_SPIN 500U
+
+static int g_checks;
+static int g_failures;
+
+#define CHECK(condition, ...)                                                              \
+    do                                                                                     \
+    {                                                                                      \
+        ++g_checks;                                                                        \
+        if (!(condition))                                                                  \
+        {                                                                                  \
+            ++g_failures;                                                                  \
+            fprintf(stderr, "  失败 %s:%d：", __FILE__, __LINE__);                         \
+            fprintf(stderr, __VA_ARGS__);                                                  \
+            fputc('\n', stderr);                                                           \
+        }                                                                                  \
+    } while (0)
+
+static void section(const char *name)
+{
+    printf("== %s\n", name);
+}
+
+static uint64_t monotonic_ns(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    {
+        return 0U;
+    }
+    return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
+}
+
+/*
+ * 造一帧内容，全部字段都是 index 的函数。任何两拍之间的字段值都不同，所以
+ * "两拍混在一起"一定能被 frame_matches() 认出来——这是撕裂检测的基础。
+ *
+ * publish_index 刻意不在这里填：它由环形缓冲的发布函数负责，是槽归属的唯一凭据。
+ */
+static void fill_frame(emaster_observation_frame_t *frame, uint64_t index)
+{
+    uint16_t axis_index;
+
+    emaster_observation_frame_clear(frame, TEST_AXES);
+    frame->cycle = index * UINT64_C(3) + UINT64_C(7);
+    frame->monotonic_ns = index * UINT64_C(1000000);
+    frame->deadline_ns = frame->monotonic_ns + UINT64_C(250000);
+    frame->frame_interval_ns = UINT64_C(1000000);
+    frame->wkc = (int32_t)TEST_WKC;
+    frame->flags = (uint32_t)(index & UINT64_C(0x7));
+
+    for (axis_index = 0U; axis_index < TEST_AXES; ++axis_index)
+    {
+        emaster_observation_axis_t *axis = &frame->axes[axis_index];
+
+        axis->actual_position = (int32_t)(index * UINT64_C(31) + axis_index);
+        axis->target_position = (int32_t)(index * UINT64_C(31) + axis_index + UINT64_C(1000));
+        axis->actual_velocity = -(int32_t)(index * UINT64_C(7) + axis_index);
+        axis->actual_torque = (int32_t)(index * UINT64_C(13) + axis_index * UINT64_C(3));
+        axis->status_word = (uint16_t)(UINT16_C(0x0637) + axis_index);
+        axis->control_word = (uint16_t)(UINT16_C(0x000F) + axis_index);
+        axis->flags = (uint32_t)(index & UINT64_C(0x3)) + axis_index;
+    }
+}
+
+/* 逐字段比对，不用 memcmp：填充字节是否被拷贝是编译器的自由，不该混进判定。 */
+static bool axis_matches(const emaster_observation_axis_t *actual,
+                         const emaster_observation_axis_t *expected)
+{
+    return actual->actual_position == expected->actual_position &&
+           actual->target_position == expected->target_position &&
+           actual->actual_velocity == expected->actual_velocity &&
+           actual->actual_torque == expected->actual_torque &&
+           actual->status_word == expected->status_word &&
+           actual->control_word == expected->control_word && actual->flags == expected->flags;
+}
+
+/* frame 是否恰好是 index 这一拍的内容（含 publish_index）。 */
+static bool frame_matches(const emaster_observation_frame_t *frame, uint64_t index)
+{
+    emaster_observation_frame_t expected;
+    uint16_t axis_index;
+
+    if (frame->publish_index != index)
+    {
+        return false;
+    }
+    fill_frame(&expected, index);
+    if (frame->cycle != expected.cycle || frame->monotonic_ns != expected.monotonic_ns ||
+        frame->deadline_ns != expected.deadline_ns ||
+        frame->frame_interval_ns != expected.frame_interval_ns || frame->wkc != expected.wkc ||
+        frame->flags != expected.flags || frame->axis_count != expected.axis_count)
+    {
+        return false;
+    }
+    for (axis_index = 0U; axis_index < expected.axis_count; ++axis_index)
+    {
+        if (!axis_matches(&frame->axes[axis_index], &expected.axes[axis_index]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* ---------------------------------------------------------------- 边界与窗口 */
+
+static void test_ring_windows(void)
+{
+    static emaster_observation_ring_t ring;
+    emaster_observation_frame_t frame;
+    emaster_observation_frame_t out;
+    uint64_t oldest;
+    uint64_t newest;
+    uint64_t index;
+    const uint64_t capacity = (uint64_t)EMASTER_OBSERVATION_RING_CAPACITY;
+
+    section("环形缓冲：边界与可读窗口");
+
+    emaster_observation_ring_init(&ring);
+    CHECK(emaster_observation_ring_head(&ring) == 0U, "初始 head 应为 0");
+    CHECK(!emaster_observation_ring_window(&ring, &oldest, &newest), "空缓冲不应给出窗口");
+    CHECK(emaster_observation_ring_read(&ring, 0U, &out) == EMASTER_OBSERVATION_READ_EMPTY,
+          "空缓冲应返回 EMPTY");
+
+    /* 发布到 head = CAP - 1：此时还没有任何一帧被覆盖，窗口下界是 0。 */
+    for (index = 0U; index + 1U < capacity; ++index)
+    {
+        fill_frame(&frame, index);
+        emaster_observation_ring_publish(&ring, &frame);
+    }
+    CHECK(emaster_observation_ring_head(&ring) == capacity - 1U, "head 应为 CAP-1");
+    CHECK(emaster_observation_ring_window(&ring, &oldest, &newest) && oldest == 0U &&
+              newest == capacity - 1U,
+          "head=CAP-1 时窗口应为 [0, CAP-1)");
+    CHECK(emaster_observation_ring_read(&ring, 0U, &out) == EMASTER_OBSERVATION_READ_OK &&
+              frame_matches(&out, 0U),
+          "head=CAP-1 时第 0 帧应可读且内容自洽");
+    CHECK(emaster_observation_ring_read(&ring, capacity - 1U, &out) ==
+              EMASTER_OBSERVATION_READ_STALE,
+          "请求尚未发布的序号应返回 STALE");
+    CHECK(emaster_observation_ring_read(&ring, capacity, &out) ==
+              EMASTER_OBSERVATION_READ_STALE,
+          "请求远未来的序号应返回 STALE");
+
+    /*
+     * 发布到 head = CAP。第 0 帧所在的槽与写者手上的那一格是同一个（CAP % CAP == 0），
+     * 必须被排除。这条用例抓出过 oldest_readable() 写成 `>` 而不是 `>=` 的差一错误。
+     */
+    fill_frame(&frame, capacity - 1U);
+    emaster_observation_ring_publish(&ring, &frame);
+    CHECK(emaster_observation_ring_head(&ring) == capacity, "head 应为 CAP");
+    CHECK(emaster_observation_ring_window(&ring, &oldest, &newest) && oldest == 1U,
+          "head=CAP 时窗口下界应为 1（最老一帧不可读）");
+    CHECK(emaster_observation_ring_read(&ring, 0U, &out) == EMASTER_OBSERVATION_READ_STALE,
+          "head=CAP 时第 0 帧（写者手上的那格）必须 STALE");
+    CHECK(emaster_observation_ring_read(&ring, 1U, &out) == EMASTER_OBSERVATION_READ_OK &&
+              frame_matches(&out, 1U),
+          "head=CAP 时第 1 帧应可读");
+
+    /* 再推一格：窗口下界随之前移。 */
+    fill_frame(&frame, capacity);
+    emaster_observation_ring_publish(&ring, &frame);
+    CHECK(emaster_observation_ring_window(&ring, &oldest, &newest) && oldest == 2U &&
+              newest == capacity + 1U,
+          "head=CAP+1 时窗口应为 [2, CAP+1)");
+    CHECK(emaster_observation_ring_read(&ring, 1U, &out) == EMASTER_OBSERVATION_READ_STALE,
+          "head=CAP+1 时第 1 帧应已被覆盖");
+    CHECK(emaster_observation_ring_read(&ring, 2U, &out) == EMASTER_OBSERVATION_READ_OK &&
+              frame_matches(&out, 2U),
+          "head=CAP+1 时第 2 帧应可读");
+
+    /* 一路推到整整两圈，确认覆盖只按环形推进，不出现越界或误判可读。 */
+    for (index = capacity + 1U; index < capacity * 2U; ++index)
+    {
+        fill_frame(&frame, index);
+        emaster_observation_ring_publish(&ring, &frame);
+    }
+    CHECK(emaster_observation_ring_head(&ring) == capacity * 2U, "head 应为 2*CAP");
+    CHECK(emaster_observation_ring_window(&ring, &oldest, &newest) && oldest == capacity + 1U &&
+              newest == capacity * 2U,
+          "head=2*CAP 时窗口应为 [CAP+1, 2*CAP)");
+    CHECK(emaster_observation_ring_read(&ring, capacity, &out) ==
+              EMASTER_OBSERVATION_READ_STALE,
+          "head=2*CAP 时第 CAP 帧应已被覆盖");
+    CHECK(emaster_observation_ring_read(&ring, capacity + 1U, &out) ==
+              EMASTER_OBSERVATION_READ_OK &&
+              frame_matches(&out, capacity + 1U),
+          "head=2*CAP 时第 CAP+1 帧应可读");
+    CHECK(emaster_observation_ring_read(&ring, capacity * 2U - 1U, &out) ==
+              EMASTER_OBSERVATION_READ_OK &&
+              frame_matches(&out, capacity * 2U - 1U),
+          "head=2*CAP 时最新一帧应可读");
+
+    /* 轴数超上限时按上限截断，而不是写出数组外。 */
+    {
+        emaster_observation_frame_t oversize;
+
+        emaster_observation_frame_clear(&oversize, (uint16_t)(EMASTER_OBSERVATION_MAX_AXES + 5U));
+        emaster_observation_ring_publish(&ring, &oversize);
+        CHECK(emaster_observation_ring_read(&ring, capacity * 2U, &out) ==
+                      EMASTER_OBSERVATION_READ_OK &&
+                  out.axis_count == (uint16_t)EMASTER_OBSERVATION_MAX_AXES,
+              "超上限的轴数应被截断到 MAX_AXES");
+    }
+}
+
+/* ---------------------------------------------------------------- 并发读者 */
+
+typedef struct
+{
+    const emaster_observation_ring_t *ring;
+    _Atomic bool stop;
+    _Atomic uint64_t ok;
+    _Atomic uint64_t stale;
+    _Atomic uint64_t empty;
+    _Atomic uint64_t unstable;
+    /* 读过 OK 但内容对不上：撕裂。唯一真正不能出现的计数。 */
+    _Atomic uint64_t torn;
+    /* 读到的 head 比上一次小：head 单调性被破坏。 */
+    _Atomic uint64_t head_regression;
+    /* read_or_latest 在该降级的时候没有降级。 */
+    _Atomic uint64_t degraded_mismatch;
+} reader_stats_t;
+
+static void stats_reset(reader_stats_t *stats)
+{
+    atomic_store_explicit(&stats->stop, false, memory_order_relaxed);
+    atomic_store_explicit(&stats->ok, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->stale, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->empty, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->unstable, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->torn, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->head_regression, 0U, memory_order_relaxed);
+    atomic_store_explicit(&stats->degraded_mismatch, 0U, memory_order_relaxed);
+}
+
+static void stats_count(_Atomic uint64_t *counter)
+{
+    atomic_fetch_add_explicit(counter, 1U, memory_order_relaxed);
+}
+
+/* 每 READER_YIELD_INTERVAL 次读让出一次 CPU。见该宏处的说明。 */
+static void pause_periodically(unsigned *iterations_since_yield)
+{
+    ++(*iterations_since_yield);
+    if (*iterations_since_yield >= READER_YIELD_INTERVAL)
+    {
+        *iterations_since_yield = 0U;
+        (void)sched_yield();
+    }
+}
+
+/*
+ * 读者 A：永远读最新一帧。这是与写者竞争最激烈的位置——写者刚写完 head 就轮到我们。
+ * 只要 oldest_readable() 的推导成立，这里就不该出现撕裂。
+ */
+static void *reader_newest(void *arg)
+{
+    reader_stats_t *stats = arg;
+    uint64_t last_head = 0U;
+    unsigned since_yield = 0U;
+
+    while (!atomic_load_explicit(&stats->stop, memory_order_relaxed))
+    {
+        uint64_t head;
+        emaster_observation_frame_t frame;
+
+        pause_periodically(&since_yield);
+        head = emaster_observation_ring_head(stats->ring);
+        if (head < last_head)
+        {
+            stats_count(&stats->head_regression);
+        }
+        last_head = head;
+        if (head == 0U)
+        {
+            stats_count(&stats->empty);
+            continue;
+        }
+        switch (emaster_observation_ring_read(stats->ring, head - 1U, &frame))
+        {
+        case EMASTER_OBSERVATION_READ_OK:
+            if (!frame_matches(&frame, head - 1U))
+            {
+                stats_count(&stats->torn);
+            }
+            stats_count(&stats->ok);
+            break;
+        case EMASTER_OBSERVATION_READ_STALE:
+            stats_count(&stats->stale);
+            break;
+        case EMASTER_OBSERVATION_READ_EMPTY:
+            stats_count(&stats->empty);
+            break;
+        case EMASTER_OBSERVATION_READ_UNSTABLE:
+        default:
+            stats_count(&stats->unstable);
+            break;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * 读者 B：永远请求 head - CAP，也就是被 oldest_readable() 排除掉的那一格。
+ * 它必须是 STALE——无论写者有没有推进。这条断言把"排除最老一帧"从注释变成了测试。
+ */
+static void *reader_oldest(void *arg)
+{
+    reader_stats_t *stats = arg;
+    const uint64_t capacity = (uint64_t)EMASTER_OBSERVATION_RING_CAPACITY;
+    unsigned since_yield = 0U;
+
+    while (!atomic_load_explicit(&stats->stop, memory_order_relaxed))
+    {
+        uint64_t head;
+        emaster_observation_frame_t frame;
+
+        pause_periodically(&since_yield);
+        head = emaster_observation_ring_head(stats->ring);
+        if (head <= capacity)
+        {
+            continue;
+        }
+        switch (emaster_observation_ring_read(stats->ring, head - capacity, &frame))
+        {
+        case EMASTER_OBSERVATION_READ_STALE:
+            stats_count(&stats->stale);
+            break;
+        case EMASTER_OBSERVATION_READ_OK:
+            /* 读到了！要么是排除逻辑没生效，要么是它返回了内容对不上的帧。 */
+            if (!frame_matches(&frame, head - capacity))
+            {
+                stats_count(&stats->torn);
+            }
+            stats_count(&stats->ok);
+            break;
+        default:
+            stats_count(&stats->unstable);
+            break;
+        }
+    }
+    return NULL;
+}
+
+/* 读者 C：窗口里随机挑一帧。只有 STALE 与 OK 是合法结局。 */
+static void *reader_window(void *arg)
+{
+    reader_stats_t *stats = arg;
+    uint64_t cursor = 0U;
+    unsigned since_yield = 0U;
+
+    while (!atomic_load_explicit(&stats->stop, memory_order_relaxed))
+    {
+        uint64_t oldest;
+        uint64_t newest;
+
+        pause_periodically(&since_yield);
+        ++cursor;
+        if (!emaster_observation_ring_window(stats->ring, &oldest, &newest))
+        {
+            stats_count(&stats->empty);
+            continue;
+        }
+        if (newest <= oldest)
+        {
+            stats_count(&stats->stale);
+            continue;
+        }
+        {
+            uint64_t index = oldest + (cursor % (newest - oldest));
+            emaster_observation_frame_t frame;
+
+            switch (emaster_observation_ring_read(stats->ring, index, &frame))
+            {
+            case EMASTER_OBSERVATION_READ_OK:
+                if (!frame_matches(&frame, index))
+                {
+                    stats_count(&stats->torn);
+                }
+                stats_count(&stats->ok);
+                break;
+            case EMASTER_OBSERVATION_READ_STALE:
+                stats_count(&stats->stale);
+                break;
+            default:
+                stats_count(&stats->unstable);
+                break;
+            }
+        }
+    }
+    return NULL;
+}
+
+/*
+ * 读者 D：故意请求一个早就被覆盖的序号，验证降级语义。
+ *
+ * 缓冲区还没绕满一圈时序号 0 仍然可读，此时"未降级"才是正确结局；绕满一圈之后
+ * （head > CAP）序号 0 永远在最老一格之前，降级才是唯一正确结局。
+ */
+static void *reader_degraded(void *arg)
+{
+    reader_stats_t *stats = arg;
+    unsigned since_yield = 0U;
+
+    while (!atomic_load_explicit(&stats->stop, memory_order_relaxed))
+    {
+        emaster_observation_frame_t frame;
+        bool degraded = false;
+
+        pause_periodically(&since_yield);
+        if (emaster_observation_ring_head(stats->ring) <=
+            (uint64_t)EMASTER_OBSERVATION_RING_CAPACITY)
+        {
+            continue;
+        }
+        switch (emaster_observation_ring_read_or_latest(stats->ring, 0U, &frame, &degraded))
+        {
+        case EMASTER_OBSERVATION_READ_OK:
+            if (!degraded)
+            {
+                stats_count(&stats->degraded_mismatch);
+            }
+            if (!frame_matches(&frame, frame.publish_index))
+            {
+                stats_count(&stats->torn);
+            }
+            stats_count(&stats->ok);
+            break;
+        case EMASTER_OBSERVATION_READ_EMPTY:
+            stats_count(&stats->empty);
+            break;
+        default:
+            stats_count(&stats->unstable);
+            break;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * 对照探针：直接读 head % CAP 那一格——**写者手上的那一格**，跳过一切校验。
+ * 它必须在同一个交错里观察到撕裂。否则说明这个测试根本没制造出竞争，别处的
+ * "零撕裂"就是空的。
+ *
+ * 这一段故意制造数据竞争（读者与写者同时访问同一个槽），是测试手段，不是疏漏。
+ */
+static void *reader_naive_probe(void *arg)
+{
+    reader_stats_t *stats = arg;
+    const uint64_t capacity = (uint64_t)EMASTER_OBSERVATION_RING_CAPACITY;
+    unsigned since_yield = 0U;
+
+    while (!atomic_load_explicit(&stats->stop, memory_order_relaxed))
+    {
+        uint64_t head;
+        emaster_observation_frame_t raw;
+
+        pause_periodically(&since_yield);
+        head = emaster_observation_ring_head(stats->ring);
+        if (head == 0U)
+        {
+            continue;
+        }
+        memcpy(&raw, &stats->ring->slots[(size_t)(head % capacity)], sizeof(raw));
+        if (frame_matches(&raw, head))
+        {
+            stats_count(&stats->ok);
+        }
+        else if (head >= capacity && frame_matches(&raw, head - capacity))
+        {
+            /* 读到了上一圈那一帧：写者正占着这格槽，还没写完。 */
+            stats_count(&stats->stale);
+        }
+        else
+        {
+            /* 两圈都不是：两拍混在一起了。 */
+            stats_count(&stats->torn);
+        }
+    }
+    return NULL;
+}
+
+static void test_ring_concurrent(const char *title, void *(*reader)(void *), bool expect_torn)
+{
+    static emaster_observation_ring_t ring;
+    reader_stats_t stats;
+    pthread_t thread;
+    emaster_observation_frame_t frame;
+    uint64_t index;
+
+    emaster_observation_ring_init(&ring);
+    stats.ring = &ring;
+    stats_reset(&stats);
+
+    CHECK(pthread_create(&thread, NULL, reader, &stats) == 0, "读者线程创建失败");
+    for (index = 0U; index < TEST_CONCURRENT_FRAMES; ++index)
+    {
+        fill_frame(&frame, index);
+        emaster_observation_ring_publish(&ring, &frame);
+    }
+    atomic_store_explicit(&stats.stop, true, memory_order_relaxed);
+    CHECK(pthread_join(thread, NULL) == 0, "读者线程 join 失败");
+
+    printf("  %-22s 读 OK=%-10" PRIu64 " STALE=%-10" PRIu64 " EMPTY=%-8" PRIu64
+           " UNSTABLE=%-10" PRIu64 " 撕裂=%" PRIu64 "\n",
+           title, atomic_load(&stats.ok), atomic_load(&stats.stale),
+           atomic_load(&stats.empty), atomic_load(&stats.unstable), atomic_load(&stats.torn));
+
+    if (expect_torn)
+    {
+        /*
+         * 对照探针的通过条件是"**必须**看到问题"。看不到问题说明这个交错太温和，
+         * 别的断言因此不可采信——所以要报失败，而不是报通过。
+         */
+        CHECK(atomic_load(&stats.torn) > 0U,
+              "对照探针没有观察到撕裂，说明本次交错没有制造出竞争，其余断言不可采信");
+    }
+    else
+    {
+        CHECK(atomic_load(&stats.torn) == 0U, "出现了撕裂帧");
+        CHECK(atomic_load(&stats.head_regression) == 0U, "head 出现回退");
+        CHECK(atomic_load(&stats.degraded_mismatch) == 0U, "read_or_latest 的降级判定不对");
+    }
+}
+
+static void test_ring_concurrency(void)
+{
+    section("环形缓冲：并发与对抗读者（每项 100 万帧）");
+    test_ring_concurrent("读者-最新", reader_newest, false);
+    test_ring_concurrent("读者-窗口随机", reader_window, false);
+    test_ring_concurrent("读者-降级取最新", reader_degraded, false);
+    test_ring_concurrent("读者-被排除的最老格", reader_oldest, false);
+    /* 对照：跳过校验的探针必须自己撞上撕裂 */
+    test_ring_concurrent("对照-无校验探针", reader_naive_probe, true);
+}
+
+/* ---------------------------------------------------------------- 写者独立性 */
+
+/* 单次发布的耗时上界：周期的 1%。 */
+#define PUBLISH_BUDGET_NS UINT64_C(10000)
+
+/* 每 BATCH 帧取一次时钟：逐帧测会把 clock_gettime 本身算进被测对象。 */
+#define PUBLISH_BATCH 1000U
+#define PUBLISH_BATCH_MAX 4096U
+
+typedef struct
+{
+    uint64_t total_ns;
+    uint64_t batch_ns[PUBLISH_BATCH_MAX];
+    size_t batch_count;
+} publish_span_t;
+
+/*
+ * 计时口径刻意不用"最慢一批"。写者是本进程的主线程，读者是若干个自旋线程：在没有
+ * 实时优先级的机器上，主线程被 OS 换出一次就会让某一批变成毫秒级——那是调度器的事，
+ * 不是"写者在等读者"。拿最大值当判据，CI runner 上必然假红。
+ *
+ * 改成取批耗时分位：真正失效（写者阻塞）会让**大量**批次一起变慢，分位数一定会抬起
+ * 来；偶发的一次换出只污染最高的一两批。最大值仍然打印出来供人看。
+ */
+static int compare_u64(const void *left, const void *right)
+{
+    uint64_t a = *(const uint64_t *)left;
+    uint64_t b = *(const uint64_t *)right;
+
+    if (a < b)
+    {
+        return -1;
+    }
+    if (a > b)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+/* 把批耗时排序后取分位，折算成单帧。span 的批数组会被排序破坏（最大值不受影响）。 */
+static uint64_t span_percentile_per_frame(publish_span_t *span, unsigned percent)
+{
+    size_t index;
+
+    if (span->batch_count == 0U)
+    {
+        return 0U;
+    }
+    qsort(span->batch_ns, span->batch_count, sizeof(uint64_t), compare_u64);
+    index = (span->batch_count * (size_t)percent) / 100U;
+    if (index >= span->batch_count)
+    {
+        index = span->batch_count - 1U;
+    }
+    return span->batch_ns[index] / PUBLISH_BATCH;
+}
+
+static uint64_t span_max_per_frame(const publish_span_t *span)
+{
+    uint64_t worst = 0U;
+    size_t batch;
+
+    for (batch = 0U; batch < span->batch_count; ++batch)
+    {
+        if (span->batch_ns[batch] > worst)
+        {
+            worst = span->batch_ns[batch];
+        }
+    }
+    return worst / PUBLISH_BATCH;
+}
+
+static uint64_t span_total_per_frame(const publish_span_t *span, uint64_t frames)
+{
+    if (frames == 0U)
+    {
+        return 0U;
+    }
+    return span->total_ns / frames;
+}
+
+static void publish_span_ns(emaster_observation_ring_t *ring, uint64_t frames,
+                            publish_span_t *out)
+{
+    emaster_observation_frame_t frame;
+    uint64_t index;
+    uint64_t batch_start = monotonic_ns();
+
+    memset(out, 0, sizeof(*out));
+    for (index = 0U; index < frames; ++index)
+    {
+        fill_frame(&frame, index);
+        emaster_observation_ring_publish(ring, &frame);
+        if ((index + 1U) % PUBLISH_BATCH == 0U)
+        {
+            uint64_t elapsed = monotonic_ns() - batch_start;
+
+            out->total_ns += elapsed;
+            if (out->batch_count < (size_t)PUBLISH_BATCH_MAX)
+            {
+                out->batch_ns[out->batch_count] = elapsed;
+                ++out->batch_count;
+            }
+            batch_start = monotonic_ns();
+        }
+    }
+}
+
+static void test_writer_independence(void)
+{
+    static emaster_observation_ring_t ring;
+    static publish_span_t alone;
+    static publish_span_t contended;
+    reader_stats_t stats;
+    pthread_t threads[TEST_WRITER_READERS];
+    uint64_t per_frame_alone;
+    uint64_t per_frame_contended;
+    uint64_t p99_alone;
+    uint64_t p99_contended;
+    unsigned thread_index;
+
+    section("写者独立性：四个自旋读者不得拖慢发布");
+
+    emaster_observation_ring_init(&ring);
+    publish_span_ns(&ring, TEST_CONCURRENT_FRAMES, &alone);
+
+    emaster_observation_ring_init(&ring);
+    stats.ring = &ring;
+    stats_reset(&stats);
+    for (thread_index = 0U; thread_index < TEST_WRITER_READERS; ++thread_index)
+    {
+        CHECK(pthread_create(&threads[thread_index], NULL,
+                             (thread_index % 2U == 0U) ? reader_newest : reader_window,
+                             &stats) == 0,
+              "读者线程创建失败");
+    }
+    publish_span_ns(&ring, TEST_CONCURRENT_FRAMES, &contended);
+    atomic_store_explicit(&stats.stop, true, memory_order_relaxed);
+    for (thread_index = 0U; thread_index < TEST_WRITER_READERS; ++thread_index)
+    {
+        CHECK(pthread_join(threads[thread_index], NULL) == 0, "读者线程 join 失败");
+    }
+
+    p99_alone = span_percentile_per_frame(&alone, 99U);
+    per_frame_alone = span_total_per_frame(&alone, TEST_CONCURRENT_FRAMES);
+    p99_contended = span_percentile_per_frame(&contended, 99U);
+    per_frame_contended = span_total_per_frame(&contended, TEST_CONCURRENT_FRAMES);
+
+    printf("  独跑         %" PRIu64 " ns/帧（p99 批 %" PRIu64 "，最慢批 %" PRIu64 "）\n",
+           per_frame_alone, p99_alone, span_max_per_frame(&alone));
+    printf("  %u 读者自旋 %" PRIu64 " ns/帧（p99 批 %" PRIu64 "，最慢批 %" PRIu64 "）\n",
+           (unsigned)TEST_WRITER_READERS, per_frame_contended, p99_contended,
+           span_max_per_frame(&contended));
+
+    /*
+     * 判据分两层，各自对应一种真实的失效模式：
+     *
+     * 1. **绝对上界**：批耗时分位折算到单帧不得超过周期的 1%（10 µs）。抓的是
+     *    "写者被挡住"——真出现等读者的情况，会是几十微秒到毫秒级的**持续**抬升，
+     *    分位数一定会越界。
+     * 2. **相对上界**：读者在场时不得比独跑慢一个数量级（4 倍 + 200 ns）。抓的是
+     *    缓存行争用失控，比第一条敏感，但也更依赖机器状态，所以给足余量。
+     *
+     * 若干个满速自旋读者是最恶劣的争用形态，真实部署是 50 Hz–1 kHz 的按需拉取，远达
+     * 不到这个强度。刻意用最恶劣的形态，判据才有意义。
+     *
+     * 这两条都**不是**"写者耗时与读者无关"——那句话是错的，缓存行争用确实存在。
+     * 能成立的是"写者不等待读者、代码路径不因读者而变"，这里量的是它的后果：常数倍
+     * 的缓存行往返，而不是与读者行为相关的停顿。
+     */
+    CHECK(p99_contended <= PUBLISH_BUDGET_NS,
+          "读者在场时 p99 批耗时折算 %" PRIu64 " ns/帧，越过周期 1%% 的上界 %" PRIu64 " ns",
+          p99_contended, PUBLISH_BUDGET_NS);
+    CHECK(per_frame_contended <= per_frame_alone * 4U + 200U,
+          "读者在场时发布耗时 %" PRIu64 " ns/帧 远超独跑 %" PRIu64 " ns/帧",
+          per_frame_contended, per_frame_alone);
+    CHECK(emaster_observation_ring_head(&ring) == TEST_CONCURRENT_FRAMES,
+          "写者发布的帧数不对：head=%" PRIu64, emaster_observation_ring_head(&ring));
+    CHECK(atomic_load(&stats.torn) == 0U, "读者在场时出现了撕裂帧");
+}
+
+/* ---------------------------------------------------------------- 慢速 seqlock */
+
+typedef struct
+{
+    emaster_observation_slow_t *snapshot;
+    _Atomic bool stop;
+    _Atomic uint64_t ok;
+    _Atomic uint64_t failed;
+    _Atomic uint64_t torn;
+    _Atomic uint64_t unsafe_ok;
+    _Atomic uint64_t unsafe_torn;
+} slow_stats_t;
+
+/*
+ * 状态里每个字段都是轮次的函数。任何两轮混在一起都会被 slow_matches() 认出来。
+ * valid_mask 由 publish 计算，这里填的 axes[].valid 必须与之一致。
+ */
+static void fill_slow(emaster_observation_slow_state_t *state, uint64_t round)
+{
+    uint32_t axis_index;
+
+    memset(state, 0, sizeof(*state));
+    state->cycle = round * UINT64_C(17) + UINT64_C(5);
+    state->monotonic_ns = round * UINT64_C(50000000);
+    state->axis_count = TEST_AXES;
+    state->read_count = (uint32_t)round;
+    state->valid_mask = (UINT64_C(1) << TEST_AXES) - UINT64_C(1);
+    for (axis_index = 0U; axis_index < TEST_AXES; ++axis_index)
+    {
+        emaster_observation_slow_axis_t *axis = &state->axes[axis_index];
+
+        axis->valid = true;
+        axis->actual_current = (int32_t)(round * UINT64_C(11) + axis_index);
+        axis->dc_link_voltage = (int32_t)(UINT64_C(48000) + round);
+        axis->mosfet_temperature = (int32_t)(UINT64_C(3000) + round + axis_index);
+        axis->motor_temperature = (int32_t)(UINT64_C(2900) + round + axis_index);
+        axis->motor_speed = (int32_t)(round * UINT64_C(3) + axis_index);
+        axis->speed_command = (int32_t)(round * UINT64_C(3) + axis_index + UINT64_C(1));
+        axis->error_code = (uint16_t)(UINT16_C(0x0000) + axis_index);
+    }
+}
+
+static bool slow_matches(const emaster_observation_slow_state_t *state)
+{
+    emaster_observation_slow_state_t expected;
+    uint32_t axis_index;
+
+    fill_slow(&expected, (uint64_t)state->read_count);
+    if (state->cycle != expected.cycle || state->monotonic_ns != expected.monotonic_ns ||
+        state->axis_count != expected.axis_count || state->valid_mask != expected.valid_mask)
+    {
+        return false;
+    }
+    for (axis_index = 0U; axis_index < expected.axis_count; ++axis_index)
+    {
+        const emaster_observation_slow_axis_t *actual = &state->axes[axis_index];
+        const emaster_observation_slow_axis_t *want = &expected.axes[axis_index];
+
+        if (actual->valid != want->valid || actual->actual_current != want->actual_current ||
+            actual->dc_link_voltage != want->dc_link_voltage ||
+            actual->mosfet_temperature != want->mosfet_temperature ||
+            actual->motor_temperature != want->motor_temperature ||
+            actual->motor_speed != want->motor_speed ||
+            actual->speed_command != want->speed_command ||
+            actual->error_code != want->error_code)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* 阻止优化掉的空转：累加结果是 volatile 的，编译器不能把循环删掉。 */
+static void spin_iterations(uint32_t iterations)
+{
+    volatile uint32_t sink = 0U;
+    uint32_t step;
+
+    for (step = 0U; step < iterations; ++step)
+    {
+        sink = sink + step;
+    }
+}
+
+static void *slow_writer(void *arg)
+{
+    slow_stats_t *stats = arg;
+    emaster_observation_slow_state_t state;
+    uint64_t round;
+
+    for (round = 1U; round <= TEST_SLOW_PUBLISHES; ++round)
+    {
+        fill_slow(&state, round);
+        emaster_observation_slow_publish(stats->snapshot, &state);
+        spin_iterations(SLOW_WRITER_SPIN);
+    }
+    return NULL;
+}
+
+/* 带校验的读者：唯一合法的结局是"读到一份自洽快照"或"明确没读到"。 */
+static void *slow_reader(void *arg)
+{
+    slow_stats_t *stats = arg;
+
+    while (!atomic_load_explicit(&stats->stop, memory_order_relaxed))
+    {
+        emaster_observation_slow_state_t state;
+
+        if (!emaster_observation_slow_read(stats->snapshot, &state))
+        {
+            atomic_fetch_add_explicit(&stats->failed, 1U, memory_order_relaxed);
+            continue;
+        }
+        if (!slow_matches(&state))
+        {
+            atomic_fetch_add_explicit(&stats->torn, 1U, memory_order_relaxed);
+        }
+        atomic_fetch_add_explicit(&stats->ok, 1U, memory_order_relaxed);
+    }
+    return NULL;
+}
+
+/*
+ * 对照读者：跳过序号校验直接拷贝载荷。它必须能观察到不一致快照——否则这个交错里
+ * 撕裂根本不可达，带校验读者的"零撕裂"就是在测空气。
+ *
+ * 同样故意制造数据竞争，属于测试手段。
+ */
+static void *slow_unsafe_probe(void *arg)
+{
+    slow_stats_t *stats = arg;
+
+    while (!atomic_load_explicit(&stats->stop, memory_order_relaxed))
+    {
+        emaster_observation_slow_state_t state;
+
+        memcpy(&state, &stats->snapshot->state, sizeof(state));
+        if (slow_matches(&state))
+        {
+            atomic_fetch_add_explicit(&stats->unsafe_ok, 1U, memory_order_relaxed);
+        }
+        else
+        {
+            atomic_fetch_add_explicit(&stats->unsafe_torn, 1U, memory_order_relaxed);
+        }
+    }
+    return NULL;
+}
+
+static void test_slow_seqlock(void)
+{
+    static emaster_observation_slow_t snapshot;
+    slow_stats_t stats;
+    pthread_t writer;
+    pthread_t checked;
+    pthread_t unsafe;
+    uint64_t checked_ok;
+    uint64_t checked_torn;
+    uint64_t unsafe_torn;
+
+    section("慢速 seqlock：一致快照与对照探针");
+
+    emaster_observation_slow_init(&snapshot);
+    memset(&stats, 0, sizeof(stats));
+    stats.snapshot = &snapshot;
+
+    CHECK(pthread_create(&writer, NULL, slow_writer, &stats) == 0, "写者线程创建失败");
+    CHECK(pthread_create(&checked, NULL, slow_reader, &stats) == 0, "读者线程创建失败");
+    CHECK(pthread_create(&unsafe, NULL, slow_unsafe_probe, &stats) == 0, "对照线程创建失败");
+    CHECK(pthread_join(writer, NULL) == 0, "写者线程 join 失败");
+    atomic_store_explicit(&stats.stop, true, memory_order_relaxed);
+    CHECK(pthread_join(checked, NULL) == 0, "读者线程 join 失败");
+    CHECK(pthread_join(unsafe, NULL) == 0, "对照线程 join 失败");
+
+    checked_ok = atomic_load(&stats.ok);
+    checked_torn = atomic_load(&stats.torn);
+    unsafe_torn = atomic_load(&stats.unsafe_torn);
+    printf("  带校验读者：成功 %" PRIu64 " 次，撕裂 %" PRIu64 " 次；重试上限未命中 %" PRIu64
+           " 次\n",
+           checked_ok, checked_torn, atomic_load(&stats.failed));
+    printf("  对照读者（跳过校验）：一致 %" PRIu64 " 次，不一致 %" PRIu64 " 次\n",
+           atomic_load(&stats.unsafe_ok), unsafe_torn);
+
+    CHECK(checked_ok >= 1000U, "带校验读者成功次数太少（%" PRIu64 "），断言没有意义",
+          checked_ok);
+    CHECK(checked_torn == 0U, "带校验读者读到不一致快照");
+    CHECK(unsafe_torn > 0U, "对照读者没有观察到不一致快照，本次交错不可采信");
+}
+
+/* ---------------------------------------------------------------- 线格式 */
+
+static void test_wire_roundtrip(void)
+{
+    emaster_observation_frame_t frame;
+    emaster_observation_frame_t decoded;
+    emaster_observation_wire_header_t header;
+    uint8_t buffer[EMASTER_OBSERVATION_WIRE_HEADER_BYTES +
+                   (EMASTER_OBSERVATION_MAX_AXES * EMASTER_OBSERVATION_WIRE_AXIS_BYTES)];
+    size_t written = 0U;
+    uint16_t axis_count;
+
+    section("线格式：往返与长度");
+
+    /* 覆盖 0 轴到上限的全部轴数，外加两个极端值：int32 最小、uint64 最大。 */
+    for (axis_count = 0U; axis_count <= (uint16_t)EMASTER_OBSERVATION_MAX_AXES; ++axis_count)
+    {
+        fill_frame(&frame, UINT64_C(123456789));
+        frame.axis_count = axis_count;
+        frame.publish_index = UINT64_MAX;
+        frame.deadline_ns = UINT64_C(0);
+        frame.wkc = INT32_MIN;
+        if (axis_count > 0U)
+        {
+            frame.axes[0].actual_position = INT32_MIN;
+            frame.axes[0].target_position = INT32_MAX;
+            frame.axes[0].actual_velocity = -1;
+            frame.axes[0].actual_torque = 0;
+            frame.axes[0].flags = UINT32_MAX;
+            frame.axes[0].status_word = UINT16_MAX;
+            frame.axes[0].control_word = UINT16_MAX;
+        }
+
+        CHECK(emaster_observation_wire_frame_bytes(axis_count) ==
+                  (size_t)EMASTER_OBSERVATION_WIRE_HEADER_BYTES +
+                      ((size_t)axis_count * (size_t)EMASTER_OBSERVATION_WIRE_AXIS_BYTES),
+              "轴数 %u 的报文长度不对", (unsigned)axis_count);
+        CHECK(emaster_observation_wire_encode_frame(&frame, buffer, sizeof(buffer), &written),
+              "轴数 %u 编码失败", (unsigned)axis_count);
+        CHECK(written == emaster_observation_wire_frame_bytes(axis_count),
+              "轴数 %u 编码长度不对", (unsigned)axis_count);
+        CHECK(emaster_observation_wire_decode_frame(buffer, written, &decoded, &header),
+              "轴数 %u 解码失败", (unsigned)axis_count);
+        CHECK(header.axis_count == axis_count, "轴数往返不一致");
+        CHECK(decoded.publish_index == frame.publish_index && decoded.cycle == frame.cycle &&
+                  decoded.monotonic_ns == frame.monotonic_ns &&
+                  decoded.deadline_ns == frame.deadline_ns &&
+                  decoded.frame_interval_ns == frame.frame_interval_ns &&
+                  decoded.wkc == frame.wkc && decoded.flags == frame.flags,
+              "轴数 %u 的帧级字段往返不一致", (unsigned)axis_count);
+        if (axis_count > 0U)
+        {
+            CHECK(axis_matches(&decoded.axes[0], &frame.axes[0]), "轴 0 字段往返不一致");
+            CHECK(!axis_matches(&decoded.axes[0], &frame.axes[1]), "轴比对函数不敏感");
+        }
+    }
+
+    /* 缓冲区不够时必须明确失败，不能截断着写。 */
+    fill_frame(&frame, UINT64_C(1));
+    CHECK(!emaster_observation_wire_encode_frame(&frame, buffer,
+                                                 emaster_observation_wire_frame_bytes(1U),
+                                                 &written),
+          "容量不足时应编码失败");
+
+    /* 小端是显式逐字节写的，与主机字节序无关。这里钉死前几个字节。 */
+    fill_frame(&frame, UINT64_C(1));
+    CHECK(emaster_observation_wire_encode_frame(&frame, buffer, sizeof(buffer), &written),
+          "编码失败");
+    CHECK(buffer[0] == (uint8_t)'E' && buffer[1] == (uint8_t)'O', "魔数不对");
+    CHECK(buffer[2] == (uint8_t)EMASTER_OBSERVATION_WIRE_VERSION, "版本字节不对");
+    CHECK(buffer[3] == (uint8_t)EMASTER_OBSERVATION_WIRE_KIND_FRAME, "类型字节不对");
+    CHECK(buffer[4] == (uint8_t)(written & 0xFFU) &&
+              buffer[5] == (uint8_t)((written >> 8U) & 0xFFU),
+          "frame_bytes 不是小端");
+}
+
+static void test_wire_malformed(void)
+{
+    emaster_observation_frame_t frame;
+    emaster_observation_frame_t decoded;
+    emaster_observation_wire_header_t header;
+    uint8_t buffer[EMASTER_OBSERVATION_WIRE_HEADER_BYTES +
+                   (EMASTER_OBSERVATION_MAX_AXES * EMASTER_OBSERVATION_WIRE_AXIS_BYTES)];
+    uint8_t mutated[sizeof(buffer)];
+    size_t written = 0U;
+
+    section("线格式：畸形输入必须整体拒绝");
+
+    fill_frame(&frame, UINT64_C(42));
+    CHECK(emaster_observation_wire_encode_frame(&frame, buffer, sizeof(buffer), &written),
+          "编码失败");
+
+    /* 魔数错 */
+    memcpy(mutated, buffer, written);
+    mutated[0] = (uint8_t)'X';
+    CHECK(!emaster_observation_wire_decode_frame(mutated, written, &decoded, &header),
+          "魔数错误应被拒绝");
+
+    /* 版本错：这是最危险的一种——按旧偏移硬解会得到错位但"看起来合理"的数字 */
+    memcpy(mutated, buffer, written);
+    mutated[2] = (uint8_t)(EMASTER_OBSERVATION_WIRE_VERSION + 1U);
+    CHECK(!emaster_observation_wire_decode_frame(mutated, written, &decoded, &header),
+          "版本不匹配应被拒绝");
+
+    /* 类型错 */
+    memcpy(mutated, buffer, written);
+    mutated[3] = (uint8_t)0x7F;
+    CHECK(!emaster_observation_wire_decode_frame(mutated, written, &decoded, &header),
+          "类型错误应被拒绝");
+
+    /* 轴数超上限 */
+    memcpy(mutated, buffer, written);
+    mutated[6] = (uint8_t)(EMASTER_OBSERVATION_MAX_AXES + 1U);
+    CHECK(!emaster_observation_wire_decode_frame(mutated, written, &decoded, &header),
+          "轴数超上限应被拒绝");
+
+    /* frame_bytes 与轴数不自洽 */
+    memcpy(mutated, buffer, written);
+    mutated[4] = (uint8_t)((written + 8U) & 0xFFU);
+    mutated[5] = (uint8_t)(((written + 8U) >> 8U) & 0xFFU);
+    CHECK(!emaster_observation_wire_decode_frame(mutated, written, &decoded, &header),
+          "frame_bytes 与轴数不自洽应被拒绝");
+
+    /* 截断：长度不足头；长度够头但不够载荷 */
+    CHECK(!emaster_observation_wire_decode_frame(buffer, 8U, &decoded, &header),
+          "长度不足一个头应被拒绝");
+    CHECK(!emaster_observation_wire_decode_frame(buffer, written - 1U, &decoded, &header),
+          "长度不足一条完整报文应被拒绝");
+
+    /* 空指针 */
+    CHECK(!emaster_observation_wire_decode_frame(NULL, written, &decoded, &header),
+          "空缓冲区应被拒绝");
+    CHECK(!emaster_observation_wire_decode_frame(buffer, written, NULL, &header),
+          "空输出指针应被拒绝");
+
+    /* 只解头时同样要拒绝畸形输入 */
+    CHECK(!emaster_observation_wire_decode_header(buffer, 8U, &header),
+          "只解头时长度不足也应被拒绝");
+    CHECK(emaster_observation_wire_decode_header(buffer, written, &header), "合法头应被接受");
+    CHECK(header.axis_count == TEST_AXES, "头里的轴数不对");
+
+    /* 载荷区多出的字节不影响解码：DUMP 一次回多帧时要求能按 frame_bytes 推进。 */
+    {
+        size_t tail = written + 16U;
+
+        memcpy(mutated, buffer, written);
+        memset(&mutated[written], 0xAB, 16U);
+        CHECK(emaster_observation_wire_decode_frame(mutated, tail, &decoded, &header),
+              "载荷后有多余字节时应仍能解出当前帧");
+        CHECK(header.frame_bytes == written, "frame_bytes 与推进长度不一致");
+    }
+}
+
+/* ---------------------------------------------------------------- main */
+
+int main(void)
+{
+    printf("观测通道离线自测（线格式版本 %u）\n\n", (unsigned)EMASTER_OBSERVATION_WIRE_VERSION);
+
+    test_ring_windows();
+    test_ring_concurrency();
+    test_writer_independence();
+    test_slow_seqlock();
+    test_wire_roundtrip();
+    test_wire_malformed();
+
+    printf("\n%d 项断言，%d 项失败\n", g_checks, g_failures);
+    if (g_failures != 0)
+    {
+        printf("失败\n");
+        return 1;
+    }
+    printf("通过\n");
+    return 0;
+}

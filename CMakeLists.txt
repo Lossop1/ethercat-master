@@ -102,4 +102,6 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     add_subdirectory(tools/target_probe)
 endif()
 
+add_subdirectory(src/bus/observation)
+add_subdirectory(tools/observation_selftest)
 add_subdirectory(tools/fingerprint)
