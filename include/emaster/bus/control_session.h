@@ -883,6 +883,17 @@ typedef struct
     int first_mismatch_wkc;
     /* 首次截止超时对应的周期号（0 = 未出现）。 */
     uint64_t first_deadline_missed_exchange;
+    /*
+     * P9.4: 命令服务器的流量记账。这三个数此前只以 stderr 的形式存在——每条命令
+     * 两行，100 Hz 的目标流就是 200 行/秒（一次 180 s 的往返跑出 1.1 MB 日志）。
+     * 于是"命令有没有在流"在报告里查不到，而这件事不该只有日志知道。
+     *
+     * 三个计数互斥且穷尽一条命令的三种去向：入队 / 认不出 / 队列满被丢。
+     * 在停机销毁命令服务器时写入一次（线程 join 之后读，无竞态）。
+     */
+    uint64_t command_received_count;
+    uint64_t command_invalid_count;
+    uint64_t command_queue_full_count;
     emaster_observation_report_t observation;
     emaster_shutdown_prologue_t shutdown_prologue;
     emaster_shutdown_cycle_trace_t shutdown_cycles;

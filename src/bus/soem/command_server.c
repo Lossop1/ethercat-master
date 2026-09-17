@@ -39,7 +39,32 @@ struct emaster_command_server {
     pthread_mutex_t mutex;
     command_queue_t queue;
     bool running;
+    emaster_command_server_stats_t stats;
 };
+
+/*
+ * P9.4: 逐条命令的明细日志开关，默认关。
+ *
+ * 常态时不打：100 Hz 的外部目标流会让"每条命令两行"变成 200 行/秒，把主站日志淹掉，
+ * 而这份日志是台架事后取证的主要材料。默认关、需要时用 EMASTER_CMD_SERVER_VERBOSE=1
+ * 打开（沿用本仓其它开关的写法与取值集合）。
+ *
+ * 不用 session_internal.h 的 emaster_soem_env_flag_enabled：那个头把 SOEM 拖进来，
+ * 而本文件现在是独立的（只依赖 libc 与自己的头）。为了一个十行的判断不值得把这条
+ * 边界打破，所以这里自带一个同语义的静态函数——两边取值集合要一致，改动时一起改。
+ */
+static bool command_server_verbose_enabled(void)
+{
+    const char *value = getenv("EMASTER_CMD_SERVER_VERBOSE");
+
+    if (value == NULL)
+    {
+        return false;
+    }
+    return strcmp(value, "1") == 0 || strcmp(value, "on") == 0 || strcmp(value, "ON") == 0 ||
+           strcmp(value, "true") == 0 || strcmp(value, "TRUE") == 0 ||
+           strcmp(value, "yes") == 0 || strcmp(value, "YES") == 0;
+}
 
 /* 初始化命令队列 */
 static void queue_init(command_queue_t *queue)
@@ -47,18 +72,12 @@ static void queue_init(command_queue_t *queue)
     memset(queue, 0, sizeof(*queue));
 }
 
-/* 入队：生产者（监听线程）调用 */
-static bool queue_push(command_queue_t *queue, const emaster_command_t *command)
-{
-    if (queue->count >= COMMAND_QUEUE_CAPACITY)
-    {
-        return false;  /* 队列满 */
-    }
-    queue->commands[queue->write_index] = *command;
-    queue->write_index = (queue->write_index + 1U) % COMMAND_QUEUE_CAPACITY;
-    ++queue->count;
-    return true;
-}
+/*
+ * 这里原先有一个 queue_push（入队：生产者调用），从未被调用过——监听线程的入队路径
+ * 需要在同一把锁里同时拿到"入队后的计数"快照，于是那份逻辑被就地展开写在了那里，
+ * 这个函数从此只是编译器的 -Wunused-function 警告来源。删掉：一条长期存在的警告
+ * 会让人对警告列表脱敏，将来真的出现新警告就看不见了。入队逻辑本身没动。
+ */
 
 /* 出队：消费者（周期线程）调用 */
 static bool queue_pop(command_queue_t *queue, emaster_command_t *command)
@@ -99,6 +118,9 @@ static void *listen_thread(void *arg)
     ssize_t bytes_read;
     size_t queue_count; /* 锁内快照，供解锁后的 fprintf 使用 */
     emaster_command_t command;
+    /* 开关读一次就够：环境变量在进程生命周期内不变，逐条命令去查等于把
+     * getenv + 若干 strcmp 放进 100 Hz 的热路径里。 */
+    bool verbose = command_server_verbose_enabled();
 
     /*
      * 客户端可能在响应写出前关闭连接，此时 write 会触发 SIGPIPE 并终止整个主站。
@@ -255,21 +277,41 @@ static void *listen_thread(void *arg)
         else
         {
             command.type = EMASTER_COMMAND_INVALID;
-            fprintf(stderr, "[CMD_SERVER] Unknown command, bytes_read=%zd\n", bytes_read);
-            fflush(stderr);
+            /*
+             * 认不出的一律计数；明细仍只在开关打开时打。这不是常态行——只有客户端
+             * 发来不认识的字节才会出现——但它可以被打成常态（一个版本错配的客户端
+             * 每拍发一条），所以它同样不能无条件写 stderr。
+             */
+            if (server->stats.invalid_count != UINT64_MAX)
+            {
+                ++server->stats.invalid_count;
+            }
+            if (verbose)
+            {
+                fprintf(stderr, "[CMD_SERVER] Unknown command, bytes_read=%zd\n", bytes_read);
+                fflush(stderr);
+            }
         }
 
-        fprintf(stderr, "[CMD_SERVER] Parsed command type=%d\n", command.type);
-        fflush(stderr);
+        if (verbose)
+        {
+            fprintf(stderr, "[CMD_SERVER] Parsed command type=%d\n", command.type);
+            fflush(stderr);
+        }
 
         /* 入队（线程安全，完整原子性） */
         pthread_mutex_lock(&server->mutex);
         if (server->queue.count >= COMMAND_QUEUE_CAPACITY)
         {
             /* 队列满：发送错误响应给客户端，然后丢弃 */
+            if (server->stats.queue_full_count != UINT64_MAX)
+            {
+                ++server->stats.queue_full_count;
+            }
             pthread_mutex_unlock(&server->mutex);
             const char *error_msg = "ERROR|Command queue full\n";
             write(current_client_fd, error_msg, strlen(error_msg));
+            /* 这一条不跟开关走：队列满说明周期线程没在取命令，是故障线索。 */
             fprintf(stderr, "警告：命令队列已满，丢弃命令\n");
         }
         else
@@ -279,6 +321,10 @@ static void *listen_thread(void *arg)
             server->queue.write_index = (server->queue.write_index + 1U) % COMMAND_QUEUE_CAPACITY;
             ++server->queue.count;
             queue_count = server->queue.count;
+            if (server->stats.received_count != UINT64_MAX)
+            {
+                ++server->stats.received_count;
+            }
             pthread_mutex_unlock(&server->mutex);
 
             /*
@@ -287,9 +333,15 @@ static void *listen_thread(void *arg)
              * 一次 fprintf+fflush 可以阻塞任意久。持锁做 I/O 等于把这个无界等待
              * 转嫁给周期线程。计数先在锁内取快照，解锁后再打印，因此打印的仍然是
              * 那一刻的真实值。
+             *
+             * P9.4 起默认不打（见 command_server_verbose_enabled）：常态流量下这两行
+             * 是日志体积的主项，"命令在不在流"改由报告里的 command_received_count 回答。
              */
-            fprintf(stderr, "[CMD_SERVER] Enqueued, count=%zu\n", queue_count);
-            fflush(stderr);
+            if (verbose)
+            {
+                fprintf(stderr, "[CMD_SERVER] Enqueued, count=%zu\n", queue_count);
+                fflush(stderr);
+            }
         }
     }
 
@@ -389,7 +441,8 @@ emaster_command_server_t *emaster_command_server_create(const char *socket_path)
     return server;
 }
 
-void emaster_command_server_destroy(emaster_command_server_t *server)
+void emaster_command_server_destroy(emaster_command_server_t *server,
+                                    emaster_command_server_stats_t *stats)
 {
     if (server == NULL)
     {
@@ -404,6 +457,15 @@ void emaster_command_server_destroy(emaster_command_server_t *server)
         shutdown(server->listen_fd, SHUT_RDWR);
     }
     pthread_join(server->thread, NULL);
+
+    /*
+     * P9.4: 取数放在 join 之后、free 之前。写计数的是刚被 join 掉的那个线程，
+     * 所以此刻读到的是它的全部写入（join 提供了同步），不需要再加锁。
+     */
+    if (stats != NULL)
+    {
+        *stats = server->stats;
+    }
 
     /* 清理资源 */
     if (server->client_fd >= 0)

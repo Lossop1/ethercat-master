@@ -1013,9 +1013,19 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     ecx_close(&session->context);
     session->context_open = false;
 
-    /* 销毁实时命令服务器 */
+    /*
+     * 销毁实时命令服务器。P9.4：顺便把它的流量计数接过来写进报告——这些数此前只
+     * 以 stderr 的形式存在（每条命令两行），而报告才是判据的载体。销毁函数在 join
+     * 之后把最终值交出来，所以这里拿到的是整轮的完整计数。
+     */
     if (session->command_server != NULL) {
-        emaster_command_server_destroy(session->command_server);
+        emaster_command_server_stats_t command_stats;
+
+        memset(&command_stats, 0, sizeof(command_stats));
+        emaster_command_server_destroy(session->command_server, &command_stats);
         session->command_server = NULL;
+        session->report->command_received_count = command_stats.received_count;
+        session->report->command_invalid_count = command_stats.invalid_count;
+        session->report->command_queue_full_count = command_stats.queue_full_count;
     }
 }

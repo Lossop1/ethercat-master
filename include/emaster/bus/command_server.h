@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * 实时命令服务器：通过Unix域套接字接收运行时命令。
@@ -42,6 +43,21 @@ typedef struct {
 } emaster_command_response_t;
 
 /*
+ * P9.4: 命令流量的定长记账。
+ *
+ * 此前命令服务器对每条命令打两行 stderr（"Parsed"+"Enqueued"），100 Hz 的外部目标流
+ * 就是 200 行/秒；一次 180 s 的五轴往返因此产出 1.1 MB 日志，而"命令到底有没有在流"
+ * 却在报告里没有落点。改为：逐条明细退到 EMASTER_CMD_SERVER_VERBOSE 后面，计数进报告。
+ *
+ * 三个计数互斥且穷尽一条命令的三种去向，相加等于服务器收到过的全部字节组。
+ */
+typedef struct {
+    uint64_t received_count;   /* 解析成功并入队的命令数 */
+    uint64_t invalid_count;    /* 认不出类型的请求（客户端 bug 或协议版本不一致） */
+    uint64_t queue_full_count; /* 入队时队列已满而被丢弃的命令数 */
+} emaster_command_server_stats_t;
+
+/*
  * 创建命令服务器。
  * socket_path: Unix域套接字路径（例如："/tmp/emaster-cmd.sock"）
  * 返回: 服务器实例，失败返回NULL
@@ -50,8 +66,12 @@ emaster_command_server_t *emaster_command_server_create(const char *socket_path)
 
 /*
  * 销毁命令服务器并清理资源。
+ *
+ * stats 非空时把最终计数写进去（可为 NULL）。取数是线程 join 之后做的，所以拿到的是
+ * 完整值而不是某一瞬间的快照——调用方不必再自己同步。
  */
-void emaster_command_server_destroy(emaster_command_server_t *server);
+void emaster_command_server_destroy(emaster_command_server_t *server,
+                                    emaster_command_server_stats_t *stats);
 
 /*
  * 非阻塞地接收一个命令。

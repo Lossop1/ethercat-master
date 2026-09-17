@@ -1211,6 +1211,18 @@ bool emaster_run_report_write(FILE *stream,
         report->observation.publish_budget_ns,
         report->observation.publish_over_budget_count) >= 0);
     /*
+     * P9.4: 命令服务器的流量记账。三个数穷尽一条命令的三种去向，相加应等于客户端
+     * 发来的命令总数——对不上说明有命令卡在队列里没被周期线程取走（停机时队列非空）。
+     * 这三个数在停机销毁命令服务器时写入，所以运行中途的报告里是 0。
+     */
+    REQUIRE_WRITE(fprintf(
+        stream,
+        "\"command_server\":{\"received_count\":%" PRIu64
+        ",\"invalid_count\":%" PRIu64
+        ",\"queue_full_count\":%" PRIu64 "},",
+        report->command_received_count, report->command_invalid_count,
+        report->command_queue_full_count) >= 0);
+    /*
      * 停机段的仪表（缺口为什么是 5～6 ms 而不是 1 ms）：序言分段计时、停机循环逐周期
      * 现场、观测线程的停止相位、各线程调度累计值。mark_* 都是相对序言起点的累计位置，
      * start_valid 为假时全部为 0（"没测到"，不是"耗时为零"）。
