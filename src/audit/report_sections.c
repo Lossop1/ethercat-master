@@ -1060,6 +1060,14 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(fprintf(
         stream,
         ",\"process_data_delivery\":{\"tail_max_receive_ns\":%" PRIu64
+        /*
+         * 帧超时的标定对：ok 版上限只收"真有帧回来"的周期（超时周期恒等于超时值，
+         * 是删失数据），frame_timeout_us 是由它导出的实际取值。两个一起看才能回答
+         * "超时相对回程分布还留了多少余量"——只给 tail_max_receive_ns 会被超时值
+         * 本身污染（它至少等于超时）。
+         */
+        ",\"tail_max_receive_ok_ns\":%" PRIu64
+        ",\"frame_timeout_us\":%" PRIu32
         ",\"tail_max_mailbox_ns\":%" PRIu64
         ",\"tail_max_error_counter_ns\":%" PRIu64
         ",\"error_counter_read_fail_count\":%" PRIu64
@@ -1090,7 +1098,9 @@ bool emaster_run_report_write(FILE *stream,
         ",\"tail_uncovered_max_ns\":%" PRIu64
         ",\"tail_uncovered_max_exchange\":%" PRIu64
         ",\"deadline_miss_tail_uncovered_ns\":%" PRIu64 "},",
-        report->tail_max_receive_ns, report->tail_max_mailbox_ns,
+        report->tail_max_receive_ns, report->tail_max_receive_ok_ns,
+        (unsigned)report->frame_timeout_us,
+        report->tail_max_mailbox_ns,
         report->tail_max_error_counter_ns, report->error_counter_read_fail_count,
         report->first_error_counter_read_fail_exchange,
         report->error_counter_read_attempt_count, report->error_counter_skip_count,

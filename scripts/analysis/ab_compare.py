@@ -24,7 +24,12 @@ WANTED = re.compile(
     r"|first_mismatch_frame_interval_ns|deadline_miss_frame_interval_ns"
     r"|tail_uncovered_max_ns|tail_uncovered_max_exchange"
     r"|deadline_miss_tail_uncovered_ns"
-    r"|shutdown_prologue_gap_ns|safe_output_sent)$"
+    r"|shutdown_prologue_gap_ns|safe_output_sent"
+    # 2026-09-16 加：判断"整帧未回"是发送晚还是等回帧晚，靠的是发送延迟与 DC 裕量，
+    # 不是帧距——帧距只覆盖到发帧那一刻，之后的等待过程它看不见。
+    r"|max_send_lateness|sync0_late_count|min_sync0_margin|last_sync0_margin_ns"
+    r"|wkc_no_frame_max_consecutive_errors|wkc_no_frame_window_max"
+    r"|wkc_short_frame_window_max|sync0_disabled)$"
 )
 SKIP = {"accesses", "samples", "records", "entries"}
 

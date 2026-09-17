@@ -264,20 +264,41 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     }
 
     /*
-     * 帧级超时：取周期的 1/4，限制在 [50, 500] µs。
-     * EC_TIMEOUTRET=2000µs 超过 1ms 周期；一次接收失败会直接把当前周期
-     * 拖延 2ms，连同每个从站的 FPRD 等待（各 2ms）累计超过 deadline，
-     * 在非实时内核上极易触发连续 deadline miss 直至阈值终止会话。
-     * 缩短后单次帧丢失最多占用 1/4 周期预算，recovery 有足够空间追回。
+     * 两个超时，此前共用一个值，必须拆开。
+     *
+     * 过程数据收包（frame_timeout_us）是"帧回来了没有"的判据，取小了会把"回得晚"
+     * 误判成"没回来"。诊断读（fprd_timeout_us）不参与这个判定，而它全失败的最坏
+     * 情况是 轴数 × 超时 挤在同一个周期里——共用一个值会让前者一涨、后者的最坏
+     * 情况跟着涨。所以后者保持改动前的取值，不跟着变。
      */
-    int frame_timeout_us = (int)((session->plan->cycle_ns / 4U) / 1000U);
-    if (frame_timeout_us < 50)  { frame_timeout_us = 50; }
-    if (frame_timeout_us > 500) { frame_timeout_us = 500; }
+    const int cycle_us = (int)(session->plan->cycle_ns / 1000U);
+    int fprd_timeout_us = cycle_us / 4;
+    if (fprd_timeout_us < 50)  { fprd_timeout_us = 50;  }
+    if (fprd_timeout_us > 500) { fprd_timeout_us = 500; }
+
     /*
-     * 覆盖超时，用来把"帧真的丢了"和"帧只是回来得晚"分开：台架实测每 40 秒
-     * 有 1–4 个整帧未回，而那几拍的帧距是 1.0005 ms（完全正常），且 5 个从站的
-     * ESC 错误计数器全程为 0——环上没有坏帧。把超时调大后整帧未回若归零，就是
-     * 回程晚于 250 µs，不是没回来。
+     * 过程数据收包超时由**实测的收包段上限**导出，不再用固定的 cycle_ns/4。
+     *
+     * 原值 cycle_ns/4 = 250 µs 是当初为"单次失败最多占 1/4 周期预算"拍的，没有
+     * 依据回程实测。2026-09-16 五轴 8 臂 × 45 s 量出来：干净臂的收包段上限
+     * 178–222 µs，也就是 250 µs 只留下 12% 余量——超时压在回程分布的尾部上。
+     * 后果是每 45 秒必然误判 1–3 个"整帧未回"（实为回得比超时晚）：那些臂里
+     * 发送迟到全程 ≤55 µs、ESC 错误计数器全零、帧距 1.0005 ms 全都正常。
+     * 超时提到 600 µs 后计数 8 → 3，是剂量-反应。
+     *
+     * 取值 = 实测上限 × 2，钳在 [cycle_ns/4, cycle_ns/2]：下限保证不低于改动前的
+     * 行为（还没有成功样本时也落在下限，即原来的 250 µs），上限保证单次失败最多
+     * 吃掉半个周期，recovery 仍有空间追回。
+     */
+    int frame_timeout_us = (int)(session->report->tail_max_receive_ok_ns / 1000U) * 2;
+    if (frame_timeout_us < cycle_us / 4) { frame_timeout_us = cycle_us / 4; }
+    if (frame_timeout_us > cycle_us / 2) { frame_timeout_us = cycle_us / 2; }
+    if (frame_timeout_us < 50)  { frame_timeout_us = 50;  }
+    if (frame_timeout_us > 500) { frame_timeout_us = 500; }
+    session->report->frame_timeout_us = (uint32_t)frame_timeout_us;
+    /*
+     * 覆盖超时，只作诊断用（标定旋钮坏了或要复现旧行为时）。给定时绕过全部钳位，
+     * 否则"把超时调到 600 µs 看未回归零"这类判别实验做不了。
      */
     {
         const char *timeout_override = getenv("EMASTER_FRAME_TIMEOUT_US");
@@ -287,6 +308,7 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
 
             if (parsed >= 50) {
                 frame_timeout_us = parsed;
+                session->report->frame_timeout_us = (uint32_t)frame_timeout_us;
             }
         }
     }
@@ -377,6 +399,15 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                 (uint64_t)receive_done.tv_nsec;
 
             receive_span_ns = tail_receive_done_ns - tail_send_end_ns;
+            /*
+             * 帧超时的标定样本。只收"真有帧回来"的周期：超时周期的收包段时长
+             * 恒等于超时值本身，是删失数据，收进来会让超时自我强化。
+             */
+            if (session->report->actual_wkc > 0 &&
+                receive_span_ns > session->report->tail_max_receive_ok_ns)
+            {
+                session->report->tail_max_receive_ok_ns = receive_span_ns;
+            }
         }
         if ((session->exchange % EMASTER_ERROR_COUNTER_READ_INTERVAL) != 1U)
         {
@@ -407,7 +438,7 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                     session->context.slavelist[emaster_soem_session_axis_slave(session, axis)].configadr;
                 uint8_t error_block[16];
                 int wkc = ecx_FPRD(&session->context.port, configadr, 0x0300U, sizeof(error_block),
-                                   error_block, frame_timeout_us);
+                                   error_block, fprd_timeout_us);
 
                 if (wkc > 0)
                 {

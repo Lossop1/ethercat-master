@@ -691,6 +691,21 @@ typedef struct
     uint64_t tail_max_receive_ns;
     uint64_t tail_max_mailbox_ns;
     uint64_t tail_max_error_counter_ns;
+    /*
+     * 收包段上限，但只统计"真有帧回来"的周期（actual_wkc > 0）。
+     *
+     * tail_max_receive_ns 不能干这件事：超时周期的收包段时长恒等于超时值本身，
+     * 是删失数据。拿它做帧超时的标定会让超时自我强化——超时越长，观测到的"上限"
+     * 越长，于是超时更长。
+     *
+     * 与 frame_timeout_us 配对使用：后者由这个值导出，前者不进报告就没有依据可查。
+     */
+    uint64_t tail_max_receive_ok_ns;
+    /*
+     * 本周期实际使用的过程数据收包超时（µs）。由 tail_max_receive_ok_ns 导出，
+     * 所以运行期会变；报告里留最终值，让两次运行的超时差异可见而不是隐含。
+     */
+    uint32_t frame_timeout_us;
     /* FPRD(0x0300) 返回 wkc<=0 的次数与首次交换号（每次读取各带 250 µs 超时）。 */
     uint64_t error_counter_read_fail_count;
     uint64_t first_error_counter_read_fail_exchange;
