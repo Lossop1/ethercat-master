@@ -31,5 +31,10 @@
     "max_reset_attempts": 3,
     "recoverable_error_codes": [],
     "description": "CiA 402故障恢复：特定故障码可自动reset（待实现）"
+  },
+  "dc_late_recovery": {
+    "enabled": false,
+    "consecutive_error_threshold": 0,
+    "description": "连续迟到动作：本周期输出对驱动器已经迟到（sync0 裕量为负）时，连续多少拍触发 DC_SYNC_FAILED。默认关（只记账）——驱动器那边攒满 6 次 SM 事件丢失才掉出 OP，但主站实测的连续段长度还没量过，先跑一轮把 sync0_late_max_consecutive 读出来再定阈值"
   }
 }

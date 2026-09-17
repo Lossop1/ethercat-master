@@ -61,6 +61,22 @@ typedef struct
     size_t recoverable_error_code_count;
 } emaster_cia402_fault_recovery_config_t;
 
+/*
+ * P8.3 连续迟到：主站的 sync0 裕量为负说明本周期输出对驱动器已经迟到，而驱动器
+ * 那边攒满 6 次 SM 事件丢失就置 AL 0x001A 掉出 OP。主站手里有同一个信号，此前却
+ * 只在统计里加一、回路照常推进——等于看着驱动器攒到 6。
+ *
+ * 默认 enabled=false（只记账不动作）：连续段到底能到几拍还没有实测数据，8 臂里
+ * sync0_late_count 到过 84 次而一轮都没掉出，说明那些迟到多半是散的。先跑一轮把
+ * sync0_late_max_consecutive 量出来，再把阈值定在"实测最长段"与 6 之间。
+ * 拿一个没量过的数去中止真实运行，比不管它更糟。
+ */
+typedef struct
+{
+    bool enabled;
+    uint32_t consecutive_error_threshold;
+} emaster_dc_late_recovery_config_t;
+
 typedef struct
 {
     const char *policy_id;
@@ -69,6 +85,7 @@ typedef struct
     emaster_deadline_recovery_config_t deadline_recovery;
     emaster_al_state_recovery_config_t al_state_recovery;
     emaster_cia402_fault_recovery_config_t cia402_fault_recovery;
+    emaster_dc_late_recovery_config_t dc_late_recovery;
 } emaster_error_recovery_policy_t;
 
 /*

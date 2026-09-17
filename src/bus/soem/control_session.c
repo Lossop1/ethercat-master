@@ -314,6 +314,14 @@ emaster_control_session_status_t emaster_soem_control_session(
         emaster_cyclic_window_init(&session->wkc_window, wkc_window_ms * UINT64_C(1000000));
         emaster_cyclic_window_init(&session->no_frame_window,
                                    no_frame_window_ms * UINT64_C(1000000));
+        /*
+         * P8.3: 把连续迟到的动作档位写进报告。0 表示只记账——报告必须自证走了
+         * 哪条臂，否则"这轮为什么没停"只能靠翻配置文件回答。
+         */
+        session->report->dc_late_consecutive_threshold =
+            (policy != NULL && policy->dc_late_recovery.enabled)
+                ? policy->dc_late_recovery.consecutive_error_threshold
+                : 0U;
     }
 
     /* 创建实时命令服务器：允许运行期间接收外部命令 */

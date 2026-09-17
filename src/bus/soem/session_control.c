@@ -71,6 +71,43 @@ static emaster_control_session_status_t check_axis_health(
     return EMASTER_CONTROL_SESSION_OK;
 }
 
+/*
+ * P8.3: 连续迟到是否已经越线。
+ *
+ * 驱动器判"这一拍帧来晚了"用的是它自己的 SM 事件丢失计数，攒满 6 次就置 AL 0x001A
+ * 掉出 OP（见 docs/requirements/layering-plan.md 的 D1 背景）。主站手里有同一个信号
+ * ——每轴的 sync0_margin_ns 为负就说明本周期输出对驱动器已经迟到——此前却只在统计
+ * 里加一，回路照常推进，等于看着驱动器攒到 6。
+ *
+ * 阈值默认关（enabled=false 或阈值 0），因为连续段能到几拍还没有实测数据：8 臂里
+ * sync0_late_count 到过 84 次而一轮都没掉出，说明那些迟到多半是散的。本轮先把
+ * sync0_late_max_consecutive 量出来，下一轮再把阈值定在实测最长段与 6 之间。
+ * 拿一个没量过的数去中止真实运行，比不管它更糟。
+ */
+static bool dc_late_threshold_exceeded(emaster_soem_session_t *session)
+{
+    uint32_t threshold;
+    size_t axis_index;
+
+    if (session->error_recovery_policy == NULL)
+    {
+        return false;
+    }
+    threshold = session->error_recovery_policy->dc_late_recovery.consecutive_error_threshold;
+    if (!session->error_recovery_policy->dc_late_recovery.enabled || threshold == 0U)
+    {
+        return false;
+    }
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+        if (session->axes[axis_index].timing.sync0_late_consecutive >= (uint64_t)threshold) {
+            session->report->dc_late_threshold_exceeded = true;
+            session->report->dc_late_threshold_axis = axis_index;
+            return true;
+        }
+    }
+    return false;
+}
+
 /* P2.5: 检查恢复进度 */
 static void check_recovery_progress(
     emaster_soem_session_t *session,
@@ -160,6 +197,16 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
 
             status = emaster_soem_session_exchange(session, EMASTER_AUDIT_PHASE_CYCLIC_OPERATION);
             if (status != EMASTER_CONTROL_SESSION_OK) {
+                return emaster_soem_session_publish_feedback(session, status);
+            }
+            /*
+             * P8.3: 连续迟到越线就主动停，不等驱动器自己攒满 SM 事件丢失掉出 OP。
+             * 放在交换之后——每轴的裕量是本次交换里刚解出来的。阈值默认关，此时
+             * 这里只是每轴一次整数比较。
+             */
+            if (dc_late_threshold_exceeded(session)) {
+                status = EMASTER_CONTROL_SESSION_DC_SYNC_FAILED;
+                emaster_soem_session_latch_failure(session, status);
                 return emaster_soem_session_publish_feedback(session, status);
             }
             for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {

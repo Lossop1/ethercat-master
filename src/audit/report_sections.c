@@ -306,6 +306,13 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         "\"first_sync0_late_exchange\":%" PRIu64 ","
         "\"last_sync0_late_exchange\":%" PRIu64 ","
         /*
+         * P8.3: 连续迟到。驱动器攒满 6 次 SM 事件丢失就置 AL 0x001A 掉出 OP，
+         * 而 sync0_late_count 只是全程累计——8 臂里到过 84 次仍一轮都没掉出，
+         * 说明那些迟到多半是散的。max_consecutive 才是能跟那个 6 对齐的量。
+         */
+        "\"sync0_late_max_consecutive\":%" PRIu64 ","
+        "\"max_sync0_late_run_exchange\":%" PRIu64 ","
+        /*
          * 极值自己的交换号。有了坐标才能回答"1.077 ms 的往返是不是就落在 WKC 不符
          * 的那几个周期里"，否则只能跟另一轮的极值比对，而两轮极值几乎相同。
          */
@@ -324,7 +331,9 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
         timing->last_phase_error_ns, timing->last_sync0_margin_ns,
         timing->last_dc_sample_valid ? "true" : "false",
         timing->sync0_late_count, timing->first_sync0_late_exchange,
-        timing->last_sync0_late_exchange, timing->max_round_trip_exchange,
+        timing->last_sync0_late_exchange,
+        timing->sync0_late_max_consecutive, timing->max_sync0_late_run_exchange,
+        timing->max_round_trip_exchange,
         timing->max_send_lateness_exchange, timing->min_sync0_margin_exchange) >= 0);
     REQUIRE_WRITE(write_distribution(stream, "send_duration_ns",
                                      &timing->send_duration_histogram));
@@ -1023,6 +1032,8 @@ bool emaster_run_report_write(FILE *stream,
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
         "\"safe_state_reached\":%s,\"shutdown_stop_fault\":%d,"
+        "\"dc_late_consecutive_threshold\":%" PRIu32 ","
+        "\"dc_late_threshold_exceeded\":%s,\"dc_late_threshold_axis\":%zu,"
         "\"sync0_disabled\":%s,"
         "\"restore_init_succeeded\":%s,"
         "\"shutdown_observer_join_ns\":%" PRIu64
@@ -1051,6 +1062,9 @@ bool emaster_run_report_write(FILE *stream,
         report->safe_output_sent ? "true" : "false",
         report->safe_state_reached ? "true" : "false",
         (int)report->shutdown_stop_fault,
+        report->dc_late_consecutive_threshold,
+        report->dc_late_threshold_exceeded ? "true" : "false",
+        report->dc_late_threshold_axis,
         report->sync0_disabled ? "true" : "false",
         report->restore_init_succeeded ? "true" : "false",
         report->shutdown_observer_join_ns,

@@ -707,6 +707,16 @@ typedef struct
      * ——那种情况的结论由 status/safe_output_sent 给出，不要从本字段读。
      */
     emaster_shutdown_stop_fault_t shutdown_stop_fault;
+    /*
+     * P8.3: 连续迟到动作的档位与结果。连续段本身记在每轴的 timing
+     * （sync0_late_max_consecutive / max_sync0_late_run_exchange）里。
+     *
+     * 阈值为 0 表示只记账、不动作——本轮默认如此，因为连续段能到几拍还没实测过。
+     * 这个字段写进报告是为了让每份报告自证走了哪条臂。
+     */
+    uint32_t dc_late_consecutive_threshold;
+    bool dc_late_threshold_exceeded;
+    size_t dc_late_threshold_axis;
     bool sync0_disabled;
     bool restore_init_succeeded;
     bool diagnostic_preop_reached;

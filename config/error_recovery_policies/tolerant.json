@@ -31,5 +31,10 @@
     "max_reset_attempts": 5,
     "recoverable_error_codes": [8600, 8611, 8310],
     "description": "CiA 402故障恢复：尝试恢复更多故障类型"
+  },
+  "dc_late_recovery": {
+    "enabled": false,
+    "consecutive_error_threshold": 0,
+    "description": "连续迟到动作：默认关（只记账）。阈值要先有实测的连续段长度才能定，见 default.json 同一节的说明"
   }
 }

@@ -77,6 +77,19 @@ typedef struct
     uint64_t first_sync0_late_exchange;
     uint64_t last_sync0_late_exchange;
     /*
+     * P8.3: 连续迟到。驱动器判"这一拍帧来晚了"用的是它自己的 SM 事件丢失计数，攒到
+     * 6 次就置 AL 0x001A 掉出 OP——**它数的是连续的还是累计的，决定了主站该不该管这件事**。
+     * sync0_late_count 只是全程累计，8 臂数据里到过 84 次而一轮都没掉出，说明那些迟到
+     * 多半是散的；这里量的是最长的一段，用来回答"主站手上的信号离驱动器那个阈值还有多远"。
+     *
+     * 只在有 DC 样本的周期上更新（与 sync0_late_count 同源），所以"连续"是就有效样本
+     * 而言的，中间缺样的周期不算断。
+     */
+    uint64_t sync0_late_consecutive;
+    uint64_t sync0_late_max_consecutive;
+    uint64_t first_sync0_late_run_exchange;
+    uint64_t max_sync0_late_run_exchange;
+    /*
      * 极值出现的交换号（0 = 未出现）。极值本身回答不了"它是不是落在掉出 OP 的那几个
      * 周期里"：两轮的 round_trip 最大值几乎相同（1.0763 / 1.0769 ms），一轮掉出、一轮
      * 没有，只比数值无法继续。坐标才能把极值和故障时刻对齐。

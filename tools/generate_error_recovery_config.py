@@ -61,6 +61,7 @@ def generate_policy_struct(policy: dict[str, Any], ordinal: int) -> str:
     deadline = policy.get("deadline_recovery", {})
     al_state = policy.get("al_state_recovery", {})
     cia402 = policy.get("cia402_fault_recovery", {})
+    dc_late = policy.get("dc_late_recovery", {})
 
     # 生成可恢复错误码数组
     error_codes = cia402.get("recoverable_error_codes", [])
@@ -103,6 +104,10 @@ def generate_policy_struct(policy: dict[str, Any], ordinal: int) -> str:
             .max_reset_attempts = UINT32_C({cia402.get("max_reset_attempts", 1)}),
             .recoverable_error_codes = {codes_pointer},
             .recoverable_error_code_count = {codes_count}
+        }},
+        .dc_late_recovery = {{
+            .enabled = {str(dc_late.get("enabled", False)).lower()},
+            .consecutive_error_threshold = UINT32_C({dc_late.get("consecutive_error_threshold", 0)})
         }}
     }}"""
 

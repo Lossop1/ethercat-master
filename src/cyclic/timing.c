@@ -228,14 +228,42 @@ bool emaster_cyclic_timing_stats_record(
     stats->last_phase_error_ns = phase_error_ns;
     stats->last_sync0_margin_ns = sync0_margin_ns;
     stats->last_dc_sample_valid = true;
-    if (sync0_margin_ns < 0 && stats->sync0_late_count != UINT64_MAX)
+    if (sync0_margin_ns < 0)
     {
-        ++stats->sync0_late_count;
+        if (stats->sync0_late_count != UINT64_MAX)
+        {
+            ++stats->sync0_late_count;
+        }
         if (stats->first_sync0_late_exchange == 0U)
         {
             stats->first_sync0_late_exchange = observation->exchange;
         }
         stats->last_sync0_late_exchange = observation->exchange;
+
+        /*
+         * P8.3: 连续段。驱动器那边攒到 6 次 SM 事件丢失就掉出 OP，而"6 次"是连续
+         * 还是累计决定了主站该不该管——这里只量事实，阈值留给报告读者去定。溢出只
+         * 停计数，不影响已经记下的坐标。
+         */
+        if (stats->sync0_late_consecutive != UINT64_MAX)
+        {
+            ++stats->sync0_late_consecutive;
+        }
+        if (stats->first_sync0_late_run_exchange == 0U)
+        {
+            stats->first_sync0_late_run_exchange = observation->exchange;
+        }
+        if (stats->sync0_late_consecutive > stats->sync0_late_max_consecutive)
+        {
+            stats->sync0_late_max_consecutive = stats->sync0_late_consecutive;
+            stats->max_sync0_late_run_exchange = observation->exchange;
+        }
+    }
+    else
+    {
+        /* 裕量回到非负，本段结束。最长段与它的坐标保留。 */
+        stats->sync0_late_consecutive = 0U;
+        stats->first_sync0_late_run_exchange = 0U;
     }
     return true;
 }
