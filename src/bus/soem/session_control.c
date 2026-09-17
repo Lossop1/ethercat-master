@@ -235,9 +235,30 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 }
                 session->axes[axis_index].mode_display = mode_display;
                 session->axes[axis_index].status_word = status_word;
-                if (!emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
-                                                    &session->axes[axis_index], actual_position))
-                    feedback_valid = false;
+                /*
+                 * C1：把 PDO 里实际有的反馈都填上，不再按模式二选一。模式 10 下
+                 * decode_input 只解力矩，位置会永远是 0——面板、报告、跟随误差看到
+                 * 的位置全是假的，也就看不见轴到底动没动。三路各按字段在不在填，
+                 * 缺哪路就不动哪路（保留上一次的值，而不是写 0 冒充读数）。
+                 */
+                {
+                    emaster_control_session_axis_result_t *axis_result =
+                        &session->axes[axis_index];
+                    int32_t feedback_value;
+
+                    if (emaster_cia_process_image_feedback(
+                            &session->images[axis_index], EMASTER_CIA_FEEDBACK_POSITION,
+                            &feedback_value))
+                        axis_result->actual_position = feedback_value;
+                    if (emaster_cia_process_image_feedback(
+                            &session->images[axis_index], EMASTER_CIA_FEEDBACK_VELOCITY,
+                            &feedback_value))
+                        axis_result->actual_velocity = feedback_value;
+                    if (emaster_cia_process_image_feedback(
+                            &session->images[axis_index], EMASTER_CIA_FEEDBACK_TORQUE,
+                            &feedback_value))
+                        axis_result->actual_torque = (int16_t)feedback_value;
+                }
 
                 /*
                  * P4.3 的慢速遥测（6078h 电流、6079h 母线电压、200Bh 温度、200Bh:08/09
@@ -459,6 +480,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             /* P2.5: 轴级隔离策略下跳过已隔离的轴 */
                             if (session->plan->fault_policy == EMASTER_FAULT_POLICY_AXIS_ISOLATION &&
                                 session->axes[axis_index].fault_isolated) {
+                                continue;
+                            }
+
+                            /*
+                             * C4：模式 10（CST）下这个差没有定义——6064 是位置计数，
+                             * 而 target_positions[] 里装的是 6071 的千分比。C1 之后
+                             * actual_position 在 CST 下是真值，两边量纲不同却能算出数，
+                             * 结果只会是随机的假 FOLLOWING_ERROR。跳过。
+                             */
+                            if (session->plan->axes[axis_index].operation_mode != NULL &&
+                                session->plan->axes[axis_index].operation_mode->value == INT8_C(10)) {
                                 continue;
                             }
 
@@ -718,7 +750,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 written = snprintf(response.message + offset,
                                                    sizeof(response.message) - (size_t)offset,
                                                    "|a%u:pos=%d,vel=%d,torque=%d,status=0x%04x,"
-                                                   "target_pos=%d,planned=%d,err=0x%04x,state=%d",
+                                                   "target_pos=%d,planned=%d,err=0x%04x,state=%d,"
+                                                   "mode=%d",
                                                    (unsigned int)(axis_index + 1U),
                                                    axis->actual_position,
                                                    reported_velocity,
@@ -727,7 +760,11 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    axis->target_position,
                                                    session->target_positions[axis_index],
                                                    error_code,
-                                                   (int)axis->cia402_state);
+                                                   (int)axis->cia402_state,
+                                                   /* 驱动器自报的 6061。力矩模式下"到底进没进
+                                                    * 模式 10"只能从这里看：状态字使能了也可能是
+                                                    * 模式没切过去，那样 6071 会被驱动器忽略。 */
+                                                   (int)axis->mode_display);
                                 if (written < 0) {
                                     break;
                                 }

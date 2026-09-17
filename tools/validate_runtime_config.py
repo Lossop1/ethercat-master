@@ -809,6 +809,18 @@ def validate_deployments(
             f"部署 {deployment_id} 的 external_target_timeout_ms 必须是 1..600000 的整数或 null",
         )
 
+        torque_limit = deployment.get("external_target_torque_limit_per_mille")
+        check.require(
+            torque_limit is None
+            or (
+                isinstance(torque_limit, int)
+                and not isinstance(torque_limit, bool)
+                and 1 <= torque_limit <= 1000
+            ),
+            f"部署 {deployment_id} 的 external_target_torque_limit_per_mille "
+            f"必须是 1..1000 的整数或 null",
+        )
+
         # 同一主机和 EtherCAT 网口允许出现多条部署记录：它们是互斥的启动方案，
         # 一次只能运行一个，物理独占由运行时抢占网卡自然保证，不是静态可判定的冲突。
         # 静态可判定的风险是不同方案的审计报告互相覆盖，因此约束报告路径唯一。

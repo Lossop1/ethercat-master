@@ -96,6 +96,12 @@ typedef struct {
     uint64_t position_target_max_following_error_counts;
     /* 0 表示调用者未启用单步限幅；非零时拒绝相邻目标差超过此值的命令。 */
     uint64_t position_target_max_step_counts;
+    /*
+     * 模式 10（CST）下的力矩上限，单位是额定力矩的千分比。0 表示未配置。
+     * 来自部署配置本身（plan->deployment），不经过回调——它是部署的原始事实，
+     * 不像跟随误差上限那样需要先按硬件参数折算。
+     */
+    uint32_t torque_target_limit_per_mille;
     /* 至少已成功提交一条外部目标后置 true；用于单步限幅的基准有效性判断。 */
     bool position_target_committed;
     /* 错误恢复策略配置：从部署配置加载，与业务逻辑解耦 */

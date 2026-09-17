@@ -70,6 +70,25 @@ bool emaster_cia_process_image_decode_input(
     uint16_t *status_word,
     int32_t *actual_value);
 
+/* TxPDO 里的三路反馈，与当前运行模式无关。 */
+typedef enum
+{
+    EMASTER_CIA_FEEDBACK_POSITION = 0,
+    EMASTER_CIA_FEEDBACK_VELOCITY = 1,
+    EMASTER_CIA_FEEDBACK_TORQUE = 2
+} emaster_cia_feedback_t;
+
+/*
+ * 读取上一次解码留下的某一路反馈原始值。字段不在本 PDO 布局里、类型不是有符号、
+ * 或超出该物理量的取值范围时返回 false，*value 不动。
+ *
+ * 与 decode_input 的区别在"谁来挑"：那个按运行模式挑一路（模式 10 只给力矩），
+ * 于是 CST 下位置根本读不出来；这个按 PDO 里实际有的字段给，模式不参与。
+ */
+bool emaster_cia_process_image_feedback(const emaster_cia_process_image_t *image,
+                                        emaster_cia_feedback_t feedback,
+                                        int32_t *value);
+
 /* 交换结束后记录 RxPDO 及其 WKC 确认结果，成功解码后记录 TxPDO。 */
 bool emaster_cia_process_image_audit_output(
     const emaster_cia_process_image_t *image,

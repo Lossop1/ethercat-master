@@ -286,6 +286,9 @@ emaster_control_session_status_t emaster_soem_control_session(
             callbacks->position_target_max_step_counts;
         session->external_target_buffer = callbacks->external_target_buffer;
     }
+    /* 力矩上限是部署的原始字段（不经回调折算），与错误恢复策略同样从计划里取。 */
+    session->torque_target_limit_per_mille =
+        plan->deployment->external_target_torque_limit_per_mille;
     session->transition_cycles =
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
         plan->cycle_ns;

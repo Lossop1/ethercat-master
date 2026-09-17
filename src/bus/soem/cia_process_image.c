@@ -511,6 +511,37 @@ bool emaster_cia_process_image_decode_input(
     return true;
 }
 
+bool emaster_cia_process_image_feedback(const emaster_cia_process_image_t *image,
+                                        emaster_cia_feedback_t feedback,
+                                        int32_t *value)
+{
+    size_t ordinal;
+    int64_t raw;
+
+    if (image == NULL || value == NULL)
+    {
+        return false;
+    }
+    ordinal = feedback == EMASTER_CIA_FEEDBACK_VELOCITY
+                  ? image->tx_actual_velocity_ordinal
+                  : feedback == EMASTER_CIA_FEEDBACK_TORQUE
+                        ? image->tx_actual_torque_ordinal
+                        : image->tx_actual_position_ordinal;
+    if (ordinal == SIZE_MAX || ordinal >= image->tx_field_count ||
+        image->tx_values[ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED)
+    {
+        return false;
+    }
+    raw = image->tx_values[ordinal].value.signed_value;
+    if (raw < INT32_MIN || raw > INT32_MAX ||
+        (feedback == EMASTER_CIA_FEEDBACK_TORQUE && (raw < INT16_MIN || raw > INT16_MAX)))
+    {
+        return false;
+    }
+    *value = (int32_t)raw;
+    return true;
+}
+
 static bool audit_direction_values(
     const emaster_pdo_direction_layout_t *layout,
     const emaster_pdo_codec_value_t *values,

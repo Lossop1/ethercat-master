@@ -58,6 +58,17 @@ static bool application_stop_requested(void *user_data) {
  */
 #define EMASTER_EXTERNAL_TARGET_TIMEOUT_DEFAULT_NS  UINT64_C(200000000)
 
+/*
+ * 目标源的口径：部署选的是位置（CSP，模式 8）还是力矩（CST，模式 10）。
+ * 由 main 在会话计划建好后判定一次，此后只读——position_target_source 每周期读它，
+ * 不在实时路径上比字符串。
+ *
+ * 这个开关只有一处作用，但缺了它就不安全：位置模式下"没有外部目标"可以保持上一周期
+ * 的位置（轴停在那儿不动），力矩模式下同样处理等于"继续输出上一条力矩"——客户端失联
+ * 之后轴会一直出力。所以力矩模式空闲/超时一律写 0。
+ */
+static bool external_target_torque_mode = false;
+
 static uint64_t external_target_timeout_ns = EMASTER_EXTERNAL_TARGET_TIMEOUT_DEFAULT_NS;
 
 /*
@@ -149,6 +160,20 @@ static emaster_position_target_source_result_t position_target_source(
             fprintf(stderr, "[MODE] Switched to EXTERNAL control\n");
             last_mode = 1;
         }
+    } else if (external_target_torque_mode) {
+        /*
+         * C2：力矩模式下 HOLD 不是安全选择——session_target.c 的 HOLD 分支直接放行
+         * （"保持上一周期目标"），在力矩里就是"继续输出上一条力矩"，客户端失联之后
+         * 轴会一直出力。所以空闲与超时都写 0，并显式返回 UPDATED。
+         */
+        if (last_mode != 3) {
+            fprintf(stderr, "[MODE] Torque mode (CST): idle, outputting zero torque\n");
+            last_mode = 3;
+        }
+        for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
+            target_positions[i] = 0;
+        }
+        return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
     } else if (last_mode == 1) {
         /* 刚从外部模式切出：超时或客户端断开，保持上一周期目标 */
         fprintf(stderr, "[MODE] External target timeout — holding position\n");
@@ -412,6 +437,20 @@ int main(int argc, char **argv) {
 
     /* 设置轴数量供命令处理使用 */
     external_target_buffer.axis_count = plan.axis_count;
+
+    /*
+     * C2：按实际构好的计划判定目标源口径（不是按部署里的字符串，计划已经解析过
+     * 设备事实与运行方案的匹配）。模式 8 = CSP（位置），10 = CST（力矩）。
+     */
+    external_target_torque_mode = plan.axis_count > 0U &&
+                                  plan.axes[0].operation_mode != NULL &&
+                                  plan.axes[0].operation_mode->value == INT8_C(10);
+    if (external_target_torque_mode) {
+        const char *mode_id = plan.axes[0].operation_mode->mode_id;
+        fprintf(stderr, "[MODE] Torque deployment (%s, mode 10): target source writes zero "
+                        "torque when idle or timed out\n",
+                mode_id != NULL ? mode_id : "mode 10");
+    }
 
     /*
      * 命令服务器由会话自己创建（control_session.c），这里不再另建一个。

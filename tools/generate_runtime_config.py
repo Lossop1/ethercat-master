@@ -323,6 +323,7 @@ def render_deployments(
         .realtime_cpu_core = {c_int32(deployment['realtime_cpu_core'])},
         .realtime_required = {'true' if deployment['realtime_required'] else 'false'},
         .external_target_timeout_ms = UINT32_C({deployment['external_target_timeout_ms']}),
+        .external_target_torque_limit_per_mille = UINT32_C({deployment['external_target_torque_limit_per_mille']}),
     }}"""
         )
     return "\n\n".join(pointer_arrays), ",\n".join(initializers)

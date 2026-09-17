@@ -841,6 +841,17 @@ def deployment_values(
         if external_target_timeout_ms == 0:
             timeout_present = False
 
+        # 外部目标路径的力矩上限（额定力矩的千分比）。位置模式用不上它，
+        # null / 未配置 = 不启用——力矩模式下"没有上限"是一个明确的配置选择，
+        # 不是一个可以靠默认值蒙混过去的空缺，所以这里保留 exists 标志。
+        torque_limit_present, external_target_torque_limit_per_mille = (
+            optional_positive_integer(
+                document.get("external_target_torque_limit_per_mille"),
+                f"部署 {deployment_id} 的 external_target_torque_limit_per_mille",
+                1000,
+            )
+        )
+
         # 报告历史副本保留份数。缺省即用默认值——绝大多数部署不需要显式写它，
         # 但"这个台架留多少轮证据"应当可以在部署里改，而不是重新编译。
         # 0 有意义（不留历史），因此这里不用 0 兼作"未配置"。
@@ -879,6 +890,8 @@ def deployment_values(
                 "realtime_required": realtime_required,
                 "external_target_timeout_present": timeout_present,
                 "external_target_timeout_ms": external_target_timeout_ms,
+                "external_target_torque_limit_present": torque_limit_present,
+                "external_target_torque_limit_per_mille": external_target_torque_limit_per_mille,
                 "report_archive_keep": archive_keep,
             }
         )

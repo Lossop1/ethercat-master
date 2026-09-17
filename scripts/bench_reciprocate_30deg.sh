@@ -19,6 +19,12 @@
 #   RATE        目标更新频率（Hz），默认 100
 #   WAVE        波形 triangle|sine，默认 triangle
 #   TAG         产物文件名后缀，默认 recip30
+#   REPORT_INTERVAL  客户端打印目标/实际的采样间隔（秒），默认 10。
+#                    调成 1 能看出"轴从哪一刻起不再跟目标"，用来判断驱动器
+#                    什么时候掉出 OP（客户端只发不跟 = 驱动器不再执行目标）。
+#   SETTLE_TICKS 客户端结束后等主站自行退出再 SIGINT 的观察拍数（0.5 秒/拍），
+#                默认 10 拍 = 5 秒。设 0 = 立刻 SIGINT，不给保持窗口——用来
+#                分辨"掉出 OP 发生在命令流运行期"还是"发生在这段保持窗口里"。
 #
 # 报告路径取自部署配置的 run_report_path，无需另行指定。
 
@@ -32,6 +38,8 @@ DEGREES=${DEGREES:-30}
 RATE=${RATE:-100}
 WAVE=${WAVE:-triangle}
 TAG=${TAG:-recip30}
+REPORT_INTERVAL=${REPORT_INTERVAL:-10}
+SETTLE_TICKS=${SETTLE_TICKS:-10}
 
 SOCK=/tmp/emaster-${DEPLOYMENT}.sock
 LOG=/tmp/${TAG}_master.log
@@ -123,6 +131,7 @@ echo "=== 往返 $DURATION 秒 ==="
 python3 -u "$REPO/scripts/test_external_motion_client.py" "$SOCK" \
     --cycles 0 --total "$DURATION" --traverse "$TRAVERSE" \
     --degrees "$DEGREES" --rate "$RATE" --wave "$WAVE" --ready 30 \
+    --report-interval "$REPORT_INTERVAL" \
     > "$CLIENT_LOG" 2>&1
 CLIENT_RC=$?
 echo "客户端退出码=$CLIENT_RC（0=跑满时长且命令流连续，1=出现过 200ms 空档，2=主站中断了命令流）"
@@ -139,10 +148,14 @@ echo "终点：$(timeout 3 nc -U "$SOCK" <<< "status" 2>/dev/null | tr '|' '\n' 
 # SIGINT 经 main.c 的 application_stop_requested 回调进入安全门，会真正停机。
 # 这里仍然发一次 shutdown 并记录结果，用来观察该缺陷是否已被修复。
 echo "shutdown" | timeout 3 nc -U "$SOCK" > /dev/null 2>&1
-for _ in $(seq 1 10); do
-    kill -0 "$MASTER_PID" 2>/dev/null || break
-    sleep 0.5
-done
+if [ "$SETTLE_TICKS" -gt 0 ]; then
+    for _ in $(seq 1 "$SETTLE_TICKS"); do
+        kill -0 "$MASTER_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+else
+    echo "SETTLE_TICKS=0：不给保持窗口，直接 SIGINT"
+fi
 if kill -0 "$MASTER_PID" 2>/dev/null; then
     echo "shutdown 未使主站退出（已知缺陷），改发 SIGINT"
     kill -INT "$MASTER_PID" 2>/dev/null

@@ -69,21 +69,38 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
         int32_t target = session->position_target_source_targets[axis_index];
+        const emaster_session_axis_plan_t *axis_plan = &session->plan->axes[axis_index];
+        int8_t mode = axis_plan->operation_mode != NULL ? axis_plan->operation_mode->value
+                                                        : INT8_C(0);
 
         /* 软件限位检查 */
-        if (session->plan->axes[axis_index].operation_mode != NULL &&
-            session->plan->axes[axis_index].operation_mode->value == INT8_C(8) &&
-            !target_within_limits(&session->axes[axis_index], target))
+        if (mode == INT8_C(8) && !target_within_limits(&session->axes[axis_index], target))
         {
             return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+        }
+
+        /*
+         * C3：力矩模式（10）的上限，单位是额定力矩的千分比。模式 10 下前面两条位置
+         * 量纲的检查都失效（软限位本就不进门，单步限幅的阈值是 counts，±1000 永远
+         * 够不着），所以这是力矩唯一的数值护栏。超限与单步超限同判：MOTION_INVALID，
+         * 沿用 D4 已定的"整会话中止"语义。0 = 未配置，不启用。
+         */
+        if (mode == INT8_C(10) && session->torque_target_limit_per_mille > 0U)
+        {
+            int64_t limit = (int64_t)session->torque_target_limit_per_mille;
+            if ((int64_t)target > limit || (int64_t)target < -limit)
+            {
+                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+            }
         }
 
         /* 单步限幅检查：拒绝相邻两条目标差超过阈值的命令。
          * 必须与主站上一次写出的目标（607A 历史）比较，而非 PDO 读回的 6064。
          * position_target_committed 为 false 时（首条目标尚未提交），target_positions
          * 尚无有效历史基准，跳过检查；驱动器使能可能在任意周期才完成，
-         * 不能用 cycle_count > 0 代替。 */
-        if (session->position_target_max_step_counts > 0U &&
+         * 不能用 cycle_count > 0 代替。
+         * C4：阈值是位置计数，模式 10 下与目标量纲不同（千分比），跳过。 */
+        if (mode != INT8_C(10) && session->position_target_max_step_counts > 0U &&
             session->position_target_committed)
         {
             int64_t delta = (int64_t)target -

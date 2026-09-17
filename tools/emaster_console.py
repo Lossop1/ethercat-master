@@ -186,6 +186,47 @@ class ConsoleClient(EtherCATClient):
 # ---------------------------------------------------------------- 控制引擎
 
 
+def find_config_document(repo_root, subdir, key, value):
+    """在 config/<subdir> 下按 key == value 找一份配置原文；找不到返回 None。
+
+    配置文件名的后缀是稳定的，前缀不是——部署里引用的是 ID，不是文件名。
+    按 ID 去内容里找，改名不会让这里的对应关系失效。
+    """
+    directory = os.path.join(repo_root, "config", subdir)
+    try:
+        for name in sorted(os.listdir(directory)):
+            if not name.endswith(".json"):
+                continue
+            with open(os.path.join(directory, name), "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict) and data.get(key) == value:
+                return data
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def deployment_selected_mode(repo_root, deployment_id):
+    """部署选中的 CiA402 模式 ID（csp / csv / cst）；读不出来返回 None。
+
+    走向与主站一致：部署 -> operation_profile_ids[0] -> selected_mode_id。
+    一条部署只启用一根轴的方案时这是精确的；列了多份（不同设备各一份）时只看
+    第一份——面板的护栏不追求精确到轴，只求"明显不是位置模式的部署别去发位置"。
+    """
+    deployment = find_config_document(repo_root, "deployments", "deployment_id", deployment_id)
+    if not deployment:
+        return None
+    profile_ids = deployment.get("operation_profile_ids") or []
+    if not profile_ids:
+        return None
+    profile = find_config_document(
+        repo_root, "operation_profiles", "operation_profile_id", profile_ids[0])
+    if not profile:
+        return None
+    mode = profile.get("selected_mode_id")
+    return mode if isinstance(mode, str) else None
+
+
 class Engine:
     """控制引擎：与界面无关，只跟套接字和两个数组打交道。
 
@@ -197,11 +238,15 @@ class Engine:
     """
 
     def __init__(self, client, deployment, jog_speed=DEFAULT_JOG_SPEED,
-                 range_deg=DEFAULT_RANGE_DEG):
+                 range_deg=DEFAULT_RANGE_DEG, repo_root=None):
         self.client = client
         self.deployment = deployment
         self.jog_speed = jog_speed
         self.range_deg = range_deg
+        # 仓库根：用来读部署配置，判断这次跑的是不是位置模式。None 表示不查
+        # （自检里造引擎的场合），此时护栏让开——它防的是真台架上的误操作。
+        self.repo_root = repo_root
+        self._selected_mode = None
 
         self.axis_count = 0
         self.factor = []           # 每轴：counts / 度
@@ -230,6 +275,25 @@ class Engine:
 
     # ---------- 连接与初始化 ----------
 
+    def mode_guard_passed(self):
+        """面板只发位置目标，所以只接位置模式（CSP）的部署。
+
+        非 CSP 部署直接拒绝，理由不是"还没做"，而是**目标会被当成别的东西**：
+        同样是 set_external_target 写进去的整数，模式 9 当成速度、模式 10 当成
+        额定力矩的千分比。面板里那套角度换算、软范围、单步挪动全是位置量纲的，
+        换个模式它们只会安静地把错的目标发出去——安静正是最坏的一种错法。
+        """
+        if self.repo_root is None:
+            return True
+        if self._selected_mode is None:
+            self._selected_mode = deployment_selected_mode(self.repo_root, self.deployment) or ""
+        mode = self._selected_mode
+        if mode == "" or mode == "csp":
+            return True
+        self.message = (f"部署 {self.deployment} 是 {mode.upper()} 模式（力矩/速度），"
+                        f"面板发的是位置目标，已被拒绝。要用这个部署请走专用脚本。")
+        return False
+
     def try_attach(self, now):
         """按节奏重试接上主站。单次尝试，不阻塞——面板要一直能按键。"""
         interval = STARTUP_RETRY_S if self.expect_startup else RECONNECT_INTERVAL_S
@@ -246,6 +310,8 @@ class Engine:
 
     def attach(self):
         """试一次：连接 → 要 RUNNING → 读拓扑 → 用主站已提交的目标当起点。"""
+        if not self.mode_guard_passed():
+            return False
         if self.client.sock is None and not self.client.connect():
             detail = f"（{self.client.last_problem}）" if self.client.last_problem else ""
             self.message = f"连不上套接字 {self.client.sock_path}{detail}"
@@ -817,6 +883,12 @@ class MasterProcess:
         return None
 
     def start(self):
+        # 拉起主站之前先看模式：非位置模式的部署不该由面板起——起来了也没法用
+        # （引擎会拒绝接），只剩一个在跑的主站等着被误操作。
+        mode = deployment_selected_mode(self.repo_root, self.deployment)
+        if mode is not None and mode != "csp":
+            return (f"部署 {self.deployment} 是 {mode.upper()} 模式，"
+                    f"面板只发位置目标，拒绝启动主站")
         if not os.path.exists(self.binary):
             return f"没有主站二进制 {self.binary}（先在香橙派上 make）"
         if self.running_pid() is not None:
@@ -1539,7 +1611,8 @@ def selftest(args, client_factory=ConsoleClient):
             return 1
 
     client = client_factory(sock_path)
-    engine = Engine(client, args.deployment, args.jog_speed, args.range)
+    engine = Engine(client, args.deployment, args.jog_speed, args.range,
+                    repo_root=args.repo)
     if started_here:
         # 主站从建套接字到能应答之间要跑完几十秒的 SDO 初始化，这段时间别去挤它。
         engine.expect_master_startup()
@@ -1820,7 +1893,8 @@ def main(argv=None):
         return 1
 
     client = ConsoleClient(sock_path)
-    engine = Engine(client, args.deployment, args.jog_speed, args.range)
+    engine = Engine(client, args.deployment, args.jog_speed, args.range,
+                    repo_root=args.repo)
     panel = Panel(engine, master, args)
 
     engine.attach()   # 失败也照进面板：面板上会说明原因，还能按 m 拉起主站

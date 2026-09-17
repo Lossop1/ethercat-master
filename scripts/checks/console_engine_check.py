@@ -159,15 +159,56 @@ def main():
         return 1
     print("负对照通过：假主站确实会因单步超限打掉会话")
 
-    if code == 0:
-        # 负对照刚刚把假主站打到 state=0，按键层要重新起一个能跑的引擎。
-        master.state = 4
-        engine = Engine(created[-1], args.deployment, args.jog_speed, args.range)
-        if not engine.wait_attached(5.0):
-            print("按键层起不来：" + engine.message)
-            return 1
-        code = key_layer_check(engine, master)
-    return code
+    if code != 0:
+        return code
+
+    # 负对照刚刚把假主站打到 state=0，按键层要重新起一个能跑的引擎。
+    master.state = 4
+    engine = Engine(created[-1], args.deployment, args.jog_speed, args.range,
+                    repo_root=args.repo)
+    if not engine.wait_attached(5.0):
+        print("按键层起不来：" + engine.message)
+        return 1
+    if key_layer_check(engine, master) != 0:
+        return 1
+    return mode_guard_check()
+
+
+def mode_guard_check():
+    """模式护栏：非位置模式的部署必须被面板拒绝，位置模式的照常放行。
+
+    用的是仓库里真有的两份部署（quint = csp、cst-smoke = cst），不是造的假配置——
+    护栏要挡的正是"这份配置真的存在、也真的能起主站"的那种情况。
+    """
+    root = str(pathlib.Path(__file__).resolve().parents[2])
+    failures = []
+
+    def check(label, condition, detail=""):
+        print(f"  [{'通过' if condition else '失败'}] {label} {detail}".rstrip())
+        if not condition:
+            failures.append(label)
+
+    print("\n6) 模式护栏")
+    csp = Engine(FakeClient("/tmp/fake-csp.sock"), "orangepi-bench-quint-30deg",
+                 repo_root=root)
+    check("位置模式（csp）放行", csp.mode_guard_passed(),
+          f"mode={csp._selected_mode or '(读不到)'}")
+
+    cst = Engine(FakeClient("/tmp/fake-cst.sock"), "orangepi-bench-cst-smoke",
+                 repo_root=root)
+    check("力矩模式（cst）拒绝", not cst.mode_guard_passed(), cst.message)
+    # attach 的第一件事就是这个判断——被拒时不该碰套接字（假客户端没有连接）。
+    check("被拒时 attach 直接返回，不连套接字", not cst.attach())
+
+    unknown = Engine(FakeClient("/tmp/fake-none.sock"), "no-such-deployment",
+                     repo_root=root)
+    check("读不到部署时不拦（护栏不猜）", unknown.mode_guard_passed())
+
+    if failures:
+        print("\n模式护栏失败项：" + "，".join(failures))
+        return 1
+    print("模式护栏全部通过")
+    return 0
 
 
 def key_layer_check(engine, master):

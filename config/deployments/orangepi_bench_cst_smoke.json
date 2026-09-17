@@ -1,0 +1,21 @@
+{
+    "schema_version": 1,
+    "deployment_id": "orangepi-bench-cst-smoke",
+    "hostname": "orangepi6plus",
+    "topology_id": "bench-quint-slave",
+    "ethercat_interface": "enp49s0",
+    "management_interface": "enp97s0",
+    "operation_profile_ids": [
+        "cyberbeast.dynamic-dc-cst-1ms"
+    ],
+    "motion_profile_id": "orangepi-bench.test-cst-smoke",
+    "run_report_path": "runtime/reports/orangepi-cst-smoke-latest.json",
+    "error_recovery_policy_id": "default",
+    "external_target_timeout_ms": 200,
+    "external_target_torque_limit_per_mille": 50,
+    "realtime": {
+        "scheduler_priority": 80,
+        "cpu_core": 11,
+        "required": true
+    }
+}

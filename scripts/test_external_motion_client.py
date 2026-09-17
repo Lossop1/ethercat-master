@@ -274,7 +274,7 @@ def run_reciprocate(client, start, delta, args, max_step):
                 print(f"[client] t+{elapsed:.0f}s 往返 {elapsed / (2.0 * args.traverse):.2f} 次 "
                       f"phase={f:.3f} 目标={frame} 实际={positions} "
                       f"已发={sent} 被拒={rejected} 最大间隔={max_gap * 1000:.1f}ms", flush=True)
-                next_report = now + 10.0
+                next_report = now + args.report_interval
 
             t_next += period
             now = time.monotonic()
@@ -322,12 +322,18 @@ def main():
     parser.add_argument("--max-step", type=int, default=2548,
                         help="单步上限（counts），仅 --dry-run 使用；"
                              "联机时以 topology 返回的 max_step 为准（默认 2548 = 2°@16384×28:1）")
+    parser.add_argument("--report-interval", type=float, default=10.0,
+                        help="打印目标/实际采样的间隔（秒），默认 10。"
+                             "调小可以看到「轴从哪一刻起不再跟目标」，"
+                             "用来判断驱动器是什么时候掉出 OP 的")
     parser.add_argument("--dry-run", action="store_true",
                         help="不连主站，只生成目标并核对限幅")
     args = parser.parse_args()
 
     if args.rate <= 0 or 1.0 / args.rate >= TARGET_TIMEOUT_MS / 1000.0:
         raise SystemExit("更新频率必须快于外部目标超时（200ms）")
+    if args.report_interval <= 0:
+        raise SystemExit("采样间隔必须为正（--report-interval）")
 
     if args.dry_run:
         # 本地核对用：按台架的编码器折算（16384 counts/rev × 28:1 减速比），
