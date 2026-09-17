@@ -24,6 +24,12 @@ jobs:
       - name: 校验配置
         run: python3 tools/validate_project.py
 
+      # P9.1 的防回退检查。SOEM 访问被多个线程共用，安全性靠 SOEM 自带的锁成立
+      # （见 session_internal.h 顶部说明）。新出现一个调用点就是新出现一个潜在的
+      # 共用方，必须由人确认后再登记。同样是纯文本检查，放在构建之前快速失败。
+      - name: 校验 SOEM 调用点
+        run: bash scripts/checks/soem_call_sites.sh
+
       - name: 配置
         run: cmake --preset linux-debug
 

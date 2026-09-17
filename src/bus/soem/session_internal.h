@@ -18,7 +18,31 @@
 /*
  * 单次会话拥有全部总线资源和周期存储。入口负责分配和释放，配置、交换、控制、
  * 退出各阶段只借用这里的资源；这些内部类型不得传入 CiA 402 或轨迹模块。
- * 所有 SOEM 访问均由会话线程串行执行，周期期间不进行邮箱访问。
+ *
+ * SOEM 访问不是"只由会话线程执行"的——P4.3 的观测线程（session_observer_thread.c
+ * 的 ecx_SDOread）与周期线程共用同一个 context 和 socket。之所以成立，靠的是
+ * SOEM 的 Linux 移植自带的串行化，不是本项目的约定：
+ *
+ *   - 三把互斥锁 getindex_mutex / tx_mutex / rx_mutex 在 external/SOEM/oshw/linux/
+ *     nicdrv.c:128-132 用 PTHREAD_PRIO_INHERIT 初始化，每次收发各取放一次
+ *     （取 :223/:312/:404，放 :247/:326/:458）。持有时间是一次系统调用，有界；
+ *     周期线程可能短暂等在这里，这是实时路径上的一处有界等待。
+ *   - 收包是非阻塞的（nicdrv.c:420），且按帧内索引分流：收到不是自己要的帧时，
+ *     存进对应索引的缓冲区并置 EC_BUF_RCVD（nicdrv.c:436-447），不是丢掉。所以
+ *     观测线程**不会**把过程数据帧取走。
+ *
+ * 线程归属（与 scripts/checks/soem_call_sites.sh 的 ALLOWED 一一对应，那张名单
+ * 是这条约束的可执行检查，改动本段时必须同步）：
+ *
+ *   周期线程（RT）      session_exchange.c
+ *   观测线程（P4.3）    session_observer_thread.c
+ *   会话线程（周期外）  session_setup.c / session_start.c / session_shutdown.c
+ *                       dc_prepare.c / preop_probe.c / session_observer.c
+ *   多线程共用          soem_common.c（薄封装，线程由调用方决定）
+ *
+ * 另注：周期里的 ecx_mbxhandler 调用目前是空转——只有 ecx_slavembxcyclic() 把
+ * 从站设成循环邮箱模式后它才真的收发，而全仓没有一处调用它。观察线程的邮箱
+ * 往返走的是 SOEM 的直接阻塞路径，在它自己的线程里完成。
  */
 typedef struct {
     const emaster_session_plan_t *plan;
