@@ -968,6 +968,13 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
             }
         }
     }
+    /*
+     * P9.2: 收尾再取一次错误环。位置在停机 SDO 诊断之后——这一批读是运行期之外
+     * 最集中使用邮箱的地方，它们自己的 abort 也要进报告——又在这之前：此时观测线程
+     * 已经 join，本线程是环的唯一写入方，取到的就是全轮运行的最后一批。周期回路上
+     * 漏取的那些（提前返回的失败路径）也在这里补上。
+     */
+    emaster_soem_drain_errors(session);
     session->report->last_dc_time_ns = session->context.DCtime;
     session->report->restore_init_succeeded = emaster_soem_restore_init(&session->context);
     if (!session->report->restore_init_succeeded &&

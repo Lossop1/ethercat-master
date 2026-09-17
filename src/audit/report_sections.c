@@ -942,6 +942,36 @@ static bool write_thread_schedstat(FILE *stream, const emaster_control_session_r
 }
 
 /*
+ * P9.2: SOEM 邮箱错误环的消费记录。两条计数合起来才完整：events 是本报告存下的，
+ * dropped 是取到了但报告环已满、只留计数的，相加应当等于 count。
+ *
+ * etype 原样写数字而不是字符串：SOEM 的 ec_err_type 是本仓外部依赖的枚举，翻成
+ * 中文字符串就等于把外部头文件的取值固化进报告格式，那头一改这里就悄悄说谎。
+ * 报告只给原始值，含义由 control_session.h 的注释和 SOEM 头文件负责。
+ */
+static bool write_soem_errors(FILE *stream, const emaster_control_session_report_t *report)
+{
+    REQUIRE_WRITE(fprintf(stream, "{\"count\":%" PRIu64 ",\"dropped_count\":%" PRIu64
+                                  ",\"capacity\":%u,\"events\":[",
+                          report->soem_error_count, report->soem_error_dropped_count,
+                          (unsigned)EMASTER_SOEM_ERROR_CAPACITY) >= 0);
+    for (size_t index = 0U; index < report->soem_error_event_count; ++index)
+    {
+        const emaster_soem_error_event_t *event = &report->soem_errors[index];
+
+        REQUIRE_WRITE(fprintf(stream,
+            "%s{\"exchange\":%" PRIu64 ",\"time_unix_ns\":%" PRIu64
+            ",\"slave\":%u,\"index\":%u,\"subindex\":%u,\"etype\":%u"
+            ",\"abort_code\":%d,\"abort_code_valid\":%s,\"error_code\":%u}",
+            index == 0U ? "" : ",", event->exchange, event->time_unix_ns, (unsigned)event->slave,
+            (unsigned)event->index, (unsigned)event->subindex, (unsigned)event->etype,
+            (int)event->abort_code, event->abort_code_valid ? "true" : "false",
+            (unsigned)event->error_code) >= 0);
+    }
+    return fputs("]}", stream) != EOF;
+}
+
+/*
  * 周期现场环的两份记录：最近 64 个周期（环形，需按时间顺序展开），
  * 以及第一个 WKC 不符之前冻结的那 64 个周期（冻结时已展开）。
  */
@@ -1073,6 +1103,8 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(write_cycle_failure(stream, &report->first_cycle_failure));
     REQUIRE_WRITE(fputs(",\"first_runtime_failure\":", stream) != EOF);
     REQUIRE_WRITE(write_runtime_failure(stream, &report->first_runtime_failure));
+    REQUIRE_WRITE(fputs(",\"soem_errors\":", stream) != EOF);
+    REQUIRE_WRITE(write_soem_errors(stream, report));
     /*
      * 周期尾部的三个分段耗时极值。round_trip 把"收包/邮箱推进/3×FPRD"算成一个数，
      * 因此 1.077 ms 的往返极值此前无法归因；over_budget 是主站自己吃掉超过一个

@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 void emaster_soem_sdo_context_init(
     emaster_soem_sdo_reader_context_t *reader,
@@ -124,10 +125,17 @@ static bool assignment_failed(emaster_soem_sdo_reader_context_t *reader,
 
     result->failed_index = index;
     result->failed_subindex = subindex;
-    /* P4.5: assignment_failed 只在 PreOP 配置阶段被调用（单线程），但为了 P4 慢速
-     * 通道做准备，这里改用线程安全包装。注意：reader->context 在这里只是 ecx_contextt*，
-     * 需要通过 reader->user_data 传递完整的 session。当前调用者未传递 session，
-     * 暂时直接调用 ecx_poperror（P4 实现慢速通道时必须修复）。 */
+    /*
+     * P9.2 更正：这里直接调 ecx_poperror（不取 session->error_ring_mutex），是**故意**
+     * 的，不是漏加的锁——本函数只在 PDO 分配阶段被调用，那时会话还在 PreOP、观测线程
+     * 尚未启动，环的写入方只有本线程。P4.5 原注释说"需要通过 reader->user_data 传递
+     * 完整的 session"，但 emaster_soem_sdo_reader_context_t 里从来没有 user_data 字段，
+     * 那句话描述的是一个不存在的改法。
+     *
+     * 循环把整环排空、只挑出与失败点匹配的那条：不匹配的多半是同一次 PreOP 序列里
+     * 别的操作留下的，它们同样进了审计记录，所以这里丢弃不等于信息消失。运行期的环
+     * 由 emaster_soem_drain_errors 取（周期每拍一次），不会走到这个函数。
+     */
     while (reader != NULL && reader->context != NULL &&
            ecx_poperror(reader->context, &error))
     {
@@ -495,4 +503,81 @@ bool emaster_soem_pop_error_safe(emaster_soem_session_t *session, ec_errort *err
     result = ecx_poperror(&session->context, error);
     (void)pthread_mutex_unlock(&session->error_ring_mutex);
     return result;
+}
+
+/* P9.2: 把一条取出的事件抄进报告的定长环。环满只计数——报告结构是定长的，
+ * 丢掉了哪几条看不见，但"丢掉了几条"必须看得见。 */
+static void record_error_event(emaster_soem_session_t *session, const ec_errort *error)
+{
+    emaster_control_session_report_t *report = session->report;
+    emaster_soem_error_event_t *event;
+
+    if (report == NULL)
+    {
+        return;
+    }
+    if (report->soem_error_count != UINT64_MAX)
+    {
+        ++report->soem_error_count;
+    }
+    if (report->soem_error_event_count >= EMASTER_SOEM_ERROR_CAPACITY)
+    {
+        if (report->soem_error_dropped_count != UINT64_MAX)
+        {
+            ++report->soem_error_dropped_count;
+        }
+        return;
+    }
+    event = &report->soem_errors[report->soem_error_event_count];
+    memset(event, 0, sizeof(*event));
+    /* 取出时的交换号：事件本身不知道自己发生在哪一拍，只能记"什么时候被看见"。
+     * 周期里每拍都取，所以这个差值不超过一拍。 */
+    event->exchange = session->exchange;
+    if (error->Time.tv_sec >= 0 && error->Time.tv_nsec >= 0)
+    {
+        event->time_unix_ns = (uint64_t)error->Time.tv_sec * UINT64_C(1000000000) +
+                              (uint64_t)error->Time.tv_nsec;
+    }
+    event->slave = error->Slave;
+    event->index = error->Index;
+    event->subindex = error->SubIdx;
+    event->etype = (uint8_t)error->Etype;
+    event->error_code = error->ErrorCode;
+    /*
+     * AbortCode 与 ErrorCode 在 SOEM 里是同一个联合体成员位置，靠 Etype 区分语义：
+     * SDO/SDOinfo 填 AbortCode，SoE 和紧急报文填 ErrorCode（见 ec_coe.c:65、ec_soe.c:46、
+     * ec_main.c:151/172）。取错字段会得到一个看着像错误码的垃圾值，所以这里显式分开。
+     */
+    if (error->Etype == EC_ERR_TYPE_SDO_ERROR || error->Etype == EC_ERR_TYPE_SDOINFO_ERROR)
+    {
+        event->abort_code = error->AbortCode;
+        event->abort_code_valid = true;
+    }
+    ++report->soem_error_event_count;
+}
+
+/*
+ * P9.2: 取用点。周期回路每拍调一次，停机收尾再调一次。
+ *
+ * 空环快路径先不加锁读一次头尾：并发的 ecx_pusherror 只会让这里读到"暂时为空"，
+ * 那条事件下一拍再取——错误环是记账通道，晚一拍不影响任何判断，而每一拍都去抢
+ * 一次互斥锁，是拿周期线程的时间去换一条诊断记录的及时性，不划算。
+ * 真正取的时候仍然走 emaster_soem_pop_error_safe 的互斥保护。
+ */
+void emaster_soem_drain_errors(emaster_soem_session_t *session)
+{
+    ec_errort error;
+
+    if (session == NULL || session->report == NULL)
+    {
+        return;
+    }
+    if (session->context.elist.head == session->context.elist.tail)
+    {
+        return;
+    }
+    while (emaster_soem_pop_error_safe(session, &error))
+    {
+        record_error_event(session, &error);
+    }
 }

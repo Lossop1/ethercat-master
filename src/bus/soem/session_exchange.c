@@ -815,5 +815,12 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                                  : EMASTER_CONTROL_SESSION_CYCLE_WAIT_FAILED,
                              true);
     }
+    /*
+     * P9.2: 本拍的所有记账都做完之后取一次错误环。放在最后是因为它的代价与位置无关
+     * （空环时只比一次头尾，不取锁），而放在最后能保证任何一条提前返回的失败路径
+     * 都不会让这一段挤掉后面的截止期判定——截止期判定决定这一轮跑不跑下去，比一条
+     * 诊断记录重要。漏取的那些由停机收尾那次补上。
+     */
+    emaster_soem_drain_errors(session);
     return EMASTER_CONTROL_SESSION_OK;
 }

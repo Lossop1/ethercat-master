@@ -279,6 +279,11 @@ emaster_control_session_status_t emaster_soem_session_switch_motion(
  * 返回值：true = 成功弹出错误，false = 错误环为空或互斥锁失败。 */
 bool emaster_soem_pop_error_safe(emaster_soem_session_t *session, ec_errort *error);
 
+/* P9.2: 取空错误环并逐条记进报告（soem_error_count / soem_errors[]）。
+ * 周期回路每拍调一次，停机收尾再调一次；空环时不取锁，只比一次头尾。
+ * 没有它，环里唯一带时间戳和 abort 码的那条记录没人在运行期取用。 */
+void emaster_soem_drain_errors(emaster_soem_session_t *session);
+
 /* P4.3: SDO 慢速观测线程管理 */
 bool emaster_soem_session_start_observer(emaster_soem_session_t *session);
 void emaster_soem_session_stop_observer(emaster_soem_session_t *session);

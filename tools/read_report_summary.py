@@ -40,6 +40,18 @@ else:
               f"state={ax.get('observed_state')} known={ax.get('state_known')} "
               f"fault={ax.get('fault_present')}")
 
+print("=== soem_errors ===")
+# 环里只有邮箱协议错误（SDO/SoE abort、意外回帧、紧急报文），不含状态变化与超时。
+# etype: 0=SDO_ERROR 1=EMERGENCY 3=PACKET_ERROR 4=SDOINFO_ERROR 8=SOE_ERROR 9=MBX_ERROR
+se = d.get("soem_errors", {})
+print(f"  count: {se.get('count')}  dropped_count: {se.get('dropped_count')}  "
+      f"capacity: {se.get('capacity')}")
+for ev in se.get("events", []):
+    print(f"  交换{ev.get('exchange')} t={ev.get('time_unix_ns')} 从站{ev.get('slave')} "
+          f"0x{ev.get('index', 0):04X}:{ev.get('subindex')} etype={ev.get('etype')} "
+          f"abort={ev.get('abort_code') if ev.get('abort_code_valid') else '-'} "
+          f"error_code={ev.get('error_code')}")
+
 print("=== axes ===")
 for i, ax in enumerate(axes):
     print(f"  axis {i+1}:")

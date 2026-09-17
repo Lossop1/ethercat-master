@@ -466,6 +466,39 @@ typedef struct
  */
 #define EMASTER_SHUTDOWN_ATTEMPT_CAPACITY 2U
 
+/*
+ * P9.2: SOEM 错误环里的事件。
+ *
+ * 先纠正一处旧说法：环里装的**不是**"状态变化和超时"，而是邮箱协议层的错误——
+ * SDO/SoE abort、意外回帧、无响应、邮箱错误响应、紧急报文（入队点见
+ * external/SOEM/src/ec_main.c 的 ecx_SDOerror / ecx_mbxerror / ecx_mbxemergencyerror
+ * 等）。AL 状态变化、WKC 短计、整帧未回从不入环，那几类主站自己记得更全。
+ *
+ * 它的价值在于：主站能触发的这一类（运行期观测线程的 SDO 读、停机诊断 SDO 读）
+ * 此前只有审计里"成功/失败"一个 bool，没有时刻也没有 abort 码。环里有 Time
+ * （SOEM 用 CLOCK_REALTIME，与报告 started_at 同源）、Slave、Index/SubIdx、AbortCode。
+ *
+ * 容量 16：这是一条异常路径，不是流量路径。超出的进 soem_error_dropped_count。
+ */
+#define EMASTER_SOEM_ERROR_CAPACITY 16U
+
+typedef struct
+{
+    /* 取出这条错误时，会话已经推进到第几次交换；0 表示发生在周期开始之前。 */
+    uint64_t exchange;
+    /* SOEM 记的墙上时间（CLOCK_REALTIME，纳秒），与报告 started_at 同源可对齐。 */
+    uint64_t time_unix_ns;
+    uint16_t slave;
+    uint16_t index;
+    uint8_t subindex;
+    /* ec_err_type：0=SDO_ERROR 1=EMERGENCY 3=PACKET_ERROR 8=SOE_ERROR 9=MBX_ERROR … */
+    uint8_t etype;
+    int32_t abort_code;
+    uint16_t error_code;
+    /* AbortCode 只在 SDO 类错误上有效；紧急报文/包错误走 ErrorCode。 */
+    bool abort_code_valid;
+} emaster_soem_error_event_t;
+
 typedef struct
 {
     uint64_t begin_ns;
@@ -768,6 +801,18 @@ typedef struct
     uint64_t error_counter_read_attempt_count;
     uint64_t error_counter_skip_count;
     uint64_t first_error_counter_skip_exchange;
+    /*
+     * P9.2: SOEM 邮箱错误环的消费记录。环由 SOEM 自己维护，主站此前从未取用
+     * （emaster_soem_pop_error_safe 全仓无调用者），等于放弃了总线侧唯一带时间戳
+     * 的那条记录。现在周期里每拍取一次（空环时就是一次比较），停机收尾再取一次。
+     *
+     * soem_error_dropped_count 只数"取到了但本报告环已经放不下"，不数 SOEM 自己在
+     * 环满时丢掉的（它在 ecx_pusherror 里静默覆盖最旧一条，不计数，我们也看不到）。
+     */
+    uint64_t soem_error_count;
+    uint64_t soem_error_dropped_count;
+    size_t soem_error_event_count;
+    emaster_soem_error_event_t soem_errors[EMASTER_SOEM_ERROR_CAPACITY];
     /* 从定时点到周期尾部结束的总耗时超过一个周期的次数与首次交换号。 */
     uint64_t over_budget_cycle_count;
     uint64_t first_over_budget_exchange;
