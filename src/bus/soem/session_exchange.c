@@ -36,6 +36,19 @@
  */
 #define EMASTER_ERROR_COUNTER_STRESS_NS UINT64_C(150000)
 
+/*
+ * P8.2: 诊断读的每轴额度上下限（µs）。
+ *
+ * 上限沿用改动前的固定值：一个轴的诊断读不该比"一次正常收包"贵太多，250 µs 是
+ * 原先的取值，没有理由因为轴数少就允许它更贵。
+ *
+ * 下限是"这个读还有没有意义"的门槛：低于 50 µs 的 FPRD 在台架上几乎必然超时
+ * （健康周期的收包段 p50 就约 50 µs），读了也读不到，只是把超时预算花掉。
+ * 所以低于下限不是"读得快一点"，而是这一拍不读。
+ */
+#define EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US 250
+#define EMASTER_ERROR_COUNTER_MIN_TIMEOUT_US 50
+
 void emaster_soem_session_note_deadline_missed(emaster_soem_session_t *session)
 {
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
@@ -267,14 +280,16 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
      * 两个超时，此前共用一个值，必须拆开。
      *
      * 过程数据收包（frame_timeout_us）是"帧回来了没有"的判据，取小了会把"回得晚"
-     * 误判成"没回来"。诊断读（fprd_timeout_us）不参与这个判定，而它全失败的最坏
-     * 情况是 轴数 × 超时 挤在同一个周期里——共用一个值会让前者一涨、后者的最坏
-     * 情况跟着涨。所以后者保持改动前的取值，不跟着变。
+     * 误判成"没回来"。诊断读（fprd_timeout_us）不参与这个判定，它只花预算。
+     * 拆开之后两者的取值规则也分开：收包超时固定 cycle_ns/4（理由见下），
+     * 诊断读的额度从"周期减去收包超时"的剩余预算里除出来。
+     *
+     * P8.2 之前诊断读的每轴额度等于收包超时（都是 cycle_ns/4 = 250 µs），
+     * 于是全失败的最坏情况是 轴数 × 250 µs：五轴 1250 µs 已经超过 1 ms 的周期，
+     * 轴数再涨只会更糟。抽样 + 承压跳过把它从"每周期"降成"偶尔一次"，但最坏
+     * 情况本身没管——一个刚好落在采样点上的故障周期照样会被它拖爆。
      */
     const int cycle_us = (int)(session->plan->cycle_ns / 1000U);
-    int fprd_timeout_us = cycle_us / 4;
-    if (fprd_timeout_us < 50)  { fprd_timeout_us = 50;  }
-    if (fprd_timeout_us > 500) { fprd_timeout_us = 500; }
 
     /*
      * 过程数据收包超时：固定 cycle_ns/4，运行期不随任何测量变化。
@@ -323,6 +338,51 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
             }
         }
     }
+
+    /*
+     * P8.2: 诊断读的每轴额度从剩余预算里除出来，量不够就整块跳过。
+     *
+     * 位置必须在覆盖之后：上面那个覆盖是判别实验用的（"把超时调到 600 µs 看未回
+     * 归零"），额度要跟着它走，否则实验测的就不是实际会发生的预算。放在覆盖之前
+     * 算，算出来的额度与真正用的收包超时对不上，这个账就是假的。
+     *
+     * 除法的代价是轴数一涨、每轴额度变小——这正是想要的：总预算不变，轴多了每轴
+     * 分到的就少。额度不足下限时不再"每轴读短一点"，而是整块不读：读不到的概率
+     * 高，而且真的每轴都超时会正好把剩余预算全部花光，把一个诊断读变成超过周期的
+     * 阻塞。跳过是可控的损失（少一组计数器样本），拖爆周期不是。
+     *
+     * 除不尽的部分（余数）不利用：宁可低估预算，不可高估。
+     */
+    int fprd_timeout_us = 0;
+    if (session->plan->axis_count > 0U)
+    {
+        int fprd_budget_us = cycle_us - frame_timeout_us;
+
+        if (fprd_budget_us > 0)
+        {
+            fprd_timeout_us = fprd_budget_us / (int)session->plan->axis_count;
+        }
+        if (fprd_timeout_us > EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US)
+        {
+            fprd_timeout_us = EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US;
+        }
+        if (fprd_timeout_us < EMASTER_ERROR_COUNTER_MIN_TIMEOUT_US)
+        {
+            fprd_timeout_us = 0;
+        }
+    }
+    /*
+     * 最坏阻塞时长，直接进报告。它由构造保证 ≤ 一个周期（额度就是从剩余预算里
+     * 除出来的），所以这个字段的用途不是"发现问题"，是让读者不必重算就能核对
+     * 这件事——最坏情况 ≤ 周期的证明要在报告里查得到，不能只活在注释里。
+     *
+     * 额度为 0（本拍不读）时只算收包那一份：此时尾部没有诊断读的阻塞。
+     * 邮箱推进段不进这个账，理由见下面调用点。
+     */
+    session->report->tail_blocking_budget_ns =
+        ((uint64_t)frame_timeout_us +
+         (uint64_t)fprd_timeout_us * (uint64_t)session->plan->axis_count) * UINT64_C(1000);
+    session->report->error_counter_timeout_us = (uint32_t)fprd_timeout_us;
 
     ++session->exchange;
     (void)ecx_send_processdata(&session->context);
@@ -377,10 +437,25 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
      */
     tail_timing_valid = clock_gettime(CLOCK_MONOTONIC, &receive_done) == 0;
 
-    /* P4.1: 周期内有界邮箱推进。
-     * 在 receive 后调用，让 SDO 慢速通道（P4.3 的观察线程）与周期共存。
-     * limit=4 经实测（2026-09-12）对 round_trip 无显著影响（±3μs 噪声范围内），
-     * 相比 limit=2 为 SDO 观测提供更多推进机会，同时避免 limit=8 的过度推进。 */
+    /*
+     * P4.1: 周期内的邮箱推进调用。
+     *
+     * P8.2 更正：这句注释原写"让 SDO 慢速通道（P4.3 的观察线程）与周期共存"，
+     * 与实际不符。两个处理器都只对 mbxhandlerstate == ECT_MBXH_CYCLIC 的从站干活
+     * （ec_main.c:1245 与 :1531 的分派），而这个状态由 ecx_slavembxcyclic 设置，
+     * 全仓没有一处调用它；发送侧的队列也是空的。所以这个调用目前一次 I/O 都不做。
+     * 观察线程的 SDO 往返走的是 SOEM 自己的直接阻塞路径，在它自己的线程里完成，
+     * 不经过这里。
+     *
+     * 这解释了实测为什么是 3.9 µs，也界定了它的峰值：收件处理器遍历所有带邮箱的
+     * 从站（mbxstatuslength），对每个只做一次模式比较，所以代价与从站数量成正比、
+     * 比例常数是一次比较，没有超时可言。**这个"有界"的前提是没有从站进入循环邮箱
+     * 模式**——一旦有，这一段会长出真的 FPRD/FPWR，每次带 EC_TIMEOUTRET（2000 µs）
+     * 超时，那时它必须被算进 tail_blocking_budget_ns，而不能继续当微秒级的常数。
+     *
+     * 保留调用不动：开销可忽略，而一旦将来真的启用循环邮箱模式，这里就是它在
+     * 周期里的落点。但要清楚它现在不在做那件注释所说的事。
+     */
     ecx_mbxhandler(&session->context, 0, 4);
     if (tail_timing_valid && clock_gettime(CLOCK_MONOTONIC, &mailbox_done) != 0)
     {
@@ -426,6 +501,25 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         if ((session->exchange % EMASTER_ERROR_COUNTER_READ_INTERVAL) != 1U)
         {
             /* 未到采样点：什么都不做，也不记账——这不是异常。 */
+        }
+        else if (fprd_timeout_us <= 0)
+        {
+            /*
+             * P8.2: 预算不够，本周期整块不读。
+             *
+             * 这一条排在承压跳过**之前**：前者是"这台机器在当前的周期与轴数下永远
+             * 读不了"，后者是"这一刻读了也没用"。一个故障周期如果同时撞上这两条，
+             * 记成承压跳过就把永久性的那条盖住了——而永久性的那条正是需要人去改
+             * 配置（放大周期或减轴）的那条，不能只在健康周期里才出现。
+             */
+            if (session->report->error_counter_skip_budget_count != UINT64_MAX)
+            {
+                ++session->report->error_counter_skip_budget_count;
+            }
+            if (session->report->first_error_counter_skip_budget_exchange == 0U)
+            {
+                session->report->first_error_counter_skip_budget_exchange = session->exchange;
+            }
         }
         else if (!wkc_ok_now || receive_span_ns > EMASTER_ERROR_COUNTER_STRESS_NS)
         {
@@ -477,9 +571,10 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                     session->axes[axis].error_counters_read = false;
                     error_counter_read_failed = true;
                     /*
-                     * 每个 FPRD 各自带 frame_timeout_us 超时，三次读全部用掉就是一个远超
-                     * 周期的预算。此前只记录"本周期没读到"，不记录发生过多少次、从哪个
-                     * 周期开始——而这条路径本身会拖长周期，是自激式劣化的候选。
+                     * 每个 FPRD 各自带 fprd_timeout_us 超时（P8.2 起是从剩余预算里除
+                     * 出来的额度，不再是收包超时），全轴读失败正好用掉剩余预算——不会
+                     * 超过一个周期，这是由构造保证的，见上面额度的算法。
+                     * 此前只记录"本周期没读到"，不记录发生过多少次、从哪个周期开始。
                      */
                     if (session->report->error_counter_read_fail_count != UINT64_MAX)
                     {

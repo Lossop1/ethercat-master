@@ -1121,18 +1121,31 @@ bool emaster_run_report_write(FILE *stream,
          */
         ",\"tail_max_receive_ok_ns\":%" PRIu64
         ",\"frame_timeout_us\":%" PRIu32
+        /*
+         * P8.2: 尾部最坏阻塞时长（收包超时 + 轴数 × 每轴诊断读额度），由构造
+         * 保证 ≤ 周期。跟上面的 cycle_ns 一比就能核对，不必重算额度怎么来的。
+         */
+        ",\"tail_blocking_budget_ns\":%" PRIu64
+        ",\"error_counter_timeout_us\":%" PRIu32
         ",\"tail_max_mailbox_ns\":%" PRIu64
         ",\"tail_max_error_counter_ns\":%" PRIu64
         ",\"error_counter_read_fail_count\":%" PRIu64
         ",\"first_error_counter_read_fail_exchange\":%" PRIu64
         /*
-         * 采样记账三个数：到了采样点并真的读了（attempt）、到了采样点但因为本周期
-         * 已经出问题而跳过（skip）、没到采样点（不记账，可由 cycle_count 反推）。
+         * 采样记账四个数：到了采样点并真的读了（attempt）、到了采样点但因为本周期
+         * 已经出问题而跳过（skip）、到了采样点但周期与轴数算下来额度不足而整块不读
+         * （skip_budget，P8.2）、没到采样点（不记账，可由 cycle_count 反推）。
          * 分开之后，read_fail 才只表示"想读但没读到"。
+         *
+         * skip_budget 是三者里唯一不会自己消失的：它只随部署的周期/轴数变化。报告里
+         * 恒为 0 才说明这台配置读得起诊断；只要它非零，样本就一直在按配置缺口丢，
+         * 而 read_fail / skip 都不会提到这件事。
          */
         ",\"error_counter_read_attempt_count\":%" PRIu64
         ",\"error_counter_skip_count\":%" PRIu64
         ",\"first_error_counter_skip_exchange\":%" PRIu64
+        ",\"error_counter_skip_budget_count\":%" PRIu64
+        ",\"first_error_counter_skip_budget_exchange\":%" PRIu64
         ",\"over_budget_cycle_count\":%" PRIu64
         ",\"first_over_budget_exchange\":%" PRIu64
         ",\"first_deadline_missed_exchange\":%" PRIu64
@@ -1153,11 +1166,15 @@ bool emaster_run_report_write(FILE *stream,
         ",\"deadline_miss_tail_uncovered_ns\":%" PRIu64 "},",
         report->tail_max_receive_ns, report->tail_max_receive_ok_ns,
         (unsigned)report->frame_timeout_us,
+        report->tail_blocking_budget_ns,
+        (unsigned)report->error_counter_timeout_us,
         report->tail_max_mailbox_ns,
         report->tail_max_error_counter_ns, report->error_counter_read_fail_count,
         report->first_error_counter_read_fail_exchange,
         report->error_counter_read_attempt_count, report->error_counter_skip_count,
-        report->first_error_counter_skip_exchange, report->over_budget_cycle_count,
+        report->first_error_counter_skip_exchange,
+        report->error_counter_skip_budget_count,
+        report->first_error_counter_skip_budget_exchange, report->over_budget_cycle_count,
         report->first_over_budget_exchange, report->first_deadline_missed_exchange,
         report->first_mismatch_present ? "true" : "false", report->first_mismatch_exchange,
         report->first_mismatch_wkc, report->frame_interval_max_ns,
