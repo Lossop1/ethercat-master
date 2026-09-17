@@ -18,7 +18,7 @@ WANTED = re.compile(
     r"|first_deadline_missed_exchange|deadline_missed_count"
     r"|error_counter_read_attempt_count|error_counter_skip_count"
     r"|error_counter_read_count|tail_max_error_counter_ns"
-    r"|tail_max_receive_ns|tail_max_mailbox_ns"
+    r"|tail_max_receive_ns|tail_max_receive_ok_ns|frame_timeout_us|tail_max_mailbox_ns"
     r"|frame_interval_max_ns|frame_interval_max_exchange"
     r"|frame_interval_gap_count|first_frame_interval_gap_exchange"
     r"|first_mismatch_frame_interval_ns|deadline_miss_frame_interval_ns"

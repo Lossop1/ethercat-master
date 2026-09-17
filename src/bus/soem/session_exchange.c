@@ -277,22 +277,33 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     if (fprd_timeout_us > 500) { fprd_timeout_us = 500; }
 
     /*
-     * 过程数据收包超时由**实测的收包段上限**导出，不再用固定的 cycle_ns/4。
+     * 过程数据收包超时：固定 cycle_ns/4，运行期不随任何测量变化。
      *
-     * 原值 cycle_ns/4 = 250 µs 是当初为"单次失败最多占 1/4 周期预算"拍的，没有
-     * 依据回程实测。2026-09-16 五轴 8 臂 × 45 s 量出来：干净臂的收包段上限
-     * 178–222 µs，也就是 250 µs 只留下 12% 余量——超时压在回程分布的尾部上。
-     * 后果是每 45 秒必然误判 1–3 个"整帧未回"（实为回得比超时晚）：那些臂里
-     * 发送迟到全程 ≤55 µs、ESC 错误计数器全零、帧距 1.0005 ms 全都正常。
-     * 超时提到 600 µs 后计数 8 → 3，是剂量-反应。
+     * 取值的来由是"单次失败最多占 1/4 周期预算"——帧真丢时只赔掉 1/4 周期，
+     * 剩下的预算留给 recovery 追回相位。这是**故障侧的预算**，与"正常时够不够
+     * 等"是两回事，所以它由周期长度决定，不由回程分布决定。
      *
-     * 取值 = 实测上限 × 2，钳在 [cycle_ns/4, cycle_ns/2]：下限保证不低于改动前的
-     * 行为（还没有成功样本时也落在下限，即原来的 250 µs），上限保证单次失败最多
-     * 吃掉半个周期，recovery 仍有空间追回。
+     * 它确实偏紧：2026-09-16 五轴 8 臂 × 45 s 量到干净臂的收包段上限 178–222 µs，
+     * 余量只有 12%；2026-09-17 再跑 5 臂（含一次 45 s 冒烟），成功回程的上限是
+     * 170 / 173 / 181 / 311 / 390 µs。也就是说 250 µs 以上的成功回程真实存在，
+     * **`wkc_no_frame_count` 里含一个已知的误报成分**：那些帧回来了，只是回得比
+     * 超时晚。判读该计数时必须知道这一点。
+     *
+     * 曾经改由实测上限 × 2 导出（提交 aafff14），2026-09-17 撤回。原因是那个写法
+     * 把判据变成了不可证伪的：上限是全程最大值、只涨不落，超时又等于它的 2 倍，
+     * 于是一个大样本就把超时顶上去，之后的慢帧全被判成"回来了"——未回计数被它
+     * 自己压成 0。5 臂实测正是如此（全 0），其中 2 臂还撞死在 cycle_ns/2 上界。
+     * 放松尺度再宣布"零超时"，这个数字就不再是证据。
+     *
+     * 收手的判断依据：掉线的主因已另行定位并修好（停机序言，见
+     * session_shutdown.c），这些未回事件从未引发过掉线；继续追这条肥尾收益不大。
+     * 肥尾本身按"非 PREEMPT_RT 内核 + 台架共存负载的固有属性"记录，不再试图
+     * 用超时把它盖掉。
+     *
+     * 保留 tail_max_receive_ok_ns / tail_max_receive_ns 的测量与上报：超时不动了，
+     * 但"实测上限离超时还有多远"仍要能从报告里读出来。见下面收包段标定处。
      */
-    int frame_timeout_us = (int)(session->report->tail_max_receive_ok_ns / 1000U) * 2;
-    if (frame_timeout_us < cycle_us / 4) { frame_timeout_us = cycle_us / 4; }
-    if (frame_timeout_us > cycle_us / 2) { frame_timeout_us = cycle_us / 2; }
+    int frame_timeout_us = cycle_us / 4;
     if (frame_timeout_us < 50)  { frame_timeout_us = 50;  }
     if (frame_timeout_us > 500) { frame_timeout_us = 500; }
     session->report->frame_timeout_us = (uint32_t)frame_timeout_us;
@@ -400,8 +411,11 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
 
             receive_span_ns = tail_receive_done_ns - tail_send_end_ns;
             /*
-             * 帧超时的标定样本。只收"真有帧回来"的周期：超时周期的收包段时长
-             * 恒等于超时值本身，是删失数据，收进来会让超时自我强化。
+             * 收包段的实测上限，只上报、不参与任何取值（超时已回到固定值）。
+             * 留着它是为了回答"实测离超时还有多远"——超时不随它变，这个比较才成立。
+             *
+             * 只收"真有帧回来"的周期：超时周期的收包段时长恒等于超时值本身，是
+             * 删失数据，混进来会把上限抬到超时值上，比较就失去意义。
              */
             if (session->report->actual_wkc > 0 &&
                 receive_span_ns > session->report->tail_max_receive_ok_ns)
