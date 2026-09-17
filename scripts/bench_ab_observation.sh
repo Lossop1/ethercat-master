@@ -10,6 +10,7 @@
 #   base        无对抗负载、不开观测，作为对照
 #   obs         观测客户端 50 Hz 正常拉取
 #   obsstall    观测客户端拉一次后停住 16 秒（读侧慢）
+#   obsnone     观测通道开着但一个客户端都没有（把"通道存在"与"客户端在场"分开）
 #   noread_new  命令 socket 上"连上就不读"，跑当前构建
 #   noread_old  同一条臂，跑对照二进制（见下）
 #
@@ -52,6 +53,8 @@ NEW=$REPO/build/tools/master/emaster-master
 OLD=${OLD:-/tmp/emaster-old25-quint}
 DUR=${DUR:-40}
 OUT=${OUT:-/tmp/ab_out.txt}
+# 同标签的臂会互相覆盖日志，加个序号，失败那一轮才留得下来。
+SEQ=0
 : > "$OUT"
 exec >>"$OUT" 2>&1
 
@@ -127,14 +130,25 @@ clean() {
 
 arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|noread)
     local TAG=$1 BIN=$2 OBSV=$3 ADV=$4
+    SEQ=$((SEQ+1))
+    local STORE="/tmp/ab_master_${SEQ}_${TAG}.log"
+    # 对抗负载占了观测 socket 时不能在里面探测：观测 socket 是单客户端模型
+    # （server.c 的"接管新连接前先断开旧的"），探测开的每一条新连接都会把对抗
+    # 客户端顶掉。那样这条臂测到的"客户端被断开"来自我自己的探针，而不是背压，
+    # 整条臂就白跑了——第一版正是这样。
+    # noread 臂不受影响：它占的是命令 socket，观测 socket 空着。
+    local ADV_OBS=0
+    case "$ADV" in watch|stall) ADV_OBS=1 ;; esac
     clean
     echo ""
     echo "################ 臂 $TAG  观测=$OBSV 对抗=$ADV  $(md5sum "$BIN" | cut -c1-8) ################"
+    echo "本臂主站日志=$STORE"
     cd "$REPO" || return 1
     ST=$(start_master "$OBSV" "$BIN")
     echo "主站 state=$ST"
     if [ "$ST" != "4" ]; then tail -5 /tmp/ab_master.log; return 1; fi
     local MPID; MPID=$(cat /tmp/ab.pid)
+    local T0; T0=$(date +%s%N)
     local C0; C0=$(probe_cycle)
     echo "起始 cycle=$C0"
 
@@ -145,7 +159,8 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
         noread) python3 -u /tmp/ab_noread.py "$SOCK" $((DUR+2)) 3 30 100 1274.31 > /tmp/ab_adv.log 2>&1 & APID=$! ;;
     esac
     sleep 3
-    local C1; C1=$(probe_cycle)
+    local C1=""
+    [ "$ADV_OBS" = "1" ] || C1=$(probe_cycle)
 
     if [ "$ADV" = "noread" ]; then
         sleep $((DUR-8))
@@ -157,11 +172,63 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
         tail -3 /tmp/ab_motion.log
     fi
 
-    local C2; C2=$(probe_cycle)
+    local C2=""
+    [ "$ADV_OBS" = "1" ] || C2=$(probe_cycle)
+    [ -n "$APID" ] && { kill $APID 2>/dev/null; wait $APID 2>/dev/null; echo "--- 对抗侧："; tail -4 /tmp/ab_adv.log; }
     sleep 3
     local C3; C3=$(probe_cycle)
+    local T1; T1=$(date +%s%N)
+
+    # 停机必须在这里、即在 ADV_OBS 提前返回之前：停机走 SIGINT（安全门），
+    # 下一臂的 clean() 走的是 pkill -9。漏掉这一步，主站会被 SIGKILL 掉——
+    # 驱动器停在被使能、输出还压着的状态，下一臂一起就带着上臂的残留跑。
+    # 第一版的 ADV_OBS 分支把 return 0 写在了这一段前面，第三臂因此一开机
+    # 就丢轴掉出 OP，那次结果不能算数。
+    kill -INT "$MPID" 2>/dev/null
+    local OK=0
+    for _ in $(seq 1 60); do kill -0 "$MPID" 2>/dev/null || { OK=1; break; }; sleep 0.5; done
+    if [ "$OK" = "1" ]; then echo "主站已自行退出"
+    else echo "** 主站 30s 内未退出"; pkill -9 -f emaster-master; fi
+
+    if [ "$ADV_OBS" = "1" ]; then
+        # 对抗客户端在场时全程不探测，只比较首尾，期望值用实测墙钟换算
+        # （1 kHz 下拍数就是毫秒数），不再假设各段各占多久。
+        local WANT=$(( (T1-T0)/1000000 ))
+        local GOT=$((C3-C0))
+        echo "cycle: 起=$C0 结束后=$C3（对抗客户端在场，中间不探测）"
+        echo "--- 判定（实测间隔 $((WANT/1000)) 秒，期望 $WANT 拍）---"
+        if [ "$GOT" -ge $((WANT*95/100)) ] && [ "$GOT" -le $((WANT*105/100)) ]; then
+            echo "结论：周期未受干扰（推进 $GOT）"
+        elif [ "$GOT" -lt $((WANT/10)) ]; then
+            echo "** 结论：周期被冻死（推进 $GOT）"
+        else
+            echo "** 结论：周期被拖慢（推进 $GOT）"
+        fi
+        echo "--- 指标 ---"
+        if [ -f "$REPORT" ]; then
+            grep -oE '"(frame_interval_max_ns|frame_interval_gap_count|deadline_missed_count|wkc_mismatch_count|wkc_no_frame_count|publish_max_ns|publish_over_budget_count)": *[0-9]+' "$REPORT" | sort -u
+        fi
+        cp /tmp/ab_master.log "$STORE" 2>/dev/null || true
+        echo "--- 停机 AL 快照 ---"
+        grep -E 'AL state=' "$STORE" | tail -8
+        grep -E '总线状态' /tmp/ab_master.log | tail -1 | cut -c1-160
+        return 0
+    fi
+
     echo "cycle: 起=$C0 运动初=$C1 运动末=$C2 结束后=$C3"
-    [ -n "$APID" ] && { kill $APID 2>/dev/null; wait $APID 2>/dev/null; echo "--- 对抗侧："; tail -4 /tmp/ab_adv.log; }
+    if [ -z "$C3" ]; then
+        # base 臂不开观测通道，探针自然读不到 cycle。此时唯一有效的判据是下面的
+        # 停机 AL 快照：轴有没有掉出 OP。不写这段保护的话，空字符串参与算术
+        # 会让 bash 报语法错，看着像脚本坏了。
+        echo "（本臂无观测通道，跳过推进判定；看下面的停机 AL 快照）"
+        echo "--- 指标 ---"
+        [ -f "$REPORT" ] && grep -oE '"(frame_interval_max_ns|frame_interval_gap_count|deadline_missed_count|wkc_mismatch_count|wkc_no_frame_count|publish_max_ns|publish_over_budget_count)": *[0-9]+' "$REPORT" | sort -u
+        cp /tmp/ab_master.log "$STORE" 2>/dev/null || true
+        echo "--- 停机 AL 快照 ---"
+        grep -E 'AL state=' "$STORE" | tail -8
+        grep -E '首次不符|总线状态' /tmp/ab_master.log | tail -2 | cut -c1-160
+        return 0
+    fi
     # 判定按每臂的实际间隔算：noread 臂只 sleep DUR-8 就拿 C2，
     # 拿"1 kHz × DUR"当期望值会把它判成被拖住（第一版正是这么错的）。
     local SPAN=$((DUR-8))
@@ -176,19 +243,15 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
         echo "** 结论：周期被拖慢（运动期推进 $((C2-C1))，静默期 3s 推进 $((C3-C2))）"
     fi
 
-    kill -INT "$MPID" 2>/dev/null
-    local OK=0
-    for _ in $(seq 1 60); do kill -0 "$MPID" 2>/dev/null || { OK=1; break; }; sleep 0.5; done
-    if [ "$OK" = "1" ]; then echo "主站已自行退出"; else echo "** 主站 30s 内未退出"; pkill -9 -f emaster-master; fi
     echo "--- 指标 ---"
     if [ -f "$REPORT" ]; then
         grep -oE '"(frame_interval_max_ns|frame_interval_gap_count|deadline_missed_count|wkc_mismatch_count|wkc_no_frame_count|publish_max_ns|publish_over_budget_count)": *[0-9]+' "$REPORT" | sort -u
     else
         echo "（无报告）"
     fi
-    cp /tmp/ab_master.log "/tmp/ab_master_${TAG}.log" 2>/dev/null || true
+    cp /tmp/ab_master.log "$STORE" 2>/dev/null || true
     echo "--- 停机 AL 快照 ---"
-    grep -E 'AL state=' "/tmp/ab_master_${TAG}.log" | tail -8
+    grep -E 'AL state=' "$STORE" | tail -8
     echo "--- 主站日志关键行 ---"
     grep -cE 'External target timeout' /tmp/ab_master.log
     grep -E '总线状态' /tmp/ab_master.log | tail -1 | cut -c1-160
@@ -197,6 +260,7 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
 for A in ${ARMS:-base obs obsstall noread_new noread_old}; do
     case "$A" in
         base)        arm base       "$NEW" 0 none ;;
+        obsnone)     arm obsnone    "$NEW" 1 none ;;
         obs)         arm obs        "$NEW" 1 watch ;;
         obsstall)    arm obsstall   "$NEW" 1 stall ;;
         noread_new)  arm noread_new "$NEW" 1 noread ;;

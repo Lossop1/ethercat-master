@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -272,6 +273,23 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     int frame_timeout_us = (int)((session->plan->cycle_ns / 4U) / 1000U);
     if (frame_timeout_us < 50)  { frame_timeout_us = 50; }
     if (frame_timeout_us > 500) { frame_timeout_us = 500; }
+    /*
+     * 覆盖超时，用来把"帧真的丢了"和"帧只是回来得晚"分开：台架实测每 40 秒
+     * 有 1–4 个整帧未回，而那几拍的帧距是 1.0005 ms（完全正常），且 5 个从站的
+     * ESC 错误计数器全程为 0——环上没有坏帧。把超时调大后整帧未回若归零，就是
+     * 回程晚于 250 µs，不是没回来。
+     */
+    {
+        const char *timeout_override = getenv("EMASTER_FRAME_TIMEOUT_US");
+
+        if (timeout_override != NULL && timeout_override[0] != '\0') {
+            int parsed = atoi(timeout_override);
+
+            if (parsed >= 50) {
+                frame_timeout_us = parsed;
+            }
+        }
+    }
 
     ++session->exchange;
     (void)ecx_send_processdata(&session->context);
