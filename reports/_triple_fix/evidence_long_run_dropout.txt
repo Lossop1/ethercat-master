@@ -63,5 +63,6 @@ set_external_target -> 外部目标缓冲区 -> position_target_source -> CSP）
 
 - 日志：run_long_ab_no_mailbox.log（第 2 轮，96 万字节）
 - 第 1 轮的报告与日志在启动第 2 轮时被覆盖，上面第 1 轮的数值来自当场抽取的输出。
-- 抽取脚本：scripts/_tmp_extract_report.py（上传到 Pi 的 /tmp/extract_report.py），
+- 抽取脚本：scripts/analysis/extract_report.py（当轮是临时脚本 _tmp_extract_report.py，
+  后来收编进 analysis/；按字段取窗口的轻量版是 scripts/analysis/json_probe.py）。
   报告 100~200 MB 且单行，本地 grep 会超时，必须在 Pi 上就地抽。
