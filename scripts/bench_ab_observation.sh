@@ -55,6 +55,24 @@ DUR=${DUR:-40}
 OUT=${OUT:-/tmp/ab_out.txt}
 # 同标签的臂会互相覆盖日志，加个序号，失败那一轮才留得下来。
 SEQ=0
+
+# 自己要先写的临时文件，一律先删后建。这不是洁癖，是 2026-09-17 踩出来的：
+#
+# /tmp 是 1777 sticky，而 fs.protected_regular=2（Ubuntu 默认）**连 root 也拦**——
+# 目录里已存在的、属主不是自己的文件，root 打不开来写（报"权限不够"）。只要有过
+# 一次以别的用户跑起来，这些文件就归了那个用户，之后每次以 root 跑都会：
+#
+#   1. `: > "$OUT"` 失败 → 整个臂的输出丢失（exec 重定向会直接让脚本退出）；
+#   2. `echo $$ > /tmp/ab.pid` 静默失败 → ab.pid 停在旧值 → `kill -INT` 打空 →
+#      下面的等待循环立刻判定"主站已自行退出"，而主站其实还在跑，最后死于
+#      下一臂的 `pkill -9`：**停机路径和报告一起丢，驱动器停在使能态**；
+#   3. 指标那一段 grep 的是上一轮留下的旧报告，打出来的数字看着像结果。
+#
+# 第 3 条最贵：它不报错，只让一整臂的数据变成上一臂的，且只有逐字段比对才发现
+# 得了。删掉重建即可——sticky 位只挡普通用户，root 能 unlink 任何东西。
+rm -f "$OUT" /tmp/ab.pid /tmp/ab_master.log /tmp/ab_master_*.log \
+      /tmp/ab_noread.py /tmp/ab_adv.log /tmp/ab_motion.log 2>/dev/null
+
 : > "$OUT"
 exec >>"$OUT" 2>&1
 
@@ -111,6 +129,14 @@ probe_cycle() {
 start_master() {
     export EMASTER_OBSERVATION=$1
     setsid bash -c "echo \$\$ > /tmp/ab.pid; cd $REPO; exec $2 --deployment $DEPLOY" > /tmp/ab_master.log 2>&1 &
+    # ab.pid 必须真的写进去了才能往下走。写不进去时后面 `kill -INT` 会打空，而
+    # 打空的表现是"主站已自行退出"——一个看起来完全正常的假象，代价是整臂的停机
+    # 路径和报告（见文件头 rm -f 那段）。宁可在这里硬失败。
+    for _ in $(seq 1 20); do [ -s /tmp/ab.pid ] && break; sleep 0.1; done
+    if ! grep -qE '^[0-9]+$' /tmp/ab.pid 2>/dev/null; then
+        echo "** 错误：/tmp/ab.pid 没写进去或不是 PID（$(cat /tmp/ab.pid 2>&1)），停机将失去目标" >&2
+        return 1
+    fi
     for _ in $(seq 1 60); do [ -S "$SOCK" ] && break; sleep 0.5; done
     local st=0
     for _ in $(seq 1 60); do
@@ -128,10 +154,36 @@ clean() {
     rm -f /tmp/emaster-*.sock
 }
 
+# 报告是不是本臂写出来的。判据只看 mtime 有没有前进，不看内容——
+# 报告写不出来时，`grep "$REPORT"` 照样有输出，只是那些数字全是上一轮的。
+# 2026-09-17 正是这样把一整臂的指标读成了上一臂的，而且逐字段都和上臂一模一样
+# 才被看出来。读取 RPT_BEFORE（arm() 里的 local，bash 动态作用域可见）。
+report_is_fresh() {
+    if [ ! -f "$REPORT" ]; then
+        echo "** 报告不存在：$REPORT"
+        return 1
+    fi
+    local now; now=$(stat -c %Y "$REPORT" 2>/dev/null)
+    if [ "$now" = "${RPT_BEFORE:-}" ]; then
+        echo "** 报告未更新（mtime 与本臂开跑前相同）：本臂的停机/报告路径没走到，"
+        echo "** 下面若还有指标，那是上一轮的旧数据，本臂无效。"
+        return 1
+    fi
+    return 0
+}
+
+# 关心的字段。每次都从同一处取，免得三个分支各写一份、加字段时漏掉其中一个。
+metric_grep() {
+    grep -oE '"(frame_interval_max_ns|frame_interval_gap_count|deadline_missed_count|wkc_mismatch_count|wkc_no_frame_count|publish_max_ns|publish_over_budget_count|frame_timeout_us|tail_max_receive_ns|tail_max_receive_ok_ns|sync0_late_count)": *[0-9]+' \
+        "$REPORT" | sort -u
+}
+
 arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|noread)
     local TAG=$1 BIN=$2 OBSV=$3 ADV=$4
     SEQ=$((SEQ+1))
     local STORE="/tmp/ab_master_${SEQ}_${TAG}.log"
+    local RPT_BEFORE=""
+    [ -f "$REPORT" ] && RPT_BEFORE=$(stat -c %Y "$REPORT" 2>/dev/null)
     # 对抗负载占了观测 socket 时不能在里面探测：观测 socket 是单客户端模型
     # （server.c 的"接管新连接前先断开旧的"），探测开的每一条新连接都会把对抗
     # 客户端顶掉。那样这条臂测到的"客户端被断开"来自我自己的探针，而不是背压，
@@ -184,11 +236,21 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
     # 驱动器停在被使能、输出还压着的状态，下一臂一起就带着上臂的残留跑。
     # 第一版的 ADV_OBS 分支把 return 0 写在了这一段前面，第三臂因此一开机
     # 就丢轴掉出 OP，那次结果不能算数。
+    # 发信号前先确认 MPID 指的确实是主站。ab.pid 指向别的 PID（或进程已消失）时
+    # `kill -0` 会立刻失败，被下面的循环读成"主站已自行退出"——主站其实还在跑，
+    # 最后死于下一臂的 pkill -9：停机路径和报告一起丢，驱动器停在使能态。
+    # 所以不认文件，按进程名兜底重解析一次。
+    if ! tr '\0' ' ' < "/proc/$MPID/cmdline" 2>/dev/null | grep -q emaster-master; then
+        local REAL; REAL=$(pgrep -f 'tools/master/emaster-master' | head -1)
+        echo "** ab.pid=$MPID 不是主站或已消失，按进程名重解析为 ${REAL:-无}"
+        MPID=${REAL:-$MPID}
+    fi
+
     kill -INT "$MPID" 2>/dev/null
     local OK=0
-    for _ in $(seq 1 60); do kill -0 "$MPID" 2>/dev/null || { OK=1; break; }; sleep 0.5; done
+    for _ in $(seq 1 120); do kill -0 "$MPID" 2>/dev/null || { OK=1; break; }; sleep 0.5; done
     if [ "$OK" = "1" ]; then echo "主站已自行退出"
-    else echo "** 主站 30s 内未退出"; pkill -9 -f emaster-master; fi
+    else echo "** 主站 60s 内未退出"; pkill -9 -f emaster-master; fi
 
     if [ "$ADV_OBS" = "1" ]; then
         # 对抗客户端在场时全程不探测，只比较首尾，期望值用实测墙钟换算
@@ -205,9 +267,7 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
             echo "** 结论：周期被拖慢（推进 $GOT）"
         fi
         echo "--- 指标 ---"
-        if [ -f "$REPORT" ]; then
-            grep -oE '"(frame_interval_max_ns|frame_interval_gap_count|deadline_missed_count|wkc_mismatch_count|wkc_no_frame_count|publish_max_ns|publish_over_budget_count)": *[0-9]+' "$REPORT" | sort -u
-        fi
+        report_is_fresh && metric_grep
         cp /tmp/ab_master.log "$STORE" 2>/dev/null || true
         echo "--- 停机 AL 快照 ---"
         grep -E 'AL state=' "$STORE" | tail -8
@@ -222,7 +282,7 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
         # 会让 bash 报语法错，看着像脚本坏了。
         echo "（本臂无观测通道，跳过推进判定；看下面的停机 AL 快照）"
         echo "--- 指标 ---"
-        [ -f "$REPORT" ] && grep -oE '"(frame_interval_max_ns|frame_interval_gap_count|deadline_missed_count|wkc_mismatch_count|wkc_no_frame_count|publish_max_ns|publish_over_budget_count)": *[0-9]+' "$REPORT" | sort -u
+        report_is_fresh && metric_grep
         cp /tmp/ab_master.log "$STORE" 2>/dev/null || true
         echo "--- 停机 AL 快照 ---"
         grep -E 'AL state=' "$STORE" | tail -8
@@ -244,10 +304,10 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
     fi
 
     echo "--- 指标 ---"
-    if [ -f "$REPORT" ]; then
-        grep -oE '"(frame_interval_max_ns|frame_interval_gap_count|deadline_missed_count|wkc_mismatch_count|wkc_no_frame_count|publish_max_ns|publish_over_budget_count)": *[0-9]+' "$REPORT" | sort -u
+    if report_is_fresh; then
+        metric_grep
     else
-        echo "（无报告）"
+        echo "（本臂报告不可用，见上；不要用上面任何数字）"
     fi
     cp /tmp/ab_master.log "$STORE" 2>/dev/null || true
     echo "--- 停机 AL 快照 ---"
