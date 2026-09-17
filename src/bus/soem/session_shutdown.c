@@ -287,6 +287,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
         session->status_words[axis_index] = session->axes[axis_index].status_word;
         if (!emaster_cia402_controller_set_goal(&session->controllers[axis_index],
                                                 EMASTER_CIA402_GOAL_SAFE_STOP)) {
+            session->report->shutdown_stop_fault =
+                EMASTER_SHUTDOWN_STOP_FAULT_CONTROLLER_SETUP_FAILED;
             return false;
         }
     }
@@ -312,6 +314,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                 trace->aborted_before_exchange = true;
                 trace->aborted_axis = axis_index;
                 trace->aborted_stage = 0;
+                session->report->shutdown_stop_fault =
+                    EMASTER_SHUTDOWN_STOP_FAULT_ABORTED_BEFORE_EXCHANGE;
                 return false;
             }
             session->axes[axis_index].control_word =
@@ -325,6 +329,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                 trace->aborted_before_exchange = true;
                 trace->aborted_axis = axis_index;
                 trace->aborted_stage = 1;
+                session->report->shutdown_stop_fault =
+                    EMASTER_SHUTDOWN_STOP_FAULT_ABORTED_BEFORE_EXCHANGE;
                 return false;
             }
         }
@@ -405,6 +411,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
         /* 记账之后才判失败：本帧的去向、以及出错当拍的现场都已经记进报告。 */
         if (exchange_status != EMASTER_CONTROL_SESSION_OK) {
             shutdown_cycle_append(trace, &sample);
+            session->report->shutdown_stop_fault =
+                EMASTER_SHUTDOWN_STOP_FAULT_EXCHANGE_FAILED;
             return false;
         }
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
@@ -454,6 +462,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             return true;
         }
     }
+    /* 跑满 EC_TIMEOUTSTATE 仍没等到全部轴安全停止。交换本身没报错——要查的是驱动器。 */
+    session->report->shutdown_stop_fault = EMASTER_SHUTDOWN_STOP_FAULT_TIMEOUT_NO_SAFE_STATE;
     return false;
 }
 

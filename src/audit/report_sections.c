@@ -1022,6 +1022,8 @@ bool emaster_run_report_write(FILE *stream,
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
+        "\"safe_state_reached\":%s,\"shutdown_stop_fault\":%d,"
+        "\"sync0_disabled\":%s,"
         "\"restore_init_succeeded\":%s,"
         "\"shutdown_observer_join_ns\":%" PRIu64
         ",\"shutdown_prologue_gap_ns\":%" PRIu64 "},",
@@ -1048,6 +1050,7 @@ bool emaster_run_report_write(FILE *stream,
         report->motion_completed ? "true" : "false",
         report->safe_output_sent ? "true" : "false",
         report->safe_state_reached ? "true" : "false",
+        (int)report->shutdown_stop_fault,
         report->sync0_disabled ? "true" : "false",
         report->restore_init_succeeded ? "true" : "false",
         report->shutdown_observer_join_ns,

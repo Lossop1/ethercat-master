@@ -49,6 +49,28 @@ typedef enum
     EMASTER_CONTROL_SESSION_ALL_AXES_FAULTED
 } emaster_control_session_status_t;
 
+/*
+ * P9.3: 停机时"发出停用帧"这一步失败在哪。
+ *
+ * 此前出口只有 safe_state_reached 一个 bool，两种完全不同的失败混在一起：
+ * 「交换失败」（帧发出去没回来，或压根没发出去）与「驱动器始终没到安全停止态」
+ * （帧都正常，驱动器不配合）——前者要继续修通信，后者要查驱动器，处置相反。
+ * safe_output_sent 的口径修复（2026-09-15）已经分出"发了但未确认"与"根本没发"，
+ * 这里补的是另一个维度。
+ */
+typedef enum
+{
+    EMASTER_SHUTDOWN_STOP_FAULT_NONE = 0,
+    /* 进入停机循环前，控制器本地拒绝把目标切成 SAFE_STOP。 */
+    EMASTER_SHUTDOWN_STOP_FAULT_CONTROLLER_SETUP_FAILED,
+    /* 交换前就中止：控制器步进或过程映像更新失败，这一拍连帧都没发。 */
+    EMASTER_SHUTDOWN_STOP_FAULT_ABORTED_BEFORE_EXCHANGE,
+    /* 交换返回非 OK：帧的去向看 safe_output_sent，逐拍现场看 shutdown_cycles。 */
+    EMASTER_SHUTDOWN_STOP_FAULT_EXCHANGE_FAILED,
+    /* 循环跑满 EC_TIMEOUTSTATE 仍不见全部轴安全停止：通信本身没报错。 */
+    EMASTER_SHUTDOWN_STOP_FAULT_TIMEOUT_NO_SAFE_STATE
+} emaster_shutdown_stop_fault_t;
+
 /* 对外暴露稳定的产品生命周期，不要求调用者解析 SOEM 或 CiA 402 内部状态 */
 typedef enum
 {
@@ -679,6 +701,12 @@ typedef struct
     bool stop_requested;
     bool safe_output_sent;
     bool safe_state_reached;
+    /*
+     * P9.3: safe_state_reached 为假时，是失败在哪一步。为真时恒为 NONE。
+     * communication_usable 为假时 stop_process_data 根本不会被调用，此时也是 NONE
+     * ——那种情况的结论由 status/safe_output_sent 给出，不要从本字段读。
+     */
+    emaster_shutdown_stop_fault_t shutdown_stop_fault;
     bool sync0_disabled;
     bool restore_init_succeeded;
     bool diagnostic_preop_reached;
