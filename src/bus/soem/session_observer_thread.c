@@ -442,9 +442,15 @@ static void *observer_thread_func(void *arg)
     uint64_t iteration = 0U;
     emaster_observer_stop_trace_t *trace = &session->report->observer_stop;
 
-    fprintf(stderr, "[P4.3] SDO 观测线程已启动\n");
-    fprintf(stderr, "[P4.3] session=%p\n", (void*)session);
-    fprintf(stderr, "[P4.3] observer_running=%d\n", session->observer_running);
+    /*
+     * 常开路径只留一行。原先启动五行、每轴头三次读取的明细、每 20 轮一条的汇总
+     * 都直接写 stderr，一次 424 s 的运行光是这些就是 1.4 MB。明细挪到
+     * EMASTER_OBSERVER_VERBOSE 后面（默认关），要查通道通不通的时候再打开。
+     *
+     * 常开保留的只剩真正一次性的事件：本条启动、下面的 CiA402 错误码警告、
+     * 1C32/1C33 首次非零、退出。它们每次运行最多各出一次。
+     */
+    bool verbose = emaster_soem_env_flag_enabled("EMASTER_OBSERVER_VERBOSE");
 
     if (session->plan == NULL)
     {
@@ -452,7 +458,8 @@ static void *observer_thread_func(void *arg)
         return NULL;
     }
 
-    fprintf(stderr, "[P4.3] axis_count=%zu\n", session->plan->axis_count);
+    fprintf(stderr, "[P4.3] SDO 观测线程已启动：轴数=%zu 明细=%s\n",
+            session->plan->axis_count, verbose ? "on" : "off");
     fflush(stderr);
 
     /*
@@ -533,10 +540,9 @@ static void *observer_thread_func(void *arg)
                 telemetry_value[entry_index] = observer_decode_telemetry(buffer, entry->type);
             }
 
-            /* 前3次读取始终打印以验证通道工作。
-             * 计数用轮次而不是逐轴计数：一轴一轮只读一次，两者本是同一个数，而轮次
-             * 不需要每轴一份额外状态。 */
-            if (iteration < 3U)
+            /* 前 3 次读取的逐字段明细，只在 verbose 下打印。计数用轮次而不是逐轴计数：
+             * 一轴一轮只读一次，两者本是同一个数，而轮次不需要每轴一份额外状态。 */
+            if (verbose && iteration < 3U)
             {
                 fprintf(stderr, "[P4.3] 轴%zu 第%lu次读取:\n", axis,
                         (unsigned long)(iteration + 1U));
@@ -553,8 +559,10 @@ static void *observer_thread_func(void *arg)
             }
 
             /*
-             * 相位：解算并写样本。每 20 次读取有一次 stderr 日志落在这里，而 stderr
-             * 是无缓冲的——这一轮里最可能被 I/O 挡住的就是这一段。
+             * 相位：解算并写样本。原先每 20 次读取有一条 stderr 日志落在这里，而
+             * stderr 是无缓冲的——这一轮里最可能被 I/O 挡住的就是这一段（现在这类
+             * 日志只在 EMASTER_OBSERVER_VERBOSE 下才有，但保留这段说明：它解释了
+             * 为什么本线程私有的数据也不该在锁里写）。
              */
             observer_enter_phase(session, EMASTER_OBSERVER_PHASE_SAMPLE);
             /*
@@ -586,8 +594,8 @@ static void *observer_thread_func(void *arg)
                 slot->valid = axis_valid;
             }
 
-            /* 每20轮打印一次（约1秒间隔） */
-            if (iteration % 20U == 0U)
+            /* 每 20 轮一条的汇总（约 1 秒间隔），只在 verbose 下打印。 */
+            if (verbose && iteration % 20U == 0U)
             {
                 bool first_field = true;
 
