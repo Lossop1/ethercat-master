@@ -112,6 +112,52 @@ static emaster_control_session_status_t prepare_op_position(
     return EMASTER_CONTROL_SESSION_OK;
 }
 
+/*
+ * P8.4: 读回 ESC 的两个看门狗寄存器。
+ *
+ * 0x0400 ESC DL Control 与 0x0420 Watchdog Time PDI 决定驱动器什么时候判定
+ * "过程数据没按时到"——AL 0x001A 的门槛就是后者。全树（含 external/SOEM）此前
+ * 零引用，于是实际生效的一直是 ESC 的上电默认值，既不是主站选的，也从没核对过。
+ *
+ * 只在进 OP 后读一次，每轴两次 FPRD，不占周期预算（本函数跑在观测线程启动之前，
+ * 也没有邮箱往来）。读失败不算启动失败：这里的目的只是把值取回来给人核对，
+ * 不是一个判据，所以失败只把 esc_registers_read 置 false。
+ */
+static void read_esc_watchdog_registers(emaster_soem_session_t *session)
+{
+    size_t axis_index;
+
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+        emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
+        uint16_t configadr = session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)].configadr;
+        uint8_t raw[2];
+        bool ok = true;
+
+        /* 两个都是 16 位小端寄存器，读到之后按小端拼回原值。 */
+        if (ecx_FPRD(&session->context.port, configadr, 0x0400U, sizeof(raw), raw,
+                     EC_TIMEOUTRET) <= 0) {
+            ok = false;
+        } else {
+            axis_result->esc_dl_control =
+                (uint16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
+        }
+        if (ok) {
+            if (ecx_FPRD(&session->context.port, configadr, 0x0420U, sizeof(raw), raw,
+                         EC_TIMEOUTRET) <= 0) {
+                ok = false;
+            } else {
+                axis_result->esc_watchdog_pdi =
+                    (uint16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
+            }
+        }
+        axis_result->esc_registers_read = ok;
+        if (!ok) {
+            fprintf(stderr, "[P8.4] 轴 %zu 的 ESC 看门狗寄存器读取失败\n", axis_index);
+        }
+    }
+}
+
 emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session_t *session) {
     size_t axis_index;
     emaster_control_session_status_t status;
@@ -364,6 +410,11 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         status = EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
         return status;
     }
+    /*
+     * P8.4: 趁进入 OP、观测线程还没启动、总线最安静的时候把看门狗寄存器读回来。
+     * 放在这里而不是周期里：它是给人核对的静态配置，不是运行期变量。
+     */
+    read_esc_watchdog_registers(session);
     status = prepare_op_position(session);
     if (status != EMASTER_CONTROL_SESSION_OK)
     {

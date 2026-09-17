@@ -240,6 +240,18 @@ typedef struct
     uint8_t pdi_error_code;
     uint8_t lost_link_counter[4];
     /*
+     * P8.4: ESC 的两个看门狗寄存器，进 OP 后各读一次（原始值，不换算）。
+     *
+     * 0x0400 是 ESC DL Control，0x0420 是 Watchdog Time PDI —— 驱动器判"过程数据
+     * 没按时到"用的就是后者，AL 0x001A 的门槛由它决定。全树（含 external/SOEM）
+     * 此前零引用，也就是说实际生效的是**ESC 的上电默认值**，既不是主站选的，也从
+     * 没读回来核对过。单位与期望值要靠驱动器手册/ESI 比对，所以这里刻意只存原始值，
+     * 不在报告里做可能出错的换算。
+     */
+    bool esc_registers_read;
+    uint16_t esc_dl_control;
+    uint16_t esc_watchdog_pdi;
+    /*
      * P4.3 的 SDO 慢速通道暂存字段（sdo_*_read / sdo_*_200b** / sdo_read_count /
      * sdo_read_time_us）已删除。它们存在的唯一理由是"观测线程写、周期线程加锁抄一遍"，
      * 而那把锁正是实时路径上唯一一处无界等待。慢速量现在由观测线程发布到

@@ -496,6 +496,8 @@ static bool write_axis(FILE *stream,
         ",\"forwarded_rx_error_counter\":[%u,%u,%u,%u]"
         ",\"ecat_processing_unit_error_counter\":%u"
         ",\"pdi_error_counter\":%u,\"pdi_error_code\":%u"
+        ",\"esc_registers_read\":%s"
+        ",\"esc_dl_control\":%u,\"esc_watchdog_pdi\":%u"
         ",\"final_diagnostic_reads\":%zu,"
         "\"final_diagnostic_successes\":%zu}}",
         axis->safeop_mode_display_sdo_read ? "true" : "false",
@@ -561,6 +563,9 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->ecat_processing_unit_error_counter,
         (unsigned int)axis->pdi_error_counter,
         (unsigned int)axis->pdi_error_code,
+        axis->esc_registers_read ? "true" : "false",
+        (unsigned int)axis->esc_dl_control,
+        (unsigned int)axis->esc_watchdog_pdi,
         axis->final_diagnostic_read_count,
         axis->final_diagnostic_success_count) >= 0);
     return true;
@@ -1017,7 +1022,6 @@ bool emaster_run_report_write(FILE *stream,
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
-        "\"safe_state_reached\":%s,\"sync0_disabled\":%s,"
         "\"restore_init_succeeded\":%s,"
         "\"shutdown_observer_join_ns\":%" PRIu64
         ",\"shutdown_prologue_gap_ns\":%" PRIu64 "},",
