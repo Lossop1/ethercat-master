@@ -498,8 +498,8 @@ uprobe（`kprobe_events` 缺失、`uprobe_events` 可用）；`raw_syscalls` 的
 | P9.2 | 死函数 `emaster_soem_pop_error_safe` 接上取用点（周期每拍 + 停机收尾），错误进报告的 16 条定长环 + `soem_error_count`/`dropped_count`。**环里只有邮箱协议错误**（SDO/SoE abort、意外回帧、紧急报文），不含状态变化与超时。`assignment_failed` 仍就地排空，但那只发生在 PreOP 分配阶段（观测线程还没起），已在函数注释里写清（`754bc00`） |
 | P9.3 | 停机失败给原因码 `shutdown_stop_fault`：装配失败／交换前中止／交换失败／超时未到安全态。一次真机失败里读到 `EXCHANGE_FAILED`(`3`)，正常轮次为 `NONE`（`d0531ac`） |
 | P9.4 | 观测线程与命令服务器的常态日志退到开关后面（`EMASTER_OBSERVER_VERBOSE`/`EMASTER_CMD_SERVER_VERBOSE`），计数进报告：90 s 一轮日志 7 KB，此前 180 s 是 1.2 MB（`dce7f87`、`7f06c95`） |
-| P8.5 | **停机那一拍尾部停摆 4 ms 导致五轴掉出 OP**：根因是停机序言解封审计数组后，第一条记录在正好写满的 84.6 MB 块上触发 `realloc`（内核侧 `mremap` 实测 3.757 ms CPU）。修复即 P11.1。**五轴 180 s 实测**：停机入口五轴 AL 由 20/0x1A 变 **8/0**，停机那一拍帧距由 4025832 ns 变 **998826 ns**，记录里 `mremap` 由 1 次变 **0 次**。取证过程见 §2「P8.5 结案记录」（`19a838e`） |
-| P11.1 | **周期路径（含停机序言）里仍会发生分配**：审计数组改成"周期水线（`sealed_capacity`）+ 停机预留（`final_capacity` 硬上限）"两段，解封后的追加路径用尽时只计数（`omitted_final_samples`）不再分配，容量在预留那一刻锁死。离线回归 `tests/unit/audit/test_audit_capacity.c` 断言"总量用尽后 `access_capacity` 原地不动"，两个负对照分别红 9 项／2 项；台架判据同 P8.5。**本轮的坑**：预判漏了"还没预留过"的前提（`0 >= 0`），把会话建立阶段 255 条配置记录当成溢出丢掉，已修并留回归网（`19a838e`） |
+| P8.5 | **停机那一拍尾部停摆 4 ms 导致五轴掉出 OP**：根因是停机序言解封审计数组后，第一条记录在正好写满的 84.6 MB 块上触发 `realloc`（内核侧 `mremap` 实测 3.757 ms CPU）。修复即 P11.1。**五轴 180 s 实测**：停机入口五轴 AL 由 20/0x1A 变 **8/0**，停机那一拍帧距由 4025832 ns 变 **998826 ns**，记录里 `mremap` 由 1 次变 **0 次**。取证过程见 §2「P8.5 结案记录」（`e2f27fc`） |
+| P11.1 | **周期路径（含停机序言）里仍会发生分配**：审计数组改成"周期水线（`sealed_capacity`）+ 停机预留（`final_capacity` 硬上限）"两段，解封后的追加路径用尽时只计数（`omitted_final_samples`）不再分配，容量在预留那一刻锁死。离线回归 `tests/unit/audit/test_audit_capacity.c` 断言"总量用尽后 `access_capacity` 原地不动"，两个负对照分别红 9 项／2 项；台架判据同 P8.5。**本轮的坑**：预判漏了"还没预留过"的前提（`0 >= 0`），把会话建立阶段 255 条配置记录当成溢出丢掉，已修并留回归网（`e2f27fc`） |
 
 ---
 
