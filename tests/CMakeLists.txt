@@ -22,3 +22,9 @@ add_executable(test_window unit/cyclic/test_window.c)
 target_link_libraries(test_window PRIVATE emaster::cyclic)
 emaster_enable_strict_warnings(test_window)
 add_test(NAME cyclic_window COMMAND test_window)
+
+# 审计容量两段语义：解封之后容量用尽只能计数，不许再分配（P8.5 的修复点）。
+add_executable(test_audit_capacity unit/audit/test_audit_capacity.c)
+target_link_libraries(test_audit_capacity PRIVATE emaster::run_audit)
+emaster_enable_strict_warnings(test_audit_capacity)
+add_test(NAME audit_capacity COMMAND test_audit_capacity)

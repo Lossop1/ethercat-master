@@ -70,12 +70,25 @@ typedef struct
     bool capacity_sealed;
     bool allocation_failed;
     /*
-     * 封存那一刻的容量，只增不减。cycle 阶段的容量上限看它，不看 access_capacity——
-     * 停机诊断会解封并可能把数组再翻一倍，那时的 access_capacity 已不是周期阶段的上限。
+     * 封存那一刻的**周期阶段**容量水线，只增不减。cycle 阶段的追加上限看它，不看
+     * access_capacity——预留总量里留出的一部分是给停机诊断的，周期阶段不许吃掉它。
      */
     size_t sealed_capacity;
-    /* 周期记录容量耗尽后只计数，不分配内存，也不阻断控制；报告显式标注截断。 */
+    /*
+     * 预留额度用完那一刻定下的总容量，此后**任何路径都不得超过它**。
+     * 这是"周期路径里不再发生分配"的硬保证：解封之后（停机阶段）追加到 access_capacity
+     * 为止就不再扩数组，多出来的只计数。0 表示还没做过预留，此时按需倍增（只在会话
+     * 建立阶段的 SDO 配置记录里发生，那时还没有周期）——record_access / record_pdo 的
+     * "满了只计数"预判同样以它非 0 为前提，否则预留之前 `0 >= 0` 会把配置阶段的记录
+     * 全部当成溢出丢掉。
+     */
+    size_t final_capacity;
+    /* 周期段（sealed_capacity 这条水线）吃满后只计数，不分配内存，也不阻断控制；
+     * 报告与控制台都显式标注截断。周期阶段记的绝大多数是 PDO 字段样本，故沿用此名。 */
     uint64_t omitted_pdo_samples;
+    /* 解封之后连预留总量（final_capacity）也用尽时同样只计数。两笔分开记，才能从
+     * 报告里看出是"周期段被吃光"还是"停机预留也被吃光"。 */
+    uint64_t omitted_final_samples;
     /* 0 表示不设上限。由 apply_capacity_limit 写入，由 clamp_capacity 在封存前生效。 */
     size_t capacity_limit;
 } emaster_run_audit_t;
@@ -84,9 +97,19 @@ typedef struct
 void emaster_run_audit_init(emaster_run_audit_t *audit);
 void emaster_run_audit_destroy(emaster_run_audit_t *audit);
 
-/* 周期开始前预留容量并封存；封存后记录模块绝不在周期线程中重新分配内存。 */
+/*
+ * 周期开始前一次性预留容量。**只此一次**：预留之后 final_capacity 定死，记录模块
+ * 从此（含解封后的停机阶段）不再扩数组——周期路径里一次 realloc 就是几毫秒，
+ * 实测 84.6 MB 的块翻倍让内核花了 3.757 ms，正好落在周期尾部，五轴因此全掉出 OP。
+ */
 bool emaster_run_audit_reserve(emaster_run_audit_t *audit, size_t capacity);
-void emaster_run_audit_seal_capacity(emaster_run_audit_t *audit);
+/*
+ * 封存周期阶段的追加上限。cyclic_capacity 应等于"周期阶段算出来的容量"，小于预留
+ * 总量——差额留给停机诊断，周期阶段吃不到它。传大于 access_capacity 的值按
+ * access_capacity 处理（预留被上限压小时会走到这一支）。
+ * 传入 0 表示周期阶段一条都不许追加（仍只计数）。
+ */
+void emaster_run_audit_seal_cyclic(emaster_run_audit_t *audit, size_t cyclic_capacity);
 /*
  * 读 EMASTER_AUDIT_MAX_ACCESSES 并记下上限。**只记数，不预留、不封存**——封存是
  * emaster_session_observer_prepare_audit 的职责，它按运动时长算出容量后一次性 reserve
@@ -102,8 +125,10 @@ bool emaster_run_audit_apply_capacity_limit(emaster_run_audit_t *audit);
 size_t emaster_run_audit_clamp_capacity(const emaster_run_audit_t *audit, size_t capacity);
 /*
  * 仅在周期已停止后调用，允许后续 SDO 诊断继续保存完整记录。
- * 封存状态下不能走到停机诊断——那条路用的 record_access 没有封存守卫，会置
- * allocation_failed，而它被当作 AUDIT_FAILED 上报并让会话转 FAULTED。
+ * 封存状态下不能走到停机诊断——那条路会置 allocation_failed，而它被当作
+ * AUDIT_FAILED 上报并让会话转 FAULTED。
+ * 解封**只放开"能写到哪"，不放开"能长到哪"**：停机阶段最多用到预留总量
+ * （final_capacity），用尽后只计数。
  */
 void emaster_run_audit_end_cyclic(emaster_run_audit_t *audit);
 

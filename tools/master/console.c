@@ -198,6 +198,13 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
         fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_TRUNCATED),
                 (unsigned long long)report->audit.omitted_pdo_samples);
     }
+    /* 停机阶段的截断单独报：它意味着审计预留额度偏小，与周期阶段的截断不是一回事，
+     * 合并成一个数就看不出是哪一段被吃光了。 */
+    if (report->audit.omitted_final_samples > 0U) {
+        fprintf(stdout,
+                emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_FINAL_TRUNCATED),
+                (unsigned long long)report->audit.omitted_final_samples);
+    }
     if (report->status == EMASTER_CONTROL_SESSION_OK) {
         fputs(emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUCCESS), stdout);
     } else {

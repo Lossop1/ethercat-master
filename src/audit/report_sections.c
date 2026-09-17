@@ -1256,11 +1256,17 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(write_thread_schedstat(stream, report));
     REQUIRE_WRITE(fputs(",\"cycle_trace\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_trace(stream, &report->cycle_trace));
+    /* access_count 是"实际用掉多少条"，和两个容量放在一起才看得出预留是宽是紧。 */
     REQUIRE_WRITE(fprintf(stream,
-        ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64 ",\"cyclic_capacity\":%zu},"
+        ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64
+        ",\"omitted_final_samples\":%" PRIu64
+        ",\"access_count\":%zu,\"cyclic_capacity\":%zu,\"final_capacity\":%zu},"
         "\"diagnostic_preop_reached\":%s,",
         report->audit.omitted_pdo_samples,
+        report->audit.omitted_final_samples,
+        report->audit.access_count,
         report->audit.sealed_capacity,
+        report->audit.final_capacity,
         report->diagnostic_preop_reached ? "true" : "false") >= 0);
     REQUIRE_WRITE(fprintf(
         stream,

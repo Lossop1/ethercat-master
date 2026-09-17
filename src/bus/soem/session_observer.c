@@ -7,7 +7,13 @@ enum
 {
     /* 仅用于审计容量上界，不是 EtherCAT 或运动参数。 */
     EMASTER_AUDIT_EXCHANGE_MARGIN = 8,
-    EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS = 32
+    /*
+     * 每个轴留给"解封后的停机阶段"的条数。周期阶段用不到这块（水位封在它前面）。
+     * 取 128 而不是 32：一轮停机要记两次全轴 AL 读取 + 每轴若干条 SDO 诊断读写，
+     * 5 轴就是上百条；以前这块被周期阶段吃光，解封后第一条记录就触发扩容。
+     * 一轴 128 条 × 88 字节 ≈ 11 KB，代价可以忽略。
+     */
+    EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS = 128
 };
 
 /* 在设备声明里按语义查找一条遥测对象；设备没有声明就返回 NULL，调用者据此跳过。 */
@@ -254,6 +260,8 @@ bool emaster_session_observer_prepare_audit(
     uint64_t max_exchanges;
     size_t fields_per_exchange = 0U;
     size_t capacity;
+    size_t cyclic_capacity;
+    size_t final_margin;
     size_t axis_index;
 
     if (plan == NULL || runtime == NULL || audit == NULL || plan->cycle_ns == 0U)
@@ -297,23 +305,31 @@ bool emaster_session_observer_prepare_audit(
     {
         return false;
     }
-    capacity = (size_t)max_exchanges * fields_per_exchange;
+    /*
+     * 容量分两段算，一次预留：
+     *   cyclic_capacity —— 周期阶段能用到哪（含此前已经记下的启动/转换阶段记录）；
+     *   final_margin    —— 留给解封后的停机诊断，周期阶段吃不到它。
+     * 分开的理由是 P8.5：两者合起来算的话，周期阶段会把预留吃光，停机解封后第一条
+     * 记录就得扩容——实测 84.6 MB 的块翻倍让内核花 3.757 ms，正好落在周期尾部，
+     * 下一帧晚发 4 ms，五轴全掉出 OP。
+     */
+    cyclic_capacity = (size_t)max_exchanges * fields_per_exchange;
+    final_margin = plan->axis_count * EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS;
     if (plan->axis_count >
-            (SIZE_MAX - capacity) / EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS ||
-        audit->access_count >
-            SIZE_MAX - capacity -
-                plan->axis_count * EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS)
+            (SIZE_MAX - cyclic_capacity) / EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS ||
+        audit->access_count > SIZE_MAX - cyclic_capacity - final_margin)
     {
         return false;
     }
-    capacity += plan->axis_count * EMASTER_AUDIT_FINAL_ACCESS_MARGIN_PER_AXIS +
-                audit->access_count;
+    cyclic_capacity += audit->access_count;
+    capacity = cyclic_capacity + final_margin;
     /* 上限只压低这里算出来的容量，不改变"谁封存"——封存仍然只发生在下面这一处。 */
     capacity = emaster_run_audit_clamp_capacity(audit, capacity);
     if (!emaster_run_audit_reserve(audit, capacity))
     {
         return false;
     }
-    emaster_run_audit_seal_capacity(audit);
+    /* 水线同样受上限与预留实际容量约束（clamp 可能把总量压到水线以下）。 */
+    emaster_run_audit_seal_cyclic(audit, cyclic_capacity);
     return true;
 }
