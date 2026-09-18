@@ -20,8 +20,9 @@
 只有它要**顶替一个二进制**：台架脚本起主站前会查 `[ -x "$MASTER_BIN" ]`，不带这个位
 就直接"找不到主站可执行文件"——干跑连第一行都跑不到。
 
-要验"没建套接字时脚本会不会红"，在 MASTER_BIN 后面加 `--no-obs`。
-要验停机路径会不会等，加 `--hold`。
+要验"没建套接字时脚本会不会红"，加 `STUB_NO_OBS=1`（命令行 `--no-obs` 也行，
+但**台架脚本的 MASTER_BIN 只收一个可执行文件路径**，塞不进参数，干跑用环境变量那份）。
+要验停机路径会不会等，加 `STUB_HOLD=1`。
 
 **它不假装是个真主站**：命令套接字只回一句够台架脚本认人的 status，别的命令一概不答。
 所以干跑能证的是"开关递到了没有、套接字在不在、判定会不会红"，证不了任何控制行为。
@@ -38,8 +39,10 @@ DEPLOY = os.environ.get("DEPLOY", "orangepi-bench-quint-30deg")
 SOCK = f"/tmp/emaster-{DEPLOY}.sock"
 OBS_SOCK = f"/tmp/emaster-{DEPLOY}-obs.sock"
 
-FORCE_NO_OBS = "--no-obs" in sys.argv[1:]
-HOLD = "--hold" in sys.argv[1:]
+# 两个开关也能从环境变量给。命令行那份是给人直接跑的；环境变量那份是给**台架脚本**
+# 用的——它的 MASTER_BIN 只接受一个可执行文件路径（起主站前要查 [ -x ]），塞不进参数。
+FORCE_NO_OBS = "--no-obs" in sys.argv[1:] or os.environ.get("STUB_NO_OBS") == "1"
+HOLD = "--hold" in sys.argv[1:] or os.environ.get("STUB_HOLD") == "1"
 obs_switch = os.environ.get("EMASTER_OBSERVATION", "")
 
 

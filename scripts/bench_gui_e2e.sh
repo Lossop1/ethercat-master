@@ -257,7 +257,11 @@ start_master() {   # $1 = 要不要开观测（0/1）
     # 开关只对**起主站的这一条命令**有效，所以塞进 setsid 的那层 bash 里，不要 export
     # 到本脚本：solo 臂要的是"和加装观测之前逐字一致"的基线，多一个环境变量就不是了。
     local env_prefix=""
-    [ "$want_obs" = "1" ] && env_prefix="EMASTER_OBSERVATION=1 "
+    # **要经 `env`，不能写成 `exec VAR=值 主站`**：exec 后面不接受"赋值前缀"这种写法，
+    # 它会把 EMASTER_OBSERVATION=1 当成要执行的程序名，于是主站根本没起来，报的是
+    # "exec: EMASTER_OBSERVATION=1: 未找到"。2026-09-18 用假主站干跑时抓到的，
+    # 是这一轮新写进去的错。`VAR=值 命令` 那种写法只对普通的简单命令成立。
+    [ "$want_obs" = "1" ] && env_prefix="env EMASTER_OBSERVATION=1 "
     rm -f "$OBS_SOCK"
     setsid bash -c "echo \$\$ > /tmp/gui_e2e.pid; cd $REPO; exec ${env_prefix}$MASTER_BIN --deployment $DEPLOY" \
         > /tmp/gui_e2e_master.log 2>&1 &
@@ -363,12 +367,15 @@ arm() {
 
     local ST; ST=$(start_master "$NEED_OBS")
     say "主站 state=$ST（观测开关=$NEED_OBS）"
-    if [ "$NEED_OBS" = "1" ]; then
+    # 这一步要在观测那条**之前**：主站压根没起来的时候，说"没建观测套接字"是把人往
+    # 错的方向带（真原因是启动就失败了，原因就在下面 tail 的那几行里）。干跑时正是
+    # 这么演过一次：起主站的那行命令写错，而日志先喊的是"开关没生效"。
+    if [ "$NEED_OBS" = "1" ] && [ "$ST" = "4" ]; then
         if [ "$(cat /tmp/gui_e2e.obs 2>/dev/null)" = "1" ]; then
             say "观测套接字已在：$OBS_SOCK"
         else
             # 不在这里 return：控制侧（A/B 的两个计数、掉出 OP）照样是有效的证据，
-            # 丢掉它反而更亏。监空半边会在收尾的判定那一步判红。
+            # 丢掉它反而更亏。监控半边会在收尾的判定那一步判红。
             say "** 主站没建观测套接字 $OBS_SOCK —— EMASTER_OBSERVATION 没生效"
             say "** 这一臂的监控半边会是空的；往下照跑，但收尾判定会判红"
         fi
