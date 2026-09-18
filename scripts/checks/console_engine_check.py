@@ -9,16 +9,60 @@ refresh_status/refresh_topology 用的仍是控制台里那套真解析代码。
 改一次 `tools/emaster_console.py` 就跑一次，用法（在仓库根目录）：
 
     PYTHONIOENCODING=utf-8 python scripts/checks/console_engine_check.py --selftest
+    PYTHONIOENCODING=utf-8 python scripts/checks/console_engine_check.py --mutate-startup-window
+
+后者是启动窗口那条检查的对抗性对照：把 `factor_of` 的边界检查拿掉、退回
+`self.factor[index]`，那条检查**必须变红**。它验证的是检查本身有没有判别力——
+2026-09-18 那次面板一帧就死（`console.sh --start --obs`，主站没人看着跑到两根轴进故障）
+正是这个下标，检查要是抓不住它，跑绿了也不说明任何事。
 
 台架那一半（真主站 + 真电机）在 `scripts/bench_panel_drive.sh` 与
 `scripts/bench_panel_jog.sh`，转录用 `scripts/analysis/panel_transcript.py` 解析。
 """
+import importlib.util
 import os
 import pathlib
 import sys
+import tempfile
 import time
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+
+# 对照点：带边界检查的写法 → 去掉边界、退回裸下标。
+MUTATE_STARTUP_FROM = """        if index < 0 or index >= len(self.factor):
+            return None
+        return self.factor[index]
+"""
+MUTATE_STARTUP_TO = """        return self.factor[index]
+"""
+
+
+def install_mutated_console():
+    """把去掉边界的 `emaster_console.py` 装进 sys.modules，供启动窗口对照用。
+
+    只在临时目录里生成副本，仓库文件一个字节都不动。
+    """
+    source_path = ROOT / "tools" / "emaster_console.py"
+    source = source_path.read_text(encoding="utf-8")
+    if MUTATE_STARTUP_FROM not in source:
+        print("变异点找不到——factor_of 里那句边界检查的写法变了，这个对照得跟着改。",
+              file=sys.stderr)
+        return False
+    handle = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
+                                         encoding="utf-8")
+    with handle:
+        handle.write(source.replace(MUTATE_STARTUP_FROM, MUTATE_STARTUP_TO, 1))
+    spec = importlib.util.spec_from_file_location("emaster_console", handle.name)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["emaster_console"] = module
+    spec.loader.exec_module(module)
+    return True
+
+
+MUTATING = "--mutate-startup-window" in sys.argv
+if MUTATING and not install_mutated_console():
+    sys.exit(2)
 
 from emaster_console import ConsoleClient, Engine, selftest  # noqa: E402
 
@@ -128,6 +172,15 @@ class Args:
 
 
 def main():
+    if MUTATING:
+        # 对照模式：只跑启动窗口那一条，并且期望它**红**。
+        code = startup_window_check()
+        if code == 0:
+            print("\n对照失败：去掉边界后这条检查仍是绿的——它抓不住那次崩溃，等于摆设")
+            return 1
+        print("\n对照通过：旧写法（裸下标）下这条检查确实变红")
+        return 0
+
     args = Args(travel=1.0)
     created = []
 
@@ -171,7 +224,74 @@ def main():
         return 1
     if key_layer_check(engine, master) != 0:
         return 1
+    if startup_window_check() != 0:
+        return 1
     return mode_guard_check()
+
+
+def startup_window_check():
+    """主站"还没进 RUNNING"那段窗口里，面板一帧都不许崩。
+
+    现场（2026-09-18）：`console.sh --start --obs` 把主站拉起来，面板第一帧就
+    IndexError 退出——而主站已经起来了、没人看着它，一直跑到两根轴进故障。
+
+    机理是这个窗口里**两个列表不是一起到的**：`status` 已经能报回五根轴（填
+    `engine.axes`），而 `factor`（每轴 counts/度，要读 `topology` 才填）还是空的
+    ——attach() 里"主站还在启动"那一步排在读拓扑**之前**就 return 了。而画面上那条
+    "软范围余量"是无条件拿 factor 换算的，`self.factor[index]` 当场下标越界。它发生
+    在**每次重画**的路径上，所以不是偶发，是必崩。
+
+    这个窗口还有个后果值得记住：面板崩了以后主站不会跟着退出（它是独立进程组），
+    于是"主站开着、没人监控"这条纪律会被一个崩溃悄悄违反。
+    """
+    failures = []
+    client = FakeClient("/tmp/fake-emaster.sock")
+    client.master.state = 2               # 主站起来了，但还没进 RUNNING
+    engine = Engine(client, "fake-bench", 10.0, 45.0,
+                    repo_root=os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__))))
+    if engine.attach():                   # 应当失败：主站还在启动
+        print("前置条件不成立：这个窗口里 attach() 不该成功")
+        return 1
+    if not engine.axes or engine.factor:
+        print(f"前置条件不成立：axes={len(engine.axes)} 根、factor={len(engine.factor)} 个"
+              "——要复刻的是「有轴、没系数」")
+        return 1
+
+    # 崩溃点就在这些换算上；逐个调一遍，一个都不许抛。
+    calls = [("软范围余量", lambda: engine.range_headroom(0)),
+             ("软范围", lambda: engine.range_limits(0)),
+             ("角度换算", lambda: engine.counts_to_deg(0, 1234)),
+             ("角度→counts", lambda: engine.deg_to_counts(0, 30.0)),
+             ("单步上限", lambda: engine.step_limit_counts(0))]
+    for label, call in calls:
+        try:
+            call()
+        except Exception as exc:          # noqa: BLE001 —— 这里要的就是"什么都别抛"
+            failures.append(f"{label} 在启动窗口里抛了 {type(exc).__name__}: {exc}")
+
+    # 系数没到手时"余量"必须是"不知道"，不能编一个数出来（编出来会被当真的用）。
+    # 这里也要接住异常：上面那一轮已经记过一笔了，再让异常冲出检查就等于用一个
+    # 回溯代替结论——判别力还在，但读的人只看到退栈，看不出是哪一条不过。
+    try:
+        if engine.range_headroom(0) is not None:
+            failures.append("系数没到手时余量应当是不显示（None），不是编个数")
+    except Exception as exc:              # noqa: BLE001
+        failures.append(f"软范围余量取值时抛了 {type(exc).__name__}: {exc}")
+
+    # 越界轴号也得挡住：轴号来自按键，key 层和这里都可能先于拓扑拿到轴号。
+    for label, call in [("越界轴号的软范围", lambda: engine.range_limits(AXES + 3)),
+                        ("越界轴号的余量", lambda: engine.range_headroom(AXES + 3))]:
+        try:
+            call()
+        except Exception as exc:          # noqa: BLE001
+            failures.append(f"{label}抛了 {type(exc).__name__}: {exc}")
+
+    if failures:
+        print("\n启动窗口失败项：" + "，".join(failures))
+        return 1
+    print("启动窗口通过：主站还在启动时面板不崩，余量显示为未知")
+    return 0
 
 
 def mode_guard_check():

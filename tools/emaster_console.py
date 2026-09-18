@@ -400,10 +400,16 @@ class Engine:
         return self._axis_field(index, "planned", fallback_name="pos")
 
     def counts_to_deg(self, index, counts):
-        return counts / self.factor[index]
+        # 系数没到手时给 0：这个窗口里轴表那块根本不画（axis_count==0 走的是
+        # "还没接上主站"那一支），0 不会被谁当成真的角度；但换成 IndexError 就是面板
+        # 当场崩掉。取 0 而不是抛，是为了让"接不上的时候界面还在"。
+        factor = self.factor_of(index)
+        return 0.0 if factor is None else counts / factor
 
     def deg_to_counts(self, index, degrees):
-        return int(round(degrees * self.factor[index]))
+        factor = self.factor_of(index)
+        # 同上；这里取 0 是"不动"，方向是安全的。
+        return 0 if factor is None else int(round(degrees * factor))
 
     def deployment_label(self):
         if self.axis_count:
@@ -456,19 +462,44 @@ class Engine:
 
     # ---------- 运动 ----------
 
+    def factor_of(self, index):
+        """该轴的 counts/度；**拓扑还没读到**时返回 None。
+
+        这个 None 是必需的，不是洁癖：`axes`（状态查询带回来的）和 `factor`（读了
+        拓扑才填的）**不是一起到的**。面板刚把主站拉起来那几十秒，主站还没进 RUNNING，
+        状态查询已经能报回五根轴，而拓扑那一步（attach 里排在状态之后）还没走——于是
+        "有轴、没系数"。所有拿 factor 做换算的地方都必须走这里，别直接下标：
+        `self.factor[index]` 在这个窗口里就是 IndexError，而且它发生在**每次重画**
+        的那条路径上，一崩就是整个面板（2026-09-18 用 --start 起主站时踩到）。
+        """
+        if index < 0 or index >= len(self.factor):
+            return None
+        return self.factor[index]
+
     def step_limit_counts(self, index):
         """一拍允许的 counts 增量：点动速度与单步限幅取小，至少 1。"""
-        by_speed = self.jog_speed * self.factor[index] / CONTROL_RATE_HZ
+        factor = self.factor_of(index)
+        if factor is None:
+            return 1.0
+        by_speed = self.jog_speed * factor / CONTROL_RATE_HZ
         limit = by_speed
         if self.max_step > 0:
             limit = min(by_speed, self.max_step * MAX_STEP_MARGIN)
         return max(1.0, limit)
 
     def range_limits(self, index):
-        """软范围（counts）。range_deg<=0 时返回 None 表示不限制。"""
+        """软范围（counts）。range_deg<=0 或系数还没到手时返回 None 表示不限制。
+
+        返回 None 的两种情形后果不同：range_deg<=0 是用户自己关掉了范围；系数没到手
+        是"还接不上主站"——那会儿 attached 为假，一条目标也发不出去，所以让范围暂时
+        失效是安全的（真发目标的前提就是 attached，而它有系数）。
+        """
         if self.range_deg <= 0:
             return None
-        span = self.range_deg * self.factor[index]
+        factor = self.factor_of(index)
+        if factor is None or index >= len(self.origin):
+            return None
+        span = self.range_deg * factor
         return (self.origin[index] - span, self.origin[index] + span)
 
     def clamp_to_range(self, index, counts):

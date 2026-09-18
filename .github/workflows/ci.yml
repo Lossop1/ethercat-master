@@ -51,6 +51,16 @@ jobs:
       - name: 报告慢速遥测渲染（离线）
         run: python3 scripts/checks/report_telemetry_check.py
 
+      # 控制台引擎与按键层的离线回归，外加启动窗口那条检查的对抗性对照。
+      # 对照单独跑一次是有意的：它证明"主站还在启动"那段窗口的检查抓得住
+      # 裸下标（2026-09-18 面板一帧就死、主站没人看着跑到两根轴进故障那个）。
+      # 不带对照的话，这条检查哪天变成永远绿也没人知道。
+      - name: 控制台引擎回归（离线）
+        run: python3 scripts/checks/console_engine_check.py --selftest
+
+      - name: 启动窗口检查的判别力（离线，期望不通过）
+        run: python3 scripts/checks/console_engine_check.py --mutate-startup-window
+
       - name: 配置
         run: cmake --preset linux-debug
 
