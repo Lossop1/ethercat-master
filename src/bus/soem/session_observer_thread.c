@@ -49,6 +49,33 @@
  */
 #define OBSERVER_SYNC_PROBE_INTERVAL 50U
 
+/*
+ * P11.3: 观测线程的栈尺寸，必须显式指定，不能吃默认的 8 MB。
+ *
+ * 交接段把"建观测线程"切成单独一片塞进 OP 请求循环之后，该片实测 558/598/726/859 µs
+ * （四轮台架），单片跨过 1 ms 栅格点，开局那次截止期错失在第四轮复发。这笔开销不是
+ * pthread_create 本身——同口径的独立探针里，把它放在谁都不干的进程里量，中位数只有
+ * 5.6 µs——而是**首次 mmap 一块全新线程栈、再在 mlockall(MCL_FUTURE) 下把它锁住**。
+ * 观测线程每次会话只创建一次，所以永远吃不到 glibc 的栈缓存复用，每次都付全价。
+ *
+ * 探针实测（每个尺寸 8 个进程，每进程只创建一次线程，口径与主站逐字相同）：
+ *   默认 8 MB  258/625/690/698/709/731/763/871 µs
+ *   1 MB       219–278 µs
+ *   512 KB     139–171 µs
+ *   256 KB      99–127 µs
+ * 开销与栈尺寸成正比，且 8 MB 那一行正好落在台架实测的区间里——两处证据指向同一笔。
+ *
+ * 取 256 KB：交接片必须与同一拍的其它尾部开销共同装进一个周期（收包实测约 104 µs，
+ * 错误计数器 FPRD 最坏 563 µs），256 KB 的约 110 µs 留出足够余量，而按 1 MB 的约
+ * 250 µs 计最坏一档就要 919 µs，太贴边。
+ *
+ * 按溢出风险核对：本线程只跑邮箱 SDO 读，路径上最大的栈对象是 SOEM 的报文缓冲
+ * ec_mbxbuft（EC_MAXMBX = 1486 字节，外部依赖的编译期取值），现场上不超过几块；
+ * 函数自身的栈上数组按 OBSERVER_TELEMETRY_CACHE_MAX = 16 条给出，几 KB 量级。
+ * 256 KB 是该量级的近百倍。
+ */
+#define OBSERVER_THREAD_STACK_BYTES (256U * 1024U)
+
 /* 1C32（输出 SM）/1C33（输入 SM）的同步违例计数器子集，字段与 sm2/sm3_diagnostic 同义。 */
 typedef struct
 {
@@ -749,10 +776,34 @@ bool emaster_soem_session_start_observer(emaster_soem_session_t *session)
 
     session->observer_running = true;
 
-    if (pthread_create(&session->observer_thread, NULL, observer_thread_func, session) != 0)
+    /*
+     * 栈尺寸必须显式给，理由与实测见 OBSERVER_THREAD_STACK_BYTES 处的注释：默认
+     * 8 MB 在 mlockall(MCL_FUTURE) 下的首次锁页要 258–872 µs，而这一段正好在受
+     * 周期时钟管的交接片里，会把开局那一拍顶过栅格点。
+     *
+     * 属性初始化失败不中止：退回 NULL（默认属性）至少线程还能起来，代价只是那一片
+     * 恢复成几百微秒——比整个会话起不来轻。
+     */
     {
-        session->observer_running = false;
-        return false;
+        pthread_attr_t attr;
+        const bool attr_ready = pthread_attr_init(&attr) == 0;
+
+        if (attr_ready)
+        {
+            (void)pthread_attr_setstacksize(&attr, (size_t)OBSERVER_THREAD_STACK_BYTES);
+        }
+        const int create_rc = pthread_create(&session->observer_thread,
+                                            attr_ready ? &attr : NULL,
+                                            observer_thread_func, session);
+        if (attr_ready)
+        {
+            (void)pthread_attr_destroy(&attr);
+        }
+        if (create_rc != 0)
+        {
+            session->observer_running = false;
+            return false;
+        }
     }
 
     session->observer_thread_created = true;
