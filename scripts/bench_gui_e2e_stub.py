@@ -16,6 +16,10 @@
     export RPT_DIR=/tmp/gui_e2e_dryrun_reports EVIDENCE_DIR=/tmp/gui_e2e_dryrun_evidence
     bash scripts/bench_gui_e2e.sh
 
+这个文件在索引里带可执行位（100755），理由是全仓 Python 脚本都按 `python3 xxx.py` 调，
+只有它要**顶替一个二进制**：台架脚本起主站前会查 `[ -x "$MASTER_BIN" ]`，不带这个位
+就直接"找不到主站可执行文件"——干跑连第一行都跑不到。
+
 要验"没建套接字时脚本会不会红"，在 MASTER_BIN 后面加 `--no-obs`。
 要验停机路径会不会等，加 `--hold`。
 
