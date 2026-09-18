@@ -1,0 +1,13 @@
+QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+This plugin does not support propagateSizeHints()
+QObject::connect: Cannot queue arguments of type 'QTextCursor'
+(Make sure 'QTextCursor' is registered using qRegisterMetaType().)
+---- GUI 自检 ----
+界面：最小宽度 779 px，窗口 1180x866
+观测端点：tcp:127.0.0.1:5002
+命令端点：（未给，不会接管）
+接管中：否
+观测：一帧都没收到；界面这边最后一句是「观测：连不上 tcp:127.0.0.1:5002（TimeoutError: timed out）」
+曲线：没有控件（一帧都没收到，不知道有几根轴）
+轴表：没有快照（这次自检从头到尾没接管过）
+---- 自检结束 ----

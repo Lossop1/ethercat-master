@@ -99,6 +99,21 @@ def check_min_peak_has_teeth(context):
     want("31" in out, f"该把门槛说清楚：{out!r}")
 
 
+def check_reason_is_not_doubled(context):
+    """界面在零帧那行后面带的解释，要原样出现**一次**。
+
+    这行日志是干跑时从香橙派上抓下来的（界面真跑过、上游真连不上），所以它也顺便
+    是"界面在零帧时会说出为什么"这条的证据。第一版的判定器把这句解释又包了一层，
+    话说成了"一帧都没收到；界面这边最后一句是「；界面这边最后一句是「观测：连不上…」」"
+    ——啰嗦只是表象，真正的问题是这个位置会被人用来读原因。
+    """
+    code, out, err = run("--expect", "obs", fixture("bench_obs_with_reason.txt"))
+    want(code == 1, f"零帧该判红，实际 {code}；out={out!r}")
+    want(out.count("界面这边最后一句是") == 1,
+         f"解释被包了两层（该只出现一次）：{out!r}")
+    want("TimeoutError" in out, f"界面给的原因该原样带出来：{out!r}")
+
+
 def check_truncated_and_missing_block_are_unusable(context):
     """半段/没有自检块：退出码 2（日志不可用），**不是** 1（判据不成立）。
 
@@ -120,6 +135,7 @@ CHECKS = [
     ("健康版两条臂 → 绿", check_healthy_logs_are_green),
     ("只读臂接管了 → 红", check_readonly_arm_must_not_take_over),
     ("行程门槛有牙齿（抬到 31° → 红）", check_min_peak_has_teeth),
+    ("零帧的解释只出现一次（真·干跑日志）", check_reason_is_not_doubled),
     ("半段/没有自检块 → 不可用（2），不是不成立（1）", check_truncated_and_missing_block_are_unusable),
 ]
 

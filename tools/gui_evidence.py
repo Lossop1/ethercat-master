@@ -65,7 +65,7 @@ def parse(block):
         "received": None,       # 观测收到几帧
         "gaps": None,
         "resyncs": None,
-        "zero_frames_reason": None,
+        "zero_frames_reason": "",   # 零帧时界面给的解释（带自己的标点），空串表示没给
         "takeover": None,       # True/False/None
         "cmd_endpoint": None,
         "sent": None,           # 已发目标条数
@@ -82,10 +82,14 @@ def parse(block):
         out["gaps"] = int(match.group(2))
         out["resyncs"] = int(match.group(3))
     else:
+        # 那行可能是"观测：一帧都没收到"，也可能后头还跟着界面给的解释
+        # （"；界面这边最后一句是「…」"）。**解释原样留着，不再包一层**——
+        # 包过一层的写法在干跑里露过脸：话说成了
+        # 「一帧都没收到；界面这边最后一句是「；界面这边最后一句是「观测：连不上…」」」。
         match = re.search(r"观测：一帧都没收到(.*)", block)
         if match:
             out["received"] = 0
-            out["zero_frames_reason"] = match.group(1).strip() or None
+            out["zero_frames_reason"] = match.group(1).rstrip()
 
     match = re.search(r"接管中：(是|否)", block)
     if match:
@@ -136,10 +140,8 @@ def _frames_claim(facts, who):
     if received:
         return True, (f"{who}收到了观测帧（{received} 帧，跳号 {facts['gaps']} 处，"
                       f"重新对齐 {facts['resyncs']} 次）")
-    text = f"{who}一帧都没收到"
-    if facts["zero_frames_reason"]:
-        text += f"；界面这边最后一句是「{facts['zero_frames_reason']}」"
-    return False, text
+    # 解释本身带着它自己的标点（"；界面这边最后一句是…"），直接接上去。
+    return False, f"{who}一帧都没收到{facts['zero_frames_reason']}"
 
 
 def judge(expect, facts, min_peak_deg=DEFAULT_MIN_PEAK_DEG):
