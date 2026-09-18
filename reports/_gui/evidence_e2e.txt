@@ -1,0 +1,204 @@
+==== 界面端到端 + 不干扰 A/B  ====
+部署=orangepi-bench-quint-30deg  时长=60s  轮数=1  臂='solo bridge obs drive'
+主站=/home/orangepi/ethercat-master/build/tools/master/emaster-master（6281472e）
+证据写到 /home/orangepi/ethercat-master/reports/_gui/evidence_e2e.txt
+
+======== 第 1 / 1 轮 ========
+
+################ 臂 r1_solo  桥=0 界面=no  6281472e ################
+主站 state=4（观测开关=0）
+主站已有序退出
+--- 报告指标 ---
+"cycle_count":66825
+"deadline_missed_count":0
+"frame_interval_gap_count":0
+"frame_interval_max_ns":1113733
+"frame_timeout_us":250
+"over_budget_cycle_count":0
+"sync0_late_count":0
+"tail_max_receive_ns":268963
+"wkc_mismatch_count":1
+"wkc_no_frame_count":1
+--- 停机 AL 快照 ---
+[SHUTDOWN] 停机入口(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴5: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴1: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴2: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴5: AL state=8, status_code=0x0000
+总线状态：SAFE-OP=通过，OP=通过，全部运行使能到达=通过，运动开始=通过，运动完成=失败，WKC=期望 15/最后交换 15，周期
+
+################ 臂 r1_bridge  桥=1 界面=no  6281472e ################
+主站 state=4（观测开关=1）
+观测套接字已在：/tmp/emaster-orangepi-bench-quint-30deg-obs.sock
+桥已起（回环 5001/5002）
+主站已有序退出
+--- 报告指标 ---
+"cycle_count":66977
+"deadline_missed_count":0
+"frame_interval_gap_count":0
+"frame_interval_max_ns":1098743
+"frame_timeout_us":250
+"over_budget_cycle_count":0
+"sync0_late_count":0
+"tail_max_receive_ns":248684
+"wkc_mismatch_count":0
+"wkc_no_frame_count":0
+--- 停机 AL 快照 ---
+[SHUTDOWN] 停机入口(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴5: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴1: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴2: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴5: AL state=8, status_code=0x0000
+总线状态：SAFE-OP=通过，OP=通过，全部运行使能到达=通过，运动开始=通过，运动完成=失败，WKC=期望 15/最后交换 15，周期
+
+################ 臂 r1_obs  桥=1 界面=obs  6281472e ################
+主站 state=4（观测开关=1）
+观测套接字已在：/tmp/emaster-orangepi-bench-quint-30deg-obs.sock
+桥已起（回环 5001/5002）
+界面退出码=0（日志 /tmp/gui_e2e_gui_2_r1_obs.txt）
+--- 界面自检报告 ---
+---- GUI 自检 ----
+界面：最小宽度 779 px，窗口 1180x1083
+界面：曲线区已经拿到 210 px（至少要 210）
+观测端点：tcp:127.0.0.1:5002
+命令端点：（未给，不会接管）
+接管中：否
+观测：收到 60458 帧，跳号 0 处，估算丢失 0 帧，重新对齐 0 次
+观测：publish_index=66282 cycle=67515 wkc=15 帧距=1.000ms 帧级标志=—
+曲线：5 根轴，当前显示轴1，窗口 60 秒
+  轴1: 喂了 60458 帧，存成 1008 个桶（每桶 60.0 ms），跨度 60.42 秒，断开 0 处，时间倒序 0 帧
+  轴2: 没喂过帧（当前不是它）
+  轴3: 没喂过帧（当前不是它）
+  轴4: 没喂过帧（当前不是它）
+  轴5: 没喂过帧（当前不是它）
+轴表：没有快照（这次自检从头到尾没接管过）
+---- 自检结束 ----
+--- 这一臂的监控/控制判定 ---
+ok    只读臂收到了观测帧（60458 帧，跳号 0 处，重新对齐 0 次）
+ok    只读臂没有拿到命令端点（这才是它只读的原因）：（未给，不会接管）
+ok    收尾时仍未接管命令通道
+obs 臂：判据全部成立
+界面侧判定：通过（obs 臂的判据全部成立）
+主站已有序退出
+--- 报告指标 ---
+"cycle_count":67643
+"deadline_missed_count":0
+"frame_interval_gap_count":0
+"frame_interval_max_ns":1032334
+"frame_timeout_us":250
+"over_budget_cycle_count":0
+"sync0_late_count":24
+"sync0_late_count":25
+"tail_max_receive_ns":185456
+"wkc_mismatch_count":0
+"wkc_no_frame_count":0
+--- 停机 AL 快照 ---
+[SHUTDOWN] 停机入口(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴5: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴1: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴2: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴5: AL state=8, status_code=0x0000
+总线状态：SAFE-OP=通过，OP=通过，全部运行使能到达=通过，运动开始=通过，运动完成=失败，WKC=期望 15/最后交换 15，周期
+
+################ 臂 r1_drive  桥=1 界面=drive  6281472e ################
+主站 state=4（观测开关=1）
+观测套接字已在：/tmp/emaster-orangepi-bench-quint-30deg-obs.sock
+桥已起（回环 5001/5002）
+界面退出码=0（日志 /tmp/gui_e2e_gui_3_r1_drive.txt）
+--- 界面自检报告 ---
+---- GUI 自检 ----
+界面：最小宽度 779 px，窗口 1180x1083
+界面：曲线区已经拿到 210 px（至少要 210）
+观测端点：tcp:127.0.0.1:5002
+命令端点：tcp:127.0.0.1:5001
+接管中：否
+观测：收到 60186 帧，跳号 0 处，估算丢失 0 帧，重新对齐 0 次
+观测：publish_index=66001 cycle=67275 wkc=15 帧距=1.000ms 帧级标志=—
+曲线：5 根轴，当前显示轴1，窗口 60 秒
+  轴1: 喂了 60186 帧，存成 1004 个桶（每桶 60.0 ms），跨度 60.18 秒，断开 0 处，时间倒序 0 帧
+  轴2: 没喂过帧（当前不是它）
+  轴3: 没喂过帧（当前不是它）
+  轴4: 没喂过帧（当前不是它）
+  轴5: 没喂过帧（当前不是它）
+轴表：快照来自已释放的那次会话
+主站：state=4 (运行中) 已发 2604 条目标，相邻目标最大增量 1270 counts
+  轴1: 实际=+0.134° 已提交=+0.000° 本地目标=+0.000° 曾到过=+30.190° 状态字=0x1237 错误码=0x0000 就绪
+  轴2: 实际=-0.023° 已提交=+0.000° 本地目标=+0.000° 曾到过=+30.249° 状态字=0x1237 错误码=0x0000 就绪
+  轴3: 实际=+0.277° 已提交=+0.000° 本地目标=+0.000° 曾到过=+30.253° 状态字=0x1237 错误码=0x0000 就绪
+  轴4: 实际=-0.046° 已提交=+0.000° 本地目标=+0.000° 曾到过=+30.191° 状态字=0x1237 错误码=0x0000 就绪
+  轴5: 实际=+0.016° 已提交=+0.000° 本地目标=+0.000° 曾到过=+30.132° 状态字=0x1237 错误码=0x0000 就绪
+---- 自检结束 ----
+--- 这一臂的监控/控制判定 ---
+ok    接管臂收到了观测帧（60186 帧，跳号 0 处，重新对齐 0 次）
+ok    接管臂拿到了命令端点（接管的前提）：tcp:127.0.0.1:5001
+ok    轴表有快照（否则这一臂没发过目标）
+ok    每根轴都真的走到过 20° 以上（最低的一根曾到过 +30.132°，共 5 轴）
+ok    各轴错误码都是 0x0000
+drive 臂：判据全部成立
+界面侧判定：通过（drive 臂的判据全部成立）
+主站已有序退出
+--- 报告指标 ---
+"cycle_count":67399
+"deadline_missed_count":0
+"frame_interval_gap_count":0
+"frame_interval_max_ns":1065325
+"frame_timeout_us":250
+"over_budget_cycle_count":0
+"sync0_late_count":64
+"sync0_late_count":65
+"sync0_late_count":66
+"tail_max_receive_ns":227064
+"wkc_mismatch_count":0
+"wkc_no_frame_count":0
+--- 停机 AL 快照 ---
+[SHUTDOWN] 停机入口(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 停机入口(序言内) 轴5: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴1: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴2: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴3: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴4: AL state=8, status_code=0x0000
+[SHUTDOWN] 安全停机前(序言内) 轴5: AL state=8, status_code=0x0000
+总线状态：SAFE-OP=通过，OP=通过，全部运行使能到达=通过，运动开始=通过，运动完成=失败，WKC=期望 15/最后交换 15，周期
+
+################ 汇总（A/B）################
+==== 界面端到端 + 不干扰 A/B 汇总 ====
+部署=orangepi-bench-quint-30deg 时长=60s 轮数=1 臂='solo bridge obs drive'
+主站 md5=6281472e  时间=2026-09-18T17:30:03+08:00
+
+对比项（越小越好）：deadline_missed_count / frame_interval_gap_count / frame_interval_max_ns
+判据：界面臂**不劣于同轮 solo 基线**。基线自己有多少错是台架当时的状况。
+
+--- 第 1 轮（基线 gui_e2e_report_1_r1_solo.json）---
+臂              截止期错失 整帧缺失 帧距最大ns
+solo(基线)              0          0      1113733
+bridge                    0          0      1098743
+obs                       0          0      1032334
+drive                     0          0      1065325
+结论：都不劣于基线——但比过的 6 项基线全是 0，
+      0 和 0 之间没有分辨率，这只说明「没看出差别」，不是「没有代价」。
+
+--- 没证到的 ---
+1. **基线为 0 时 A/B 没有分辨率。** deadline_missed_count 如果 solo 就是 0，
+   界面臂也是 0，这只说明「没看出差别」，不说明「没有代价」。要看出代价得跑
+   更久（ROUNDS/DUR 调大），或者去找一个基线本来就有错的负载条件。
+2. **曲线的形状对不对**：本脚本只证界面连上了、收到了帧、自己没掉帧。
+   像素画得对不对只能靠人眼看（曲线模块的检查里也是这么写的）。
+3. **跨机器那条路（Windows 界面 + 局域网桥）本脚本不走**：自动取证走回环，
+   跨机器要显式 --bind 管理口 IP，是手动验证那条路。
+4. **界面被杀死的处置**：本脚本用 timeout 兜底，没验过主站在界面卡死时
+   是什么表现（命令口的 5 秒空闲超时应该会收掉连接，但没实测）。
+5. **solo 基线的观测是关着的**（要能和加装观测之前逐字对照）。所以
+   「不劣于基线」这句话里头含着观测发布本身的代价，没有把它单独摘出来量。
+   要摘出来得再加一个「solo + 观测」的臂——本脚本没有这个臂。
+6. **判定器认的是界面报告的措辞**（tools/gui_evidence.py）。界面改了那几行字，
+   它就判不了——那时会走「判不了」（退出码 2）而不是安静判过，但两边要一起改。
