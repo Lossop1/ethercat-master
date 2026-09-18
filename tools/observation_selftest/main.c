@@ -982,6 +982,8 @@ static void fill_slow(emaster_observation_slow_state_t *state, uint64_t round)
         emaster_observation_slow_axis_t *axis = &state->axes[axis_index];
 
         axis->valid = true;
+        /* 读到的时刻同样是轮次的函数：它要真的被搬过去，不能只是躺在结构体里。 */
+        axis->last_read_ns = round * UINT64_C(50000000) + axis_index;
         axis->actual_current = (int32_t)(round * UINT64_C(11) + axis_index);
         axis->dc_link_voltage = (int32_t)(UINT64_C(48000) + round);
         axis->mosfet_temperature = (int32_t)(UINT64_C(3000) + round + axis_index);
@@ -1008,7 +1010,8 @@ static bool slow_matches(const emaster_observation_slow_state_t *state)
         const emaster_observation_slow_axis_t *actual = &state->axes[axis_index];
         const emaster_observation_slow_axis_t *want = &expected.axes[axis_index];
 
-        if (actual->valid != want->valid || actual->actual_current != want->actual_current ||
+        if (actual->valid != want->valid || actual->last_read_ns != want->last_read_ns ||
+            actual->actual_current != want->actual_current ||
             actual->dc_link_voltage != want->dc_link_voltage ||
             actual->mosfet_temperature != want->mosfet_temperature ||
             actual->motor_temperature != want->motor_temperature ||

@@ -28,3 +28,11 @@ add_executable(test_audit_capacity unit/audit/test_audit_capacity.c)
 target_link_libraries(test_audit_capacity PRIVATE emaster::run_audit)
 emaster_enable_strict_warnings(test_audit_capacity)
 add_test(NAME audit_capacity COMMAND test_audit_capacity)
+
+# 慢速遥测"读到过没有、多久以前读到的"：报告里那几个 0 该印成读数还是印「—」全靠
+# 这一条判定，而判错了不会有任何报错，只会安静地把"没读到"写成温度 0（P11.8）。
+# 只依赖 slow.c（纯 libc），所以开发机上也能建、能跑。
+add_executable(test_slow_age unit/observation/test_slow_age.c)
+target_link_libraries(test_slow_age PRIVATE emaster::observation_slow)
+emaster_enable_strict_warnings(test_slow_age)
+add_test(NAME slow_age COMMAND test_slow_age)

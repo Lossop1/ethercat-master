@@ -67,6 +67,36 @@ def main():
     for item in re.findall(rb'"timing":\{[^}]*\}', data):
         print("  " + item.decode("utf-8", "replace"))
 
+    # 慢速遥测（温度/母线电压/电流）是 50 ms 一轮的 SDO 轮询，停机信号会截断最后一轮。
+    # 报告里那几个 0 因此有两种来历：真读到 0，或者压根没读到（P11.8）。这两者在数字上
+    # 分不开，只有 slow_telemetry_read 分得开——所以这一节只认那个标志，认不到就印「—」。
+    # 读到过的还要给出读数年龄：温度是慢变量，180 ms 前的读数与 3 s 前的读数可信度不同。
+    print("\n== 慢速遥测（「—」= 这一轴整场都没读到过，不是 0）==")
+    for index, block in enumerate(re.findall(rb'"runtime":\{[^}]*\}', data)):
+
+        def raw(key, default=None):
+            hit = re.search(rb'"%s":(-?\d+)' % key, block)
+            return int(hit.group(1)) if hit else default
+
+        def flag(key):
+            hit = re.search(rb'"%s":(true|false)' % key, block)
+            return hit is not None and hit.group(1) == b"true"
+
+        def scaled(key, divisor, unit, digits):
+            value = raw(key)
+            return "—" if value is None else f"{value / divisor:.{digits}f}{unit}"
+
+        if not flag(b"slow_telemetry_read"):
+            print(f"  轴{index + 1} mosfet=— motor=— 母线=— 电流=—"
+                  f"   （没读到）")
+            continue
+        print(f"  轴{index + 1} mosfet={scaled(b'mosfet_temperature', 10.0, '°C', 1)}"
+              f" motor={scaled(b'motor_temperature', 10.0, '°C', 1)}"
+              f" 母线={scaled(b'dc_link_voltage', 1000.0, 'V', 1)}"
+              f" 电流={scaled(b'actual_current', 1000.0, 'A', 3)}"
+              f"   读到，读数年龄 {raw(b'slow_telemetry_age_ns', 0) / 1e6:.1f} ms"
+              f"（0 点 = 报告回填）")
+
 
 if __name__ == "__main__":
     main()

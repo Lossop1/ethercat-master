@@ -124,3 +124,28 @@ bool emaster_observation_slow_read(const emaster_observation_slow_t *snapshot,
 
     return false;
 }
+
+bool emaster_observation_slow_axis_age(const emaster_observation_slow_state_t *state,
+                                       uint32_t axis_index, uint64_t now_ns,
+                                       uint64_t *out_age_ns)
+{
+    uint64_t last_read_ns;
+
+    if (state == NULL || axis_index >= state->axis_count ||
+        axis_index >= (uint32_t)EMASTER_OBSERVATION_MAX_AXES)
+    {
+        return false;
+    }
+    last_read_ns = state->axes[axis_index].last_read_ns;
+    if (last_read_ns == UINT64_C(0))
+    {
+        /* 0 不是"很久以前"，是"从来没有"——快照在观测线程启动前归零，而系统时钟
+         * 的单调时基不可能恰好是 0。 */
+        return false;
+    }
+    if (out_age_ns != NULL)
+    {
+        *out_age_ns = now_ns > last_read_ns ? now_ns - last_read_ns : UINT64_C(0);
+    }
+    return true;
+}

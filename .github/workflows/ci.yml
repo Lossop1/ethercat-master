@@ -41,6 +41,16 @@ jobs:
       - name: 绑核缓存（离线）
         run: python3 scripts/checks/rt_affinity_check.py
 
+      # 又是两条"写歪了不会喊"的检查。控制台的观测开关默认必须是关的：默认成开会
+      # 让每个手动拉起的主站白付每拍一次的组帧代价，而屏幕上什么都不说。报告里
+      # 慢速遥测那几个 0 更阴——"没读到"印成 0.0°C 长得就像"这一路很凉"，而它本来
+      # 该印成「—」（P11.8）。
+      - name: 控制台观测开关（离线）
+        run: bash scripts/checks/console_obs_switch_check.sh
+
+      - name: 报告慢速遥测渲染（离线）
+        run: python3 scripts/checks/report_telemetry_check.py
+
       - name: 配置
         run: cmake --preset linux-debug
 

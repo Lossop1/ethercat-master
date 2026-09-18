@@ -619,6 +619,17 @@ static void *observer_thread_func(void *arg)
             if (slot != NULL)
             {
                 slot->valid = axis_valid;
+                /*
+                 * 读到的时刻只在真读到时打，而且**跨轮保留**（slow_state 只在启动时
+                 * 归零一次）：它回答的是"最后一次读到这一轴是什么时候"，与 valid 回答
+                 * 的"本轮读没读到"是两件事。停机信号截断的是最后一轮，而报告要的恰恰
+                 * 是前者——没有它，报告只能拿 valid 当"有没有值"用，于是"上一轮读到的
+                 * 42.0 °C"被印成 0（P11.8）。
+                 */
+                if (axis_valid)
+                {
+                    slot->last_read_ns = observer_now_ns();
+                }
             }
 
             /* 每 20 轮一条的汇总（约 1 秒间隔），只在 verbose 下打印。 */

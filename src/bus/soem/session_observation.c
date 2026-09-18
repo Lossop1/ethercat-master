@@ -241,15 +241,25 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
      * 是刚 join 完的单线程——读不到意味着观测线程一次都没发布过（例如设备配置里
      * 没有遥测清单）。那时 session->axes[] 里的字段本来就是 0，保持不变即可，
      * 用零去覆盖只会把"从来没读过"和"读到的是零"混成一件事。
+     *
+     * 这一条早退也是 slow_telemetry_read 恒 false 的那条路径：标志与值一起不动，
+     * 于是报告里那几个 0 旁边写着"没读到"，与"读到 0"仍然分得开。
      */
     if (!emaster_observation_slow_read(&session->observation_slow, &state))
     {
         return;
     }
 
+    /*
+     * 时间坐标只取一次：这一轮回填里所有轴的年龄都以它为准，逐轴各取一次只会把
+     * 几微秒的取样顺序差混进年龄里。
+     */
+    const uint64_t now_ns = observation_monotonic_ns();
+
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
         emaster_control_session_axis_result_t *axis;
+        uint64_t age_ns = 0U;
 
         if (axis_index >= (size_t)EMASTER_OBSERVATION_MAX_AXES ||
             axis_index >= (size_t)state.axis_count)
@@ -260,9 +270,19 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
              */
             break;
         }
-        if (state.axes[axis_index].valid)
+        axis = &session->axes[axis_index];
+        /*
+         * 判据是"读到过没有"，不是"最后一轮读到没有"。停机信号落在一轮中途时，
+         * 最后一轮可能只读到前几轴就被截断，而值从上一轮起就留在快照里——拿 valid
+         * 当判据会把那几个轴印成 0，那是把"没读到"伪装成"读到 0"（P11.8）。
+         * 换判据之后，读到的轴带上"多久以前读到的"；从没读到过的轴不给值，也不给
+         * 年龄，由 slow_telemetry_read 标志说明这几列的 0 不是读数。
+         */
+        axis->slow_telemetry_read =
+            emaster_observation_slow_axis_age(&state, (uint32_t)axis_index, now_ns, &age_ns);
+        axis->slow_telemetry_age_ns = age_ns;
+        if (axis->slow_telemetry_read)
         {
-            axis = &session->axes[axis_index];
             axis->actual_current = (int16_t)state.axes[axis_index].actual_current;
             axis->dc_link_voltage = (uint32_t)state.axes[axis_index].dc_link_voltage;
             axis->mosfet_temperature = (int16_t)state.axes[axis_index].mosfet_temperature;

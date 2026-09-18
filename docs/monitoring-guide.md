@@ -244,12 +244,44 @@
         "position_loop_kd": 0,
         "current_loop_kp": 0,
         "current_loop_ki": 0,
-        "current_loop_kd": 0
+        "current_loop_kd": 0,
+        "slow_telemetry_read": true,
+        "slow_telemetry_age_ns": 182000000
       }
     }
   ]
 }
 ```
+
+#### 2.1 慢速遥测这几个 0 要先看标志（P11.8）
+
+`actual_current` / `dc_link_voltage` / `mosfet_temperature` / `motor_temperature` 这四个走的是
+**约 50 ms 一轮的 SDO 轮询**（不是过程数据）。停机信号是在一轮中途落下的，那一轮会被截断
+——**你拿到的那份报告里，最后一轮很可能只读到一半**。
+
+于是那几个数字里的 0 有两种来历，而它们**在数字上分不开**：
+
+- **真读到 0**（例如停机后电流确实是 0）；
+- **这一轮没读到**，数字是上一次读到的值在快照里留着，或者从头到尾就没读到过。
+
+分得开的只有同一节的这两个字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `slow_telemetry_read` | **这一轴整场读到过没有**。`false` ⇒ 上面那几个数字一个都不是读数，别拿它们下结论 |
+| `slow_telemetry_age_ns` | 最后一次读到这一轴距**报告回填**的时长（ns）。温度是慢变量，180 ms 前和 3 s 前的可信度不同 |
+
+**读法**：`slow_telemetry_read` 为 `false` 时，把这四个量当作**没有数据**（
+`scripts/analysis/extract_report.py` 就印成「—」）；为 `true` 时，数字可用，但要连着
+`slow_telemetry_age_ns` 一起看。
+
+**这里曾经骗过人**：轴 5 整轴印 0 被读成"电机很凉"，而它上一次读到的其实是 42.0 °C
+（离危险量级差得远，但盘面完全不同）——见 `layering-plan.md` 的 P11.4 / P11.8。
+
+> 想拿到**可信**的温度，只有三条路：会话运行期读（目前只有实时终端输出那一路）、
+> 报告里的标志 + 年龄、或者给慢速遥测做一条实时通路（未做，见 P12.4）。
+> **在停机时刻补读一轮是不可行的**：一轮 36 次邮箱往返约 72–122 ms，而停机序言的预算
+> 只有 50 拍 = 50 ms（P11.9）。
 
 ### 3. Python 分析示例
 
@@ -263,10 +295,16 @@ with open('runtime/reports/orangepi-dual-bench-latest.json') as f:
 for i, axis in enumerate(report['axes']):
     rt = axis['runtime']
     print(f"轴 {i}:")
-    print(f"  电流: {rt['actual_current']} mA")
-    print(f"  电压: {rt['dc_link_voltage']/1000:.1f} V")
-    print(f"  MOSFET: {rt['mosfet_temperature']/10:.1f} °C")
-    print(f"  电机: {rt['motor_temperature']/10:.1f} °C")
+    # 慢速遥测先看标志：read 为 false 时这四个量是"没读到"，不是 0（见 2.1）
+    if rt.get('slow_telemetry_read'):
+        age_ms = rt['slow_telemetry_age_ns'] / 1e6
+        print(f"  电流: {rt['actual_current']} mA")
+        print(f"  电压: {rt['dc_link_voltage']/1000:.1f} V")
+        print(f"  MOSFET: {rt['mosfet_temperature']/10:.1f} °C")
+        print(f"  电机: {rt['motor_temperature']/10:.1f} °C")
+        print(f"  （以上读数年龄 {age_ms:.1f} ms）")
+    else:
+        print("  温度/电压/电流: 整场没读到，不可用")
     print(f"  速度: {rt['actual_velocity']} rpm")
     
     if rt['gain_parameters_read']:
@@ -346,6 +384,8 @@ for i, axis in enumerate(report['axes']):
 | dc_link_voltage | 6079h | uint32 | mV | SDO |
 | mosfet_temperature | 200Bh:01h | int16 | 0.1°C | SDO |
 | motor_temperature | 200Bh:02h | int16 | 0.1°C | SDO |
+| slow_telemetry_read | —（主站侧标志） | bool | — | 报告 |
+| slow_telemetry_age_ns | —（主站侧计时） | uint64 | ns | 报告 |
 | actual_velocity (SDO) | 200Bh:08h | int32 | rpm | SDO |
 | target_velocity (SDO) | 200Bh:09h | int32 | rpm | SDO |
 | velocity_loop_kp | 2008h:01h | uint16 | 0.01 | SDO (SAFE-OP) |

@@ -30,6 +30,18 @@ typedef struct
 {
     /* 本轮该轴有没有真正读到。false 时其余字段保持上一轮的值，不得当作新数据。 */
     bool     valid;
+    /*
+     * 最后一次读到这一轴的时刻（CLOCK_MONOTONIC，纳秒），0 = 从没读到过。
+     *
+     * 与 valid 分开，因为两者回答的不是同一个问题，而报告要的是这一个：
+     *   valid        —— "这一轴在最后一轮里读到没有"（当轮的性质）
+     *   last_read_ns —— "最后一次读到是什么时候"（跨轮保留的性质）
+     *
+     * 停机信号落在一轮中途时，被截断的永远是最后一轮，而值本身留在快照里
+     * （写样本只在校验成功时改字段）。拿 valid 当"有没有值"用，就会把"上一轮
+     * 读到的 42.0 °C"印成 0——"没读到"与"读到 0"从此不可区分（P11.8）。
+     */
+    uint64_t last_read_ns;
     int32_t  actual_current;
     int32_t  dc_link_voltage;
     int32_t  mosfet_temperature;
@@ -79,5 +91,18 @@ void emaster_observation_slow_publish(emaster_observation_slow_t *snapshot,
  */
 bool emaster_observation_slow_read(const emaster_observation_slow_t *snapshot,
                                    emaster_observation_slow_state_t *out);
+
+/*
+ * 取这一轴读数的"年龄"：读到过就返回 true 并写 *out_age_ns = now_ns - last_read_ns，
+ * 从没读到过（或轴号越界）就返回 false 且**不写** *out_age_ns。
+ *
+ * 这是"报告里该印读数还是印「—」"的唯一判据，抽成纯函数是为了它能离线被测：
+ * 值该不该显示、显示出来是多久以前的，与总线、线程、时钟都无关。
+ * now_ns 与 last_read_ns 必须同源（CLOCK_MONOTONIC）；now 比 last_read 小
+ * （时钟异常）时年龄取 0，不返回负数。
+ */
+bool emaster_observation_slow_axis_age(const emaster_observation_slow_state_t *state,
+                                       uint32_t axis_index, uint64_t now_ns,
+                                       uint64_t *out_age_ns);
 
 #endif /* EMASTER_OBSERVATION_SLOW_H */

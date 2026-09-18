@@ -193,6 +193,18 @@ typedef struct
     uint32_t dc_link_voltage;
     int16_t mosfet_temperature;  /* 0.1°C, from 200Bh:01h */
     int16_t motor_temperature;   /* 0.1°C, from 200Bh:02h */
+    /*
+     * 上面那一行慢速量（电流/母线电压/两个温度）是不是**真读到的**。
+     *
+     * 慢速遥测是观测线程 50ms 一轮的 SDO 轮询，报告在停机后才回填，而停机信号会
+     * 截断最后一轮——被截断的永远是轴表末尾连续几根。判据用的是"读到过没有"加
+     * "多久以前读到的"，所以：
+     *   false —— 这一轴整场都没读到过，上面那几个 0 不是读数（渲染时该印「—」）。
+     *   true  —— 是真读数；age_ns 是它距报告回填的时长，判断可信度看这一个。
+     * 拿 age_ns 当摆设会重新踩回 P11.8：把"没读到"印成 0，与"读到 0"分不开。
+     */
+    bool slow_telemetry_read;
+    uint64_t slow_telemetry_age_ns;
     /* 增益参数 (2008h) - 从 SAFE-OP 阶段读取 */
     bool gain_parameters_read;
     uint16_t velocity_loop_kp;   /* 2008h:01h, 0.01 unit */

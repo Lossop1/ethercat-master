@@ -493,6 +493,8 @@ static bool write_axis(FILE *stream,
         ",\"actual_torque\":%d,\"target_torque\":%d"
         ",\"actual_current\":%d,\"dc_link_voltage\":%" PRIu32
         ",\"mosfet_temperature\":%d,\"motor_temperature\":%d"
+        /* 这几个慢速量读没读到、多久以前读到的：没有它，下面的 0 与"没读到"长得一样。 */
+        ",\"slow_telemetry_read\":%s,\"slow_telemetry_age_ns\":%" PRIu64
         ",\"gain_parameters_read\":%s"
         ",\"velocity_loop_kp\":%u,\"velocity_loop_ki\":%u,\"velocity_loop_kd\":%u"
         ",\"position_loop_kp\":%u,\"position_loop_ki\":%u,\"position_loop_kd\":%u"
@@ -543,6 +545,8 @@ static bool write_axis(FILE *stream,
         axis->dc_link_voltage,
         (int)axis->mosfet_temperature,
         (int)axis->motor_temperature,
+        axis->slow_telemetry_read ? "true" : "false",
+        axis->slow_telemetry_age_ns,
         axis->gain_parameters_read ? "true" : "false",
         (unsigned int)axis->velocity_loop_kp,
         (unsigned int)axis->velocity_loop_ki,
