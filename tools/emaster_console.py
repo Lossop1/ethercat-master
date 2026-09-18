@@ -148,8 +148,11 @@ class ConsoleClient(EtherCATClient):
     调用期间的 stdout 收进缓冲区，抽出最后一行留给面板显示。
     """
 
-    def __init__(self, sock_path, timeout_s=1.0):
-        super().__init__(sock_path)
+    def __init__(self, endpoint, timeout_s=1.0):
+        # 参数名是 endpoint 不是 sock_path：这一层已经能接 unix 路径、unix:/path 和
+        # tcp:host:port 三种写法（见 tools/emaster_endpoint.py）。名字叫成路径会让人
+        # 以为跨机器这条路在这里断了。
+        super().__init__(endpoint)
         self.timeout_s = timeout_s
         self.last_problem = None
         self.last_response = None   # 最后一条原始回应，诊断用
@@ -604,6 +607,27 @@ class Engine:
             self.message = "已急停（halt 1），目标冻结；按 r 恢复"
         else:
             self.message = f"急停命令没有回音：{response}"
+
+    def quick_stop_all(self):
+        """CiA402 快停（控制字 bit2）+ 冻结目标。
+
+        与 halt_all 的区别是**在谁那儿生效**：halt 只是主站控制字的 bit8，主站那道
+        安全门的事；quick_stop 是发给驱动器的 CiA402 动作，驱动器自己按 0x605A 定义
+        的方式减速。所以它比 halt 更"底层"，也更要紧——降速期间轴是真在动的。
+
+        快停之后驱动器一般停在 Switch On Disabled，恢复要用 fault_reset 重新使能
+        （resume_all 里就带这一步）。这里照样把 desired 冻结到 commanded：不冻的话，
+        快停刚结束、控制拍就会把刚才那批目标重发一遍，轴又走了。
+        """
+        response = self.client.command("quick_stop")
+        for index in range(self.axis_count):
+            self.desired[index] = self.commanded[index]
+        self.ticks_left = 0
+        self.halted = True
+        if response and response.startswith("OK"):
+            self.message = "已发快停（quick_stop），目标冻结；恢复用「复位」"
+        else:
+            self.message = f"快停命令没有回音：{response}"
 
     def resume_all(self):
         """复位：先解除 halt，再发一次 fault_reset。"""

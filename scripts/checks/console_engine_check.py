@@ -372,6 +372,18 @@ def key_layer_check(engine, master):
     panel.handle_key("q")
     check("急停冻结目标", engine.desired[2] == engine.commanded[2] and engine.halted)
 
+    # 快停是 Engine 上给图形界面用的第二个急停入口（TUI 的 q 走 halt）。两条都
+    # 得冻结目标：不冻的话，快停刚结束、下一个控制拍就把刚才那批目标重发一遍。
+    engine.halted = False
+    engine.desired[1] = engine.commanded[1] + 3000
+    engine.quick_stop_all()
+    check("快停也冻结目标",
+          engine.desired[1] == engine.commanded[1] and engine.halted
+          and engine.ticks_left == 0,
+          f"desired={engine.desired[1]} commanded={engine.commanded[1]} "
+          f"ticks_left={engine.ticks_left}")
+    engine.halted = False
+
     if failures:
         print("\n按键层失败项：" + "，".join(failures))
         return 1

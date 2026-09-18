@@ -10,12 +10,16 @@
    东西"，`--stall` 就是那条臂：连上、发一次 DUMP、然后永远不读。
 
 用法：
-    python3 observation_client.py INFO
+    python3 observation_client.py INFO --deployment orangepi-bench-quint-30deg
     python3 observation_client.py HEAD
     python3 observation_client.py LATEST
     python3 observation_client.py DUMP --from 0 --count 64
     python3 observation_client.py WATCH --hz 50 --seconds 5
     python3 observation_client.py --stall
+
+跨机器时主站在另一台设备上，套接字路径到不了这边，要走 tools/socket_bridge.py：
+    python3 observation_client.py LATEST --tcp 192.168.124.81:5001
+端口指的是**命令口**，观测口由它加一推出。
 """
 
 import argparse
@@ -23,6 +27,8 @@ import socket
 import struct
 import sys
 import time
+
+import emaster_endpoint
 
 # 与 include/emaster/observation/wire.h 一一对应。改动那里必须同步改这里，
 # 而版本号是唯一的护栏：主站若升了版本，下面的 _decode_header 会直接拒绝而不是
@@ -244,16 +250,16 @@ def describe(frame, index=None):
             f"wkc={frame['wkc']} flags=0x{frame['flags']:08x} {axes}")
 
 
-def connect(path, timeout):
+def connect(identifier, timeout):
     """连上并设置读超时。
 
     超时不是可有可无的礼貌：这个客户端由脚本调用，卡住与"还在跑"在外部看来
     完全一样，而脚本会一直等下去。给对方一个上界，失败就明确失败。
+
+    `identifier` 是端点写法（/path、unix:/path 或 tcp:host:port），地址族由
+    emaster_endpoint 决定——跨机器时这里是 TCP，本机时是那条 AF_UNIX 路径。
     """
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    sock.connect(path)
-    return sock
+    return emaster_endpoint.Endpoint.parse(identifier).connect(timeout)
 
 
 def main():
@@ -261,7 +267,13 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("verb", nargs="?", default="INFO",
                         choices=["INFO", "HEAD", "LATEST", "DUMP", "WATCH"])
-    parser.add_argument("--socket", required=True, help="观测套接字路径")
+    parser.add_argument("--socket", "--obs-socket", dest="obs_endpoint", default=None,
+                        help="观测通道端点：/path、unix:/path 或 tcp:host:port")
+    parser.add_argument("--tcp", default=None, metavar="HOST:PORT",
+                        help="跨机器。端口指的是**命令口**（桥的 --port），观测口由它加一"
+                             "推出，与其它工具同一条规则；HOST 可省（写 :5001）")
+    parser.add_argument("--deployment", default=None,
+                        help="部署 ID，据此推出同机的两个套接字路径")
     parser.add_argument("--from", dest="start", type=int, default=0)
     parser.add_argument("--count", type=int, default=16)
     parser.add_argument("--hz", type=float, default=50.0, help="WATCH 的拉取频率")
@@ -273,7 +285,9 @@ def main():
                              "N 够大时能把套接字缓冲写满，把服务端的背压路径逼出来")
     args = parser.parse_args()
 
-    sock = connect(args.socket, args.timeout)
+    # 本工具只要观测通道，所以命令端点缺失不算错。
+    endpoints = emaster_endpoint.resolve_endpoints(args, parser, need=("observation",))
+    sock = connect(endpoints["observation"], args.timeout)
 
     if args.stall:
         # 故意不回读。一条满窗口 DUMP 约 39 KB，而 AF_UNIX 缓冲通常有 200 KB 以上——

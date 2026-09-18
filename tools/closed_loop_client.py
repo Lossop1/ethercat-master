@@ -57,6 +57,8 @@ import socket
 import sys
 import time
 
+import emaster_endpoint
+
 # 与 include/emaster/bus/command_socket_path.h 的 EMASTER_DEPLOYMENT_ENV 同名同义。
 DEPLOYMENT_ENV = "EMASTER_DEPLOYMENT"
 
@@ -108,11 +110,9 @@ def scaled(summary, divisor, digits):
     return out
 
 
-def connect(path, timeout):
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    sock.connect(path)
-    return sock
+def connect(identifier, timeout):
+    """连上一条通道。`identifier` 是端点写法，地址族由 emaster_endpoint 决定。"""
+    return emaster_endpoint.Endpoint.parse(identifier).connect(timeout)
 
 
 class LineReader:
@@ -203,16 +203,9 @@ def read_latest(obs, reader):
     return frame, axes, received_ns, False
 
 
-def deployment_sockets(deployment_id):
-    """按主站的命名规则由部署 ID 推出命令与观测两个路径。
-
-    格式串与 include/emaster/bus/command_socket_path.h 是同一套：命令
-    /tmp/emaster-<id>.sock，观测 /tmp/emaster-<id>-obs.sock。两处各写一份是
-    有意的——它们分属 C 与 Python 两个构建，共享不了那个头文件；但规则是同一
-    条，改命名时两处一起改。
-    """
-    return (f"/tmp/emaster-{deployment_id}.sock",
-            f"/tmp/emaster-{deployment_id}-obs.sock")
+# 路径构造只有一份，在 emaster_endpoint 里。这里是转发，不保留第二份实现——
+# 此前这个形状的函数在几个工具里各写了一份，改命名时要靠人去记。
+deployment_sockets = emaster_endpoint.deployment_sockets
 
 
 def resolve_sockets(args, parser):

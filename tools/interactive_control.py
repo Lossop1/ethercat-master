@@ -30,6 +30,8 @@ import socket
 import sys
 import time
 
+import emaster_endpoint
+
 # 发送频率。需远高于主站的 200ms 外部目标看门狗（main.c）。
 DEFAULT_RATE_HZ = 50.0
 
@@ -44,8 +46,13 @@ IDLE_RECONNECT_S = 4.0
 
 
 class EtherCATClient:
-    def __init__(self, sock_path):
-        self.sock_path = sock_path
+    def __init__(self, endpoint):
+        # 接一条 unix 路径（此前所有调用点都这么传）、unix:/path 或 tcp:host:port。
+        # 加端点这一层是为了跨机器：本机与主站不同机时走 tcp，其余一行不用改。
+        self.endpoint = emaster_endpoint.Endpoint.parse(endpoint)
+        # sock_path 这个名字保留：面板显示与 MasterProcess 的存在性检查都用它，
+        # unix 端点下它就是那条路径，与加这一层之前完全一样。
+        self.sock_path = self.endpoint.display
         self.sock = None
         self.buffer = b""
         self.last_io = 0.0
@@ -62,15 +69,14 @@ class EtherCATClient:
     # ---------- 连接管理 ----------
 
     def connect(self):
+        """地址族、超时、路径都由端点决定，这里不再自己挑。"""
         self.disconnect()
         try:
-            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self.sock.settimeout(5.0)
-            self.sock.connect(self.sock_path)
+            self.sock = self.endpoint.connect(5.0)
             self.buffer = b""
             self.last_io = time.time()
             return True
-        except OSError as exc:
+        except (OSError, emaster_endpoint.EndpointError) as exc:
             print(f"连接失败: {exc}")
             self.sock = None
             return False
