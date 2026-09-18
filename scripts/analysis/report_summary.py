@@ -47,6 +47,12 @@ def summarize(path):
     print("frame_interval_max=%s ns @%s（停机序言 %s ns）"
           % (delivery.get("frame_interval_max_ns"), delivery.get("frame_interval_max_exchange"),
              result.get("shutdown_prologue_gap_ns")))
+    print("交接段：sliced=%s 交换 %s 拍 单片上限 %s ns（看门狗 %s / 起点 %s / 线程 %s）"
+          % (delivery.get("handover_sliced"), delivery.get("handover_exchanges"),
+             delivery.get("handover_max_slice_ns"),
+             delivery.get("handover_watchdog_read_max_ns"),
+             delivery.get("handover_position_prepare_ns"),
+             delivery.get("handover_observer_start_ns")))
 
     for index, axis in enumerate(axes):
         mismatch = axis.get("first_mismatch") or {}

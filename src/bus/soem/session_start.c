@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static bool any_slave_state_error(const ecx_contextt *context) {
     int slave;
@@ -18,6 +19,16 @@ static bool any_slave_state_error(const ecx_contextt *context) {
     }
     return false;
 }
+
+/*
+ * P11.3: 交接段读 ESC 看门狗寄存器时，同一个轴最多试几次。
+ *
+ * 每次的额度是从周期预算里除出来的每轴额度（五轴 1 ms 时约 150 µs），而健康的
+ * FPRD 实测在 85–150 µs 之间——一次不成功是常态。三次的上限是"再读不到就别读了"：
+ * 最坏多花 轴数 × 3 个周期（五轴 15 ms），相对整个启动流程可以忽略，而读不到
+ * 只是一份供人核对的静态配置缺失，不该拖住后面的交接。
+ */
+#define EMASTER_HANDOVER_WATCHDOG_ATTEMPTS 3U
 
 /*
  * 从站确认进入 OP 后，使用最后一次 OP 过程数据建立保持目标和相对运动起点
@@ -119,43 +130,68 @@ static emaster_control_session_status_t prepare_op_position(
  * "过程数据没按时到"——AL 0x001A 的门槛就是后者。全树（含 external/SOEM）此前
  * 零引用，于是实际生效的一直是 ESC 的上电默认值，既不是主站选的，也从没核对过。
  *
- * 只在进 OP 后读一次，每轴两次 FPRD，不占周期预算（本函数跑在观测线程启动之前，
- * 也没有邮箱往来）。读失败不算启动失败：这里的目的只是把值取回来给人核对，
- * 不是一个判据，所以失败只把 esc_registers_read 置 false。
+ * P11.3: 原先这里一次把所有轴读完，每轴两次 FPRD 各带 EC_TIMEOUTRET（2000 µs）。
+ * 那一段排在 OP 请求循环之外，期间一帧过程数据都不发，实测让周期线程连续占核
+ * 852 µs——足以越过一个周期边界，被周期时钟判成截止超时。现在改成一次只读一个轴，
+ * 由调用方塞进 OP 请求循环：每轮照常交换一帧，之后只做这一个动作。
+ *
+ * 超时改用与周期内诊断读同一份的每轴额度（emaster_soem_session_fprd_budget_us），
+ * 不再用 EC_TIMEOUTRET：后者是"总线整体失败"的判据，而这里要守的是周期预算——
+ * 十个 2 ms 的超时叠起来是 20 ms，那是二十个周期。额度为 0 表示这台配置读不起，
+ * 本轴直接记失败。
+ *
+ * 读失败不算启动失败：这里的目的只是把值取回来给人核对，不是一个判据，所以失败
+ * 只把 esc_registers_read 置 false 并返回 false，由调用方决定要不要再来一次。
+ * 返回值就是"这个轴读全了没有"，调用方据此重试——额度只有 150 µs 上下，而健康
+ * 的 FPRD 实测在 85–150 µs 之间，一次不成功是常态而不是异常。
  */
-static void read_esc_watchdog_registers(emaster_soem_session_t *session)
+static bool read_esc_watchdog_register_step(emaster_soem_session_t *session,
+                                            size_t axis_index, int timeout_us)
 {
-    size_t axis_index;
+    emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
+    uint16_t configadr = session->context.slavelist[
+        emaster_soem_session_axis_slave(session, axis_index)].configadr;
+    uint8_t raw[2];
+    bool ok = true;
 
-    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-        emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
-        uint16_t configadr = session->context.slavelist[
-            emaster_soem_session_axis_slave(session, axis_index)].configadr;
-        uint8_t raw[2];
-        bool ok = true;
-
-        /* 两个都是 16 位小端寄存器，读到之后按小端拼回原值。 */
-        if (ecx_FPRD(&session->context.port, configadr, 0x0400U, sizeof(raw), raw,
-                     EC_TIMEOUTRET) <= 0) {
+    /* 两个都是 16 位小端寄存器，读到之后按小端拼回原值。 */
+    if (timeout_us <= 0 ||
+        ecx_FPRD(&session->context.port, configadr, 0x0400U, sizeof(raw), raw,
+                 timeout_us) <= 0) {
+        ok = false;
+    } else {
+        axis_result->esc_dl_control =
+            (uint16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
+    }
+    if (ok) {
+        if (ecx_FPRD(&session->context.port, configadr, 0x0420U, sizeof(raw), raw,
+                     timeout_us) <= 0) {
             ok = false;
         } else {
-            axis_result->esc_dl_control =
+            axis_result->esc_watchdog_pdi =
                 (uint16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
         }
-        if (ok) {
-            if (ecx_FPRD(&session->context.port, configadr, 0x0420U, sizeof(raw), raw,
-                         EC_TIMEOUTRET) <= 0) {
-                ok = false;
-            } else {
-                axis_result->esc_watchdog_pdi =
-                    (uint16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
-            }
-        }
-        axis_result->esc_registers_read = ok;
-        if (!ok) {
-            fprintf(stderr, "[P8.4] 轴 %zu 的 ESC 看门狗寄存器读取失败\n", axis_index);
-        }
     }
+    axis_result->esc_registers_read = ok;
+    if (!ok) {
+        fprintf(stderr, "[P8.4] 轴 %zu 的 ESC 看门狗寄存器读取失败\n", axis_index);
+    }
+    return ok;
+}
+
+/* 交接段的分片计时：两个单调时钟读数相减。失败返回 0，调用者保留原值。 */
+static uint64_t handover_slice_elapsed_ns(const struct timespec *start)
+{
+    struct timespec end;
+
+    if (start == NULL || clock_gettime(CLOCK_MONOTONIC, &end) != 0 ||
+        end.tv_sec < start->tv_sec ||
+        (end.tv_sec == start->tv_sec && end.tv_nsec < start->tv_nsec))
+    {
+        return 0U;
+    }
+    return (uint64_t)(end.tv_sec - start->tv_sec) * UINT64_C(1000000000) +
+           (uint64_t)(end.tv_nsec - start->tv_nsec);
 }
 
 emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session_t *session) {
@@ -388,50 +424,166 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         status = EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
         return status;
     }
-    for (uint64_t transition_cycle = 0U; transition_cycle < session->op_transition_cycles;
-         ++transition_cycle) {
-        int bus_state;
+    /*
+     * P11.3：进 OP 之后还有三件事要办——读回 ESC 看门狗寄存器（P8.4）、用 OP 首个
+     * 有效反馈建立保持目标（prepare_op_position）、启动 SDO 观测线程（P4.3）。
+     *
+     * 这三件事原先整块排在 OP 请求循环之后。那一段期间一帧过程数据都不发，实测让
+     * 周期线程连续占核 852 µs：它越过一个周期边界，被周期时钟判成截止超时，再由
+     * recover 把下一拍钉回节拍网格，代价是赔掉接近一整个周期。结果是每次成功会话
+     * 恰好一次截止期错失、落点固定在周期循环的第一拍、那一拍帧距正好两个节拍点。
+     *
+     * 改法是把这三件事切碎塞进 OP 请求循环本身：每轮照常交换一帧（也就照常发一帧），
+     * 之后最多做一个总线上可见的动作。分工是
+     *   看门狗读   每轮一个轴（两次 FPRD），轴数决定要几轮；
+     *   起点       纯计算，不走总线，一轮；
+     *   观测线程   一轮。
+     * 进 OP 之前的那些轮什么都不做，交换与状态读与改动前逐字一致。
+     *
+     * 顺序与改动前相同：看门狗 → 起点 → 置状态 → 起线程。置状态放在起点之后，
+     * 是因为客户端一看到 OPERATIONAL 就可能开始发目标，而目标要靠起点才算得出来。
+     */
+    {
+        size_t watchdog_axis = 0U;
+        unsigned watchdog_attempt = 0U;
+        /* 没有轴时这一片无事可做，直接算完成，免得去索引不存在的轴。 */
+        bool watchdog_done = session->plan->axis_count == 0U;
+        bool position_done = false;
+        bool observer_done = false;
+        bool handover_done = false;
 
-        status = emaster_soem_session_exchange(session, EMASTER_AUDIT_PHASE_OPERATION_REQUEST);
-        if (status != EMASTER_CONTROL_SESSION_OK) {
-            return status;
-        }
-        bus_state = ecx_readstate(&session->context);
-        if (bus_state == EC_STATE_OPERATIONAL && !any_slave_state_error(&session->context)) {
+        for (uint64_t transition_cycle = 0U; transition_cycle < session->op_transition_cycles;
+             ++transition_cycle) {
+            int bus_state;
+            struct timespec slice_start;
+            bool slice_start_valid;
+
+            status = emaster_soem_session_exchange(session, EMASTER_AUDIT_PHASE_OPERATION_REQUEST);
+            if (status != EMASTER_CONTROL_SESSION_OK) {
+                return status;
+            }
+            bus_state = ecx_readstate(&session->context);
+            if (any_slave_state_error(&session->context)) {
+                /*
+                 * 进 OP 之前出错与改动前一致：不再继续。进 OP 之后出错是交接期间
+                 * 从站掉出，同样不该接着往下走——那两件事由下面的 handover_done
+                 * 判断收口。
+                 */
+                break;
+            }
+            if (bus_state != EC_STATE_OPERATIONAL) {
+                /*
+                 * 已经到过 OP 又掉回去：交接期间从站退出。不在这里 break 就会白
+                 * 转掉剩下的几千轮（每轮 1 ms）才失败，而终局是同一个——下面的
+                 * handover_done 判断会把会话判成没起来。
+                 */
+                if (session->report->op_reached) {
+                    break;
+                }
+                continue;
+            }
             session->report->op_reached = true;
-            break;
-        }
-        if (any_slave_state_error(&session->context)) {
-            break;
-        }
-    }
-    if (!session->report->op_reached) {
-        ecx_readstate(&session->context);
-        status = EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
-        return status;
-    }
-    /*
-     * P8.4: 趁进入 OP、观测线程还没启动、总线最安静的时候把看门狗寄存器读回来。
-     * 放在这里而不是周期里：它是给人核对的静态配置，不是运行期变量。
-     */
-    read_esc_watchdog_registers(session);
-    status = prepare_op_position(session);
-    if (status != EMASTER_CONTROL_SESSION_OK)
-    {
-        return status;
-    }
-    emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_OPERATIONAL,
-                                   EMASTER_CONTROL_SESSION_OK);
-    /*
-     * 进入 OP 后必须持续发送周期过程数据。同步 SDO 会占用多个周期，可能使
-     * DC-Sync0 从站判定 SM2 输出事件丢失；模式显示直接使用已映射的 TxPDO，
-     * 完整 SDO 诊断放在安全停机之后执行。
-     */
+            slice_start_valid = clock_gettime(CLOCK_MONOTONIC, &slice_start) == 0;
+            ++session->report->handover_exchanges;
 
-    /* P4.3: 启动 SDO 慢速观测线程 */
-    if (!emaster_soem_session_start_observer(session))
-    {
-        fprintf(stderr, "[P4.3] 警告：SDO 观测线程启动失败\n");
+            if (!watchdog_done) {
+                /*
+                 * 额度取自本次交换刚写进报告的收包超时，与周期内诊断读同一口径
+                 * ——那条口径已经证明过"一个轴多花这么多，尾部仍 ≤ 一个周期"。
+                 * 一次只读一个轴：两个 FPRD 的额度加起来正好是每轴额度。
+                 *
+                 * 读不成就在下一轮重试同一个轴。额度是"周期还养得起多少"，不是
+                 * "FPRD 实际上要多久"：健康值实测 85–150 µs，与额度同量级，一次
+                 * 读不成是常态。重试把"额度紧"从丢数据变成多花几个周期，而多花
+                 * 几个周期在这里没有代价——本来就在等进 OP。
+                 */
+                if (read_esc_watchdog_register_step(
+                        session, watchdog_axis,
+                        (int)emaster_soem_session_fprd_budget_us(
+                            session, (int)session->report->frame_timeout_us)) ||
+                    ++watchdog_attempt >= EMASTER_HANDOVER_WATCHDOG_ATTEMPTS) {
+                    ++watchdog_axis;
+                    watchdog_attempt = 0U;
+                    if (watchdog_axis >= session->plan->axis_count) {
+                        watchdog_done = true;
+                    }
+                }
+                if (slice_start_valid) {
+                    uint64_t elapsed_ns = handover_slice_elapsed_ns(&slice_start);
+
+                    if (elapsed_ns > session->report->handover_watchdog_read_max_ns) {
+                        session->report->handover_watchdog_read_max_ns = elapsed_ns;
+                    }
+                    if (elapsed_ns > session->report->handover_max_slice_ns) {
+                        session->report->handover_max_slice_ns = elapsed_ns;
+                    }
+                }
+                continue;
+            }
+            if (!position_done) {
+                status = prepare_op_position(session);
+                if (status != EMASTER_CONTROL_SESSION_OK) {
+                    return status;
+                }
+                position_done = true;
+                if (slice_start_valid) {
+                    session->report->handover_position_prepare_ns =
+                        handover_slice_elapsed_ns(&slice_start);
+                    if (session->report->handover_position_prepare_ns >
+                        session->report->handover_max_slice_ns) {
+                        session->report->handover_max_slice_ns =
+                            session->report->handover_position_prepare_ns;
+                    }
+                }
+                continue;
+            }
+            if (!observer_done) {
+                emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_OPERATIONAL,
+                                               EMASTER_CONTROL_SESSION_OK);
+                /*
+                 * 进入 OP 后必须持续发送周期过程数据。同步 SDO 会占用多个周期，可能使
+                 * DC-Sync0 从站判定 SM2 输出事件丢失；模式显示直接使用已映射的 TxPDO，
+                 * 完整 SDO 诊断放在安全停机之后执行。
+                 */
+                if (!emaster_soem_session_start_observer(session)) {
+                    fprintf(stderr, "[P4.3] 警告：SDO 观测线程启动失败\n");
+                }
+                observer_done = true;
+                if (slice_start_valid) {
+                    session->report->handover_observer_start_ns =
+                        handover_slice_elapsed_ns(&slice_start);
+                    if (session->report->handover_observer_start_ns >
+                        session->report->handover_max_slice_ns) {
+                        session->report->handover_max_slice_ns =
+                            session->report->handover_observer_start_ns;
+                    }
+                }
+                handover_done = true;
+                break;
+            }
+        }
+        /*
+         * 交接期间的最后一拍只记账，不写进 frame_interval 系列：那个系列量的是
+         * 相邻两次发帧的间隔，由 exchange 自己维护，这里插一脚只会把它的语义弄脏。
+         * 要看"交接有没有留下缺口"，读 first_frame_interval_gap_exchange 与
+         * frame_interval_gap_count 即可——它们就在这个交换号之后。
+         */
+        session->report->handover_last_exchange = session->exchange;
+        session->report->handover_sliced = handover_done;
+
+        if (!session->report->op_reached) {
+            ecx_readstate(&session->context);
+            return EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
+        }
+        /*
+         * 交接没走完就不再往下走：进入周期循环的前提是起点已经建立（目标位置必须
+         * 来自 OP 首个有效反馈，不是 SAFE-OP 的位置），而且观测线程已经起来。退回
+         * 旧的整块做法没有意义——旧做法正是那个会漏一帧的；带着半截起点进周期循环
+         * 则更糟。报告里 handover_sliced=false 是这条路径走到的凭据。
+         */
+        if (!handover_done) {
+            return EMASTER_CONTROL_SESSION_OP_NOT_REACHED;
+        }
     }
 
     return EMASTER_CONTROL_SESSION_OK;

@@ -884,6 +884,30 @@ typedef struct
     /* 首次截止超时对应的周期号（0 = 未出现）。 */
     uint64_t first_deadline_missed_exchange;
     /*
+     * P11.3: "进入 OP → 周期循环"这段交接的仪表。
+     *
+     * 交接原先整块排在 OP 请求循环之后：读各轴 ESC 看门狗寄存器（每轴两次 FPRD，
+     * 超时用 EC_TIMEOUTRET=2000 µs）、建立 OP 起点、创建观测线程。这三件事期间一帧
+     * 过程数据都不发，实测让周期线程连续占核 852 µs，越过一个周期边界被判成截止期
+     * 错失，再由 recover 赔掉整整一帧（每次会话恰好一次，落点固定在交接拍）。
+     *
+     * 现在交接被切碎塞进 OP 请求循环：每轮照常交换一次（发帧），之后最多做一个
+     * 总线上可见的动作。这几个数回答"每一片有多贵"——上界必须能从报告里查到，
+     * 而不是靠推理。sliced 为真才说明走的是新路径（对照旧构建用）。
+     */
+    bool handover_sliced;
+    /* 交接期间最后一拍的交换号（帧距若在其后立刻变成两个节拍点，就是这里没切干净）。 */
+    uint64_t handover_last_exchange;
+    /* 交接多用了几个 OP 请求周期。旧的整块做法这里是 0。 */
+    uint64_t handover_exchanges;
+    /* 单轴两次 FPRD 的最长耗时；0 表示一次都没读成。 */
+    uint64_t handover_watchdog_read_max_ns;
+    /* 建立 OP 起点（纯计算，不走总线）与创建观测线程的一次性耗时。 */
+    uint64_t handover_position_prepare_ns;
+    uint64_t handover_observer_start_ns;
+    /* 上面三个里最大的那个：交接段单片的耗时上界。 */
+    uint64_t handover_max_slice_ns;
+    /*
      * P9.4: 命令服务器的流量记账。这三个数此前只以 stderr 的形式存在——每条命令
      * 两行，100 Hz 的目标流就是 200 行/秒（一次 180 s 的往返跑出 1.1 MB 日志）。
      * 于是"命令有没有在流"在报告里查不到，而这件事不该只有日志知道。

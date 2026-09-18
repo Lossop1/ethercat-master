@@ -272,6 +272,11 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
 /* 一次周期交换只负责定时、传输和观测，不规划控制字或运动目标。 */
 emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_session_t *session,
                                                                emaster_audit_phase_t phase);
+/* P11.3: 一次寄存器 FPRD 在周期预算里能分到多少微秒（0 = 额度不足，不该读）。
+ * 与周期内的诊断读同一口径，启动阶段的交接读也走它——两处若各算一份，改了周期或
+ * 轴数之后必然漂开，而漂开的那一份不会有任何东西报错。 */
+uint32_t emaster_soem_session_fprd_budget_us(const emaster_soem_session_t *session,
+                                             int frame_timeout_us);
 /* 将周期反馈交给独立控制模块，生成下周期全轴输出。 */
 emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t *session);
 /* 统一执行停用、诊断和总线关闭；不会覆盖首次运行失败。 */

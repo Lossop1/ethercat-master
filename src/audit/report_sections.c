@@ -1163,7 +1163,24 @@ bool emaster_run_report_write(FILE *stream,
         ",\"deadline_miss_frame_interval_ns\":%" PRIu64
         ",\"tail_uncovered_max_ns\":%" PRIu64
         ",\"tail_uncovered_max_exchange\":%" PRIu64
-        ",\"deadline_miss_tail_uncovered_ns\":%" PRIu64 "},",
+        ",\"deadline_miss_tail_uncovered_ns\":%" PRIu64
+        /*
+         * P11.3: 交接段（进 OP → 周期循环）的仪表。这一段原先整块不发帧，实测
+         * 让周期线程连续占核 852 µs，把每次会话唯一的那次截止期错失钉在了周期
+         * 循环的第一拍上。改法是把交接切碎塞进 OP 请求循环，每轮照常发一帧。
+         *
+         * sliced 是"这一轮走的是哪条臂"的唯一凭据；max_slice_ns 是"每片有多贵"
+         * 的上界，它与周期长度一比就能核对交接还会不会越界——不必再上台架去猜。
+         * last_exchange 是交接期间的最后一拍：它之后的帧距若变成两个节拍点，
+         * 就是这里没切干净。
+         */
+        ",\"handover_sliced\":%s"
+        ",\"handover_last_exchange\":%" PRIu64
+        ",\"handover_exchanges\":%" PRIu64
+        ",\"handover_watchdog_read_max_ns\":%" PRIu64
+        ",\"handover_position_prepare_ns\":%" PRIu64
+        ",\"handover_observer_start_ns\":%" PRIu64
+        ",\"handover_max_slice_ns\":%" PRIu64 "},",
         report->tail_max_receive_ns, report->tail_max_receive_ok_ns,
         (unsigned)report->frame_timeout_us,
         report->tail_blocking_budget_ns,
@@ -1183,7 +1200,11 @@ bool emaster_run_report_write(FILE *stream,
         report->first_mismatch_frame_interval_ns,
         report->deadline_miss_frame_interval_ns, report->tail_uncovered_max_ns,
         report->tail_uncovered_max_exchange,
-        report->deadline_miss_tail_uncovered_ns) >= 0);
+        report->deadline_miss_tail_uncovered_ns,
+        report->handover_sliced ? "true" : "false", report->handover_last_exchange,
+        report->handover_exchanges, report->handover_watchdog_read_max_ns,
+        report->handover_position_prepare_ns, report->handover_observer_start_ns,
+        report->handover_max_slice_ns) >= 0);
     /*
      * 观测通道的自证段。enabled 是这一轮 A/B 走的是哪条臂的唯一凭据（与
      * shutdown_prologue 的 fast_mode/inline_mode 同一个手法）；publish_max_ns 与

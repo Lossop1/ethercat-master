@@ -24,6 +24,12 @@ WANTED = re.compile(
     r"|first_mismatch_frame_interval_ns|deadline_miss_frame_interval_ns"
     r"|tail_uncovered_max_ns|tail_uncovered_max_exchange"
     r"|deadline_miss_tail_uncovered_ns"
+    # 2026-09-18 加（P11.3）：交接段（进 OP → 周期循环）切碎之后，这几项是"改法
+    # 生效了没有"和"每片还有多贵"的唯一凭据。sliced=false 的旧构建上它们恒为
+    # false/0，一眼就能分开两条臂。
+    r"|handover_sliced|handover_last_exchange|handover_exchanges"
+    r"|handover_watchdog_read_max_ns|handover_position_prepare_ns"
+    r"|handover_observer_start_ns|handover_max_slice_ns"
     r"|shutdown_prologue_gap_ns|safe_output_sent"
     # 2026-09-16 加：判断"整帧未回"是发送晚还是等回帧晚，靠的是发送延迟与 DC 裕量，
     # 不是帧距——帧距只覆盖到发帧那一刻，之后的等待过程它看不见。

@@ -49,6 +49,46 @@
 #define EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US 250
 #define EMASTER_ERROR_COUNTER_MIN_TIMEOUT_US 50
 
+/*
+ * P8.2 的额度算法，P11.3 起由周期内的诊断读与启动阶段的交接读共用。
+ *
+ * 从"周期长度 − 收包超时"里按轴数除出来，量不够下限就返回 0（表示不该读）。
+ * 除法的代价是轴数一涨、每轴额度变小——这正是想要的：总预算不变，轴多了每轴
+ * 分到的就少。除不尽的部分（余数）不利用：宁可低估预算，不可高估。
+ *
+ * 交接读每次只读一个轴，所以调用者拿这个每轴额度当单次超时；这不是"每个轴各读
+ * 一次所以只有一次"，而是"一片只花一片的钱"——交接段整个塞进一个周期才是要避免的
+ * 那件事，见 session_start.c 里的说明。
+ */
+uint32_t emaster_soem_session_fprd_budget_us(const emaster_soem_session_t *session,
+                                             int frame_timeout_us)
+{
+    int cycle_us;
+    int fprd_budget_us;
+    int per_axis_us;
+
+    if (session == NULL || session->plan == NULL || session->plan->axis_count == 0U)
+    {
+        return 0U;
+    }
+    cycle_us = (int)(session->plan->cycle_ns / 1000U);
+    fprd_budget_us = cycle_us - frame_timeout_us;
+    if (fprd_budget_us <= 0)
+    {
+        return 0U;
+    }
+    per_axis_us = fprd_budget_us / (int)session->plan->axis_count;
+    if (per_axis_us > EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US)
+    {
+        per_axis_us = EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US;
+    }
+    if (per_axis_us < EMASTER_ERROR_COUNTER_MIN_TIMEOUT_US)
+    {
+        return 0U;
+    }
+    return (uint32_t)per_axis_us;
+}
+
 void emaster_soem_session_note_deadline_missed(emaster_soem_session_t *session)
 {
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
@@ -340,37 +380,16 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
     }
 
     /*
-     * P8.2: 诊断读的每轴额度从剩余预算里除出来，量不够就整块跳过。
+     * P8.2: 诊断读的每轴额度见 emaster_soem_session_fprd_budget_us 的说明。
+     * 额度为 0 时不再"每轴读短一点"，而是整块不读：读不到的概率高，而且真的每轴
+     * 都超时会正好把剩余预算全部花光，把一个诊断读变成超过周期的阻塞。跳过是可控
+     * 的损失（少一组计数器样本），拖爆周期不是。
      *
      * 位置必须在覆盖之后：上面那个覆盖是判别实验用的（"把超时调到 600 µs 看未回
      * 归零"），额度要跟着它走，否则实验测的就不是实际会发生的预算。放在覆盖之前
      * 算，算出来的额度与真正用的收包超时对不上，这个账就是假的。
-     *
-     * 除法的代价是轴数一涨、每轴额度变小——这正是想要的：总预算不变，轴多了每轴
-     * 分到的就少。额度不足下限时不再"每轴读短一点"，而是整块不读：读不到的概率
-     * 高，而且真的每轴都超时会正好把剩余预算全部花光，把一个诊断读变成超过周期的
-     * 阻塞。跳过是可控的损失（少一组计数器样本），拖爆周期不是。
-     *
-     * 除不尽的部分（余数）不利用：宁可低估预算，不可高估。
      */
-    int fprd_timeout_us = 0;
-    if (session->plan->axis_count > 0U)
-    {
-        int fprd_budget_us = cycle_us - frame_timeout_us;
-
-        if (fprd_budget_us > 0)
-        {
-            fprd_timeout_us = fprd_budget_us / (int)session->plan->axis_count;
-        }
-        if (fprd_timeout_us > EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US)
-        {
-            fprd_timeout_us = EMASTER_ERROR_COUNTER_MAX_TIMEOUT_US;
-        }
-        if (fprd_timeout_us < EMASTER_ERROR_COUNTER_MIN_TIMEOUT_US)
-        {
-            fprd_timeout_us = 0;
-        }
-    }
+    int fprd_timeout_us = (int)emaster_soem_session_fprd_budget_us(session, frame_timeout_us);
     /*
      * 最坏阻塞时长，直接进报告。它由构造保证 ≤ 一个周期（额度就是从剩余预算里
      * 除出来的），所以这个字段的用途不是"发现问题"，是让读者不必重算就能核对
