@@ -144,8 +144,12 @@ HELP_TEXT = """
 class ConsoleClient(EtherCATClient):
     """把 interactive_control 的客户端改成不往 stdout 打印的版本。
 
-    它原本在连接失败/通信失败时直接 print，那会糊在全屏面板上。这里把每次
-    调用期间的 stdout 收进缓冲区，抽出最后一行留给面板显示。
+    它原本在连接失败/通信失败时直接 print，那会糊在全屏面板上。这里把那句话收进
+    last_problem，留给面板显示。
+
+    收的办法是覆盖 note()——**不是**把 sys.stdout 换掉。换掉的是整个进程共用的出口，
+    而面板的取数、界面这边各自的线程同时在打自己的字：谁的字在这几毫秒里落地，
+    就跟着一起被收走丢掉。（界面那个偶发少一行就是这么来的，见 P11.4。）
     """
 
     def __init__(self, endpoint, timeout_s=1.0):
@@ -158,13 +162,12 @@ class ConsoleClient(EtherCATClient):
         self.last_response = None   # 最后一条原始回应，诊断用
         self.expect_startup = False  # 主站刚拉起来：每条命令只发一次（见 command）
 
+    def note(self, text):
+        """不打印，只记下最后一句——留给面板显示。"""
+        self.last_problem = text
+
     def connect(self):
-        sink = io.StringIO()
-        with contextlib.redirect_stdout(sink):
-            ok = super().connect()
-        noise = sink.getvalue().strip()
-        if noise:
-            self.last_problem = noise.splitlines()[-1]
+        ok = super().connect()
         if ok:
             # 主站一条命令一个周期内就回，1 秒足够；缩短是为了主站没了的时候
             # 面板能立刻说出来，而不是像默认的 5 秒那样卡住。
@@ -176,12 +179,7 @@ class ConsoleClient(EtherCATClient):
         # 断开重连再试，一秒里连两三回，正好把主站那只有一格的 accept 队列挤爆。
         if self.expect_startup and self.last_response is None:
             retries = 0
-        sink = io.StringIO()
-        with contextlib.redirect_stdout(sink):
-            response = super().command(cmd, retries=retries)
-        noise = sink.getvalue().strip()
-        if noise:
-            self.last_problem = noise.splitlines()[-1]
+        response = super().command(cmd, retries=retries)
         self.last_response = response
         return response
 

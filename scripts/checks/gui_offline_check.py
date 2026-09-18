@@ -22,9 +22,11 @@
 
 import argparse
 import os
+import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +34,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
+import emaster_console  # noqa: E402
 import fake_master  # noqa: E402
 import emaster_client  # noqa: E402
 import rt_affinity  # noqa: E402
@@ -159,6 +162,84 @@ def check_takeover_moves_within_limits(context):
             want("曾到过=+0.000°" in line,
                  f"没让它动的轴却动了：{line}")
         want("状态字=0x0427" in axis1, f"状态字不对（应当就绪）: {axis1}")
+
+
+AXIS_FIELD = re.compile(r"轴(\d+) ([+-][\d.]+)°")
+
+
+def _leg_lines(report):
+    """自检报告里的往返记录：[(趟号, 目标度, {轴号: 实到度})]。
+
+    取实到位置时**只认观测帧那一侧的数**（界面自检报告里的"实到"就是它从观测帧里读的
+    实际位置）。界面自己发了什么目标，这里一个字都不看——那证明不了轴动没动。
+    """
+    legs = []
+    for line in report.splitlines():
+        if not line.startswith("往返：第"):
+            continue
+        number = int(re.search(r"第 (\d+) 趟", line).group(1))
+        target = float(re.search(r"目标 ([+-][\d.]+)°", line).group(1))
+        actual = {int(index): float(value)
+                  for index, value in AXIS_FIELD.findall(line)}
+        legs.append((number, target, actual))
+    return legs
+
+
+def check_selftest_reciprocate_lands_every_trip(context):
+    """界面自己发的往返：每一趟都要真的把轴走到位，收尾要回到起点并放开命令口。
+
+    **为什么这条值得单独钉。** 台架上经典那条 30° 往返是**另一个客户端**发的
+    （scripts/bench_reciprocate_30deg.sh）。界面的这一段要是不成立，"端到端控制"
+    就只是"能点动一下"。而"界面发了命令"和"轴动了"是两件事：面板上的目标、引擎的
+    本地账都证明不了后者，所以下面每一条判据都取自观测帧里的**实际位置**。
+
+    幅度取 2°（台架上是 30°）：这条证的是"命令 → 实际位置"这条链和收尾纪律，与控制律
+    的大小无关，小一点跑得快，撞了也不心疼。30° 那一档的跟随误差只有台架知道，写在
+    末尾"没证到的"里。
+    """
+    seconds = 14.0
+    with fake_master.FakeMaster(publish_hz=1000.0) as master:
+        _, report = run_gui(master, ["--selftest-recip", "2", "--selftest-traverse", "0.4"],
+                            seconds)
+        counters = master.snapshot_counters()
+        want(counters["commands"] > 0, "接管了却一条命令都没发")
+        want(counters["step_violations"] == 0,
+             f"发出去的目标超过了单步限幅：{counters['step_violations']} 次")
+        want(counters["aborts"] == 0,
+             f"会话被打掉了（单步超限的后果）：{counters['aborts']} 次")
+
+        legs = _leg_lines(report)
+        want(len(legs) >= 2,
+             f"自检报告里只有 {len(legs)} 趟，一个来回都没走完：\n{report}")
+        want([number for number, _, _ in legs] == list(range(1, len(legs) + 1)),
+             f"趟号不连续：{[number for number, _, _ in legs]}")
+
+        # 波形要与经典那条一致：去 +A、回起点、去 +A、回起点……（三角波，不是两侧摆）。
+        for position, (number, target, _) in enumerate(legs):
+            expected = 2.0 if position % 2 == 0 else 0.0
+            want(abs(target - expected) < 1e-6,
+                 f"第 {number} 趟目标 {target:+.1f}°，按波形应当是 {expected:+.1f}°")
+        want(abs(legs[-1][1]) < 1e-6,
+             f"最后一趟不是回起点（目标 {legs[-1][1]:+.1f}°）——收尾时轴不在家里")
+
+        # 每一趟都要落到目标上，每一根轴都要动。这是"全轴同时"和"真的走到了"的唯一凭据。
+        for number, target, actual in legs:
+            want(len(actual) == fake_master.DEFAULT_AXES,
+                 f"第 {number} 趟只报了 {len(actual)} 根轴的实到位置：{actual}")
+            for axis, value in sorted(actual.items()):
+                want(abs(value - target) <= 0.5,
+                     f"第 {number} 趟轴{axis} 停在 {value:+.2f}°，目标 {target:+.1f}°")
+
+        # 收尾纪律：命令口那一格要还回去，轴要停在起点。
+        want("接管中：否" in report, f"跑到最后命令通道还占着：{report}")
+        want("轴表：快照来自已释放的那次会话" in report,
+             f"报告里的轴表不是释放后的结算：{report}")
+        peaks = [line for line in report.splitlines() if "曾到过" in line]
+        want(len(peaks) == fake_master.DEFAULT_AXES,
+             f"报告里只有 {len(peaks)} 行的轴信息")
+        for line in peaks:
+            peak = float(re.search(r"曾到过=([+-][\d.]+)°", line).group(1))
+            want(abs(peak - 2.0) <= 0.05, f"这根轴没走到过 2°：{line}")
 
 
 def check_charts_receive_and_decimate(context):
@@ -354,15 +435,54 @@ def check_mode_guard_blocks_cst(context):
 
 # ---------------------------------------------------------------- 单元面
 
-def check_affinity_is_quiet_off_linux(context):
-    """非 Linux 上这一层必须**安静地什么都不做**，而不是抛异常把界面带下去。"""
+def check_affinity_avoids_master_cores(context):
+    """亲和这一层：非 Linux 上安静地什么都不做；Linux 上真绑得上、且躲开主站。"""
     decision = rt_affinity._Decision(requested=None, log=lambda _m: None)
     result = rt_affinity.pin_current_thread(decision)
     if os.name == "nt" or not hasattr(os, "sched_setaffinity"):
         want(result is None, f"本机没有 sched_setaffinity，却返回了 {result}")
     else:
-        want(result is not None, "Linux 上应当绑上核")
-    # chosen 的说明要能读懂，不能说"没绑"却不给理由。
+        # 判据**不能**是"刚才那次绑上了没有"。主站没在跑的时候 choose_cpus(None)
+        # 正确地返回 None（没东西可躲），于是一条"Linux 上应当绑上核"就会随台架上
+        # 主站开着与否忽红忽绿——第一次在 Pi 上跑就是这个下场（9/10）。看环境变色
+        # 的检查比没有检查更坏：它红了没人信，绿了也不能说明什么。
+        # 所以：绑核这件事用**明确核号**来证，不依赖主站在不在。
+        origin = rt_affinity.allowed_cpus()
+        try:
+            pinned = rt_affinity.pin_current_thread(
+                rt_affinity._Decision(requested=[min(origin)], log=lambda _m: None))
+            want(pinned is not None, "Linux 上给了明确核号却绑不上")
+            want(pinned <= origin, f"绑到了不在可用集合里的核：{sorted(pinned)}")
+        finally:
+            os.sched_setaffinity(0, origin)   # 别把后面几项都拖着绑在一个核上
+
+    # "躲开主站"的集合运算离线也能证：master_thread_affinity() 是唯一的 I/O 边界，
+    # 把它换掉就只剩纯运算，与台架上主站在不在跑无关。**只在 Linux 上有意义**——
+    # 本机 allowed_cpus() 是空集，"可用核减去主站核"根本无从谈起，正确答案就是
+    # 不绑核（非 Linux 分支已经证过那一头）。
+    if not rt_affinity.allowed_cpus():
+        cpus, note = rt_affinity.choose_cpus(None)
+        want(cpus is None and bool(note),
+             f"本机绑不了核，却既不说也不老实返回 None：{cpus} / {note!r}")
+        return
+    real_scan = rt_affinity.master_thread_affinity
+    try:
+        rt_affinity.master_thread_affinity = lambda: [{0, 1}, {0, 1, 2}]
+        cpus, note = rt_affinity.choose_cpus(None)
+        want(cpus is not None, f"给了主站掩码却还是不绑核（{note}）")
+        want(not (cpus & {0, 1, 2}), f"躲进了主站正在用的核：{sorted(cpus)}")
+        want(cpus == rt_affinity.allowed_cpus() - {0, 1, 2},
+             f"可用核减去主站核算错了：{sorted(cpus)}")
+
+        # 主站把可用核全占了：没得躲，必须**说不绑**，而且要说出为什么。
+        rt_affinity.master_thread_affinity = lambda: [rt_affinity.allowed_cpus()]
+        cpus, note = rt_affinity.choose_cpus(None)
+        want(cpus is None and bool(note),
+             f"没得躲时应当不绑并说明，实际 {cpus} / {note!r}")
+    finally:
+        rt_affinity.master_thread_affinity = real_scan
+
+    # 选出来的说明得读得懂：说"没绑"却不给理由，等于把"没报错"当成"已经躲开了"。
     cpus, note = rt_affinity.choose_cpus(None)
     if cpus is None:
         want(bool(note), "没绑核却没说为什么")
@@ -385,17 +505,104 @@ def check_reply_shapes(context):
          "|TRUNC 没被认出来")
 
 
+def check_client_failure_does_not_touch_stdout(context):
+    """客户端出故障时只许把话记下来，不许把**整个进程共用**的 stdout 换掉。
+
+    这条是被真事逼出来的：面板客户端原本为了不让报错糊在面板上，把 sys.stdout
+    临时换成一个 StringIO、事后再换回来。取数线程每 100 ms 走一次这条路径，而
+    **换掉的是整个进程的**：那段时间里界面线程打的字会写进那张草稿纸，跟着被扔掉。
+    现象是输出偶发少一行、每三五轮红一次，查了很久才落到"当时 sys.stdout 是张
+    StringIO"上。
+
+    所以这里钉的**不是**"客户端没往 stdout 写字"——旧写法恰恰是不写，它把出口换走了。
+    钉的是出口本身有没有被动过：另起一条线程在旁边盯着 sys.stdout 是不是还是原来那个。
+    为了让这个窗口一定被盯住，对面故意用一个**只接受、不回话**的服务端：连接会成，
+    读回复会一直卡到超时——那正是取数线程最常待着的状态，也是真出事的那个窗口。
+    """
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    port = listener.getsockname()[1]
+    accepted = []
+
+    def accept_and_say_nothing():
+        while True:
+            try:
+                connection, _peer = listener.accept()
+            except OSError:
+                return
+            accepted.append(connection)   # 收下，一个字都不回
+
+    class Spy:
+        def __init__(self, inner):
+            self.inner = inner
+            self.seen = []
+
+        def write(self, text):
+            self.seen.append(text)
+            return self.inner.write(text)
+
+        def flush(self):
+            return self.inner.flush()
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    client = emaster_console.ConsoleClient(f"tcp:127.0.0.1:{port}", timeout_s=0.5)
+    original = sys.stdout
+    spy = Spy(original)
+    hijacked = []
+    listening = threading.Event()
+
+    def watch_stdout():
+        while not listening.is_set():
+            if sys.stdout is not spy:
+                hijacked.append(repr(sys.stdout))
+            time.sleep(0.001)   # 比 0.5 秒的超时窗口密得多，换走了就跑不掉
+
+    accepter = threading.Thread(target=accept_and_say_nothing, daemon=True)
+    accepter.start()
+    # 探子**装好之后**才开盯：反过来的话第一眼看到的就是还没换上的真 stdout，
+    # 会把现在这份正确的代码也判红（这坑这次就踩了，990 : 1 的那一次）。
+    sys.stdout = spy
+    watcher = threading.Thread(target=watch_stdout, daemon=True)
+    watcher.start()
+    try:
+        connected = client.connect()
+        reply = client.command("status")
+    finally:
+        sys.stdout = original
+        listening.set()
+        watcher.join(timeout=2.0)
+        listener.close()
+        for connection in accepted:
+            connection.close()
+
+    want(connected, "对面明明在听（只是不回话），却连不上")
+    want(reply is None, f"对面一个字都没回，却拿到了回复：{reply!r}")
+    want(not hijacked,
+         f"客户端把进程的 stdout 换走 {len(hijacked)} 次（期间别人打的字会被一起扔掉）："
+         f"{hijacked[:2]}")
+    want(not spy.seen,
+         f"客户端往进程的 stdout 上打了 {len(spy.seen)} 段话（该只记进 last_problem）："
+         f"{spy.seen[:2]!r}")
+    want(bool(client.last_problem),
+         "故障既没打出来、也没记进 last_problem——那就成了无声的失败")
+
+
 CHECKS = [
     ("默认只读：没点接管，命令口一个字节都不收", check_readonly_by_default),
     ("观测取数跟得上产出，且只连一次", check_observation_keeps_up),
     ("接管后真的动了、且单步没超限", check_takeover_moves_within_limits),
+    ("自带往返：每趟都走到位，收尾回起点并放手", check_selftest_reciprocate_lands_every_trip),
     ("曲线收到帧、抽了稀、只喂当前那根轴", check_charts_receive_and_decimate),
     ("窗口最小宽度放得进普通屏（急停按钮不能被挤出屏幕）", check_window_fits_on_a_normal_screen),
     ("接管时命令口那一格确实被占着", check_command_slot_is_held),
     ("释放时那一格确实还回去（同进程内探）", check_release_actually_releases),
     ("CST 部署被挡在连套接字之前", check_mode_guard_blocks_cst),
-    ("CPU 亲和：非 Linux 上安静地不绑核", check_affinity_is_quiet_off_linux),
+    ("CPU 亲和：躲开主站的核算得对，非 Linux 上安静", check_affinity_avoids_master_cores),
     ("回复判据不被双前缀骗过去", check_reply_shapes),
+    ("客户端出故障只记不改 stdout（改了就丢别人的输出）", check_client_failure_does_not_touch_stdout),
 ]
 
 NOT_COVERED = [
@@ -412,6 +619,9 @@ NOT_COVERED = [
     "要真主站才测得到。",
     "**和主站抢不抢资源**：本机没有主站的实时线程可躲，A/B 只能在台架上做"
     "（scripts/bench_gui_e2e.sh 里那段）。",
+    "**台架上的 30° 一档**：离线证的是「命令 → 实际位置」这条链和收尾纪律，幅度取的"
+    "是 2°。30° 下五根轴真能不能跟上、跟随误差会不会摸到 50° 那道限幅（摸到就是主站"
+    "中止会话），假主站里没有这个模型——只有台架知道。",
 ]
 
 

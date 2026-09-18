@@ -526,12 +526,22 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.warning(self, title, text)
 
-    def closeEvent(self, event):
+    def shutdown(self):
+        """把两条后台线程收干净。关窗和自检跑完都走这里。
+
+        无头自检里没人点关闭，closeEvent 根本不会跑，`app.exec_()` 一返回解释器就
+        开始收尾——而取数线程那时多半还在一次 socket 调用里。它接着抛的异常没人接得
+        住，痕迹是 stderr 上冒一句"界面内部异常"、退出码却还是 0：看着像界面崩了，
+        其实只是收尾没等人。
+        """
         if self.session is not None:
             self._release()
         if self.poller is not None:
             self.poller.stop()
             self.poller.wait(3000)
+
+    def closeEvent(self, event):
+        self.shutdown()
         event.accept()
 
     # ---------------------------------------------------------------- 自检
@@ -624,7 +634,14 @@ def build_parser():
     ap.add_argument("--selftest", type=float, default=None, metavar="秒",
                     help="无头自检：连上后跑这么多秒再退出（配 QT_QPA_PLATFORM=offscreen）")
     ap.add_argument("--selftest-takeover", action="store_true",
-                    help="自检时也接管命令通道并走一遍动作")
+                    help="自检时也接管命令通道并走一遍小幅度动作")
+    ap.add_argument("--selftest-recip", type=float, default=None, metavar="度",
+                    help="自检时走经典的来回：接管后全轴同时从起点走到 +这么多度（如 30），"
+                         "再走回起点，如此往复——只在正方向这一侧，与经典台架测试同形。"
+                         "每趟的秒数由点动速度定，见 --selftest-traverse")
+    ap.add_argument("--selftest-traverse", type=float, default=3.0, metavar="秒",
+                    help="来回每趟想走多少秒（默认 3，与经典台架测试一致；"
+                         "实际不会快过 度数 ÷ 点动速度）")
     return ap
 
 
@@ -671,11 +688,17 @@ def main(argv=None):
     if args.selftest is not None:
         # 无头自检：到点自己退出，退出前把看到的关键量打出来。台架上就靠这段
         # 在 offscreen 下跑完整条路，不需要任何显示器。
-        if args.selftest_takeover:
+        if args.selftest_recip is not None:
+            _schedule_selftest_reciprocate(window, args.selftest, args.selftest_recip,
+                                           args.selftest_traverse)
+        elif args.selftest_takeover:
             _schedule_selftest_drive(window, args.selftest)
         QTimer.singleShot(int(args.selftest * 1000), _finish_selftest(window, app))
 
-    return app.exec_()
+    code = app.exec_()
+    # 自检是无头的：没人关窗口，closeEvent 不会跑，得在这儿补一次收尾。
+    window.shutdown()
+    return code
 
 
 def _finish_selftest(window, app):
@@ -690,7 +713,7 @@ def _schedule_selftest_drive(window, seconds):
 
     只做**小幅度**的东西：接管 → 点动一点 → 回起点 → 急停 → 复位 → 释放。幅度刻意
     压得很小（0.2° 量级），因为这段代码在台架上也会跑，而台架上的轴是带着真实负载的。
-    大步往返留给人在场的验证环节。
+    大步往返留给人在场的验证环节——那一段在 _schedule_selftest_reciprocate 里。
     """
     span = max(1.0, seconds)
     plan = [
@@ -718,6 +741,140 @@ def _selftest_step(window, action, amount):
         else:
             window._request(action)
     return step
+
+
+# 往返自检的四个时间量。都摆在这儿，好让台架脚本和离线回归知道这段的节奏从哪来。
+RECIP_LEAD_S = 1.0          # 起来之后先等这么久再点接管
+RECIP_SETTLE_S = 0.6        # 每趟走完留的余量：等它停稳、等观测帧跟上
+RECIP_TAIL_S = 8.0          # 收尾预算：最后一趟 + 回起点 + 释放
+RECIP_ATTACH_WAIT_S = 5.0   # 接管后用这么久等命令通道真的接上
+RECIP_POLL_MS = 200         # 上面那个等待的轮询间隔
+
+
+def _selftest_axes(window):
+    """接上了就把轴号报出来，没接上返回 None。
+
+    判据用的是**快照里真的有轴**，不是 `window.session is not None`：会话对象是点接管
+    那一刻就建出来的，那时候引擎还没跟主站说上话，轴表是空的，这时候发出去的目标会被
+    丢掉（poller 会记一句"还没接上主站"）。
+    """
+    snapshot = window.last_snapshot
+    if snapshot is None:
+        return None
+    count = int(snapshot.get("axis_count") or 0)
+    return list(range(count)) if count > 0 else None
+
+
+def _selftest_positions(window):
+    """一趟走完，各轴**实际**在哪儿。
+
+    只有观测帧里的实际位置能证明"轴动了"，本地目标、已提交目标都是这一侧自己的账。
+    一帧没收到就如实说是"无从判断"，不拿本地账顶上。
+    """
+    snapshot = window.last_snapshot
+    if snapshot is None or not snapshot["axes"]:
+        return "实到？（一帧观测都没收到，无从判断）"
+    return "实到 " + " ".join(f"轴{a['index'] + 1} {a['pos_deg']:+.2f}°"
+                              for a in snapshot["axes"])
+
+
+def _schedule_selftest_reciprocate(window, seconds, degrees, traverse_s):
+    """自检：全轴同时走经典的来回（默认 30°，每趟 3 秒），按自检总时长摊开。
+
+    **波形跟经典那条一致：起点 → +A → 起点 → +A**（scripts/test_external_motion_client.py
+    的 triangle，周期 2×单程，全程匀速）。不是 ±A 来回摆：经典那条只在正方向一侧走，
+    每一趟都回到起点，所以这里也是"去、回起点、去、回起点"。
+
+    **为什么要这一段。** 台架上经典那条往返是**另一个客户端**发的
+    （scripts/bench_reciprocate_30deg.sh）。这一轮要证的是"界面发的命令也能把轴走到位"，
+    所以复用界面上本来就有的那个动作（相对启动位置的多轴移动），不加新协议、不改控制律，
+    只加一段节奏。
+
+    **节奏为什么由点动速度定，不是由 --traverse 定。** 引擎每拍最多走
+    点动速度 ÷ 50 度，所以 度数 ÷ 点动速度 秒是一趟的**下限**：默认 10°/s 走 30°
+    正好 3 秒，与经典的 --traverse 3 对得上。要得比这个快，跑出来还是这个——这里明说，
+    不闷着。
+
+    **每趟的实到位置都记一笔。** "界面发了命令"和"轴真的动了"是两件事：面板上的目标、
+    引擎的本地账都证明不了后者，只有观测帧里的实际位置能。所以每趟开下一趟之前先把上一趟
+    的实到位置打出来；接不上、走不满、时间不够，都照样打，不静默跳过。
+
+    **趟数取双数。** 双数趟意味着最后一趟正好把轴送回起点，收尾时轴是停在家里的；
+    再补一条"回起点"只是保险（落空时它什么都不做）。
+    """
+    span = max(2.0, float(seconds))
+    jog_speed = max(0.1, float(window.args.jog_speed))
+    kinematic_s = abs(degrees) / jog_speed
+    requested_s = max(0.2, float(traverse_s))
+    leg_s = max(requested_s, kinematic_s) + RECIP_SETTLE_S
+
+    budget = span - RECIP_LEAD_S - RECIP_TAIL_S
+    slots = max(0, int(budget // leg_s))
+    if slots % 2:
+        slots -= 1
+
+    def say(text):
+        window._log(text)
+        # 同时进 stdout：台架脚本和离线回归都从这里捞这一段的证据。
+        print(text, flush=True)
+
+    if slots < 2:
+        say(f"往返：自检 {span:g} 秒放不下一个来回（每趟 {leg_s:.1f} 秒），"
+            f"这一轮只接管不发目标")
+    if kinematic_s > requested_s:
+        say(f"往返：要的每趟 {requested_s:g} 秒比点动速度给得起的 {kinematic_s:.1f} 秒"
+            f"（{abs(degrees):g}° ÷ {jog_speed:g}°/s）快，实际按后者走")
+    say(f"往返：{slots} 趟，每趟 {leg_s:.1f} 秒，幅度 +{abs(degrees):g}°（每趟回起点），"
+        f"全轴同时——与经典台架测试一个形状")
+
+    state = {"leg": 0, "prev": None, "waited": 0.0, "done": False}
+
+    def flush():
+        if state["prev"] is None:
+            return
+        leg, target = state["prev"]
+        state["prev"] = None
+        say(f"往返：第 {leg} 趟 目标 {target:+.1f}° {_selftest_positions(window)}")
+
+    def wrap_up():
+        """收尾：回起点 → 释放。
+
+        **释放不是礼貌。** 命令口只有一格 accept，占着不放，台架脚本就再也连不上了
+        （表现为挂住，不报错）。
+        """
+        state["done"] = True
+        flush()
+        window._request("home")
+        QTimer.singleShot(1000, window._release)
+
+    def tick():
+        if state["done"]:
+            return
+        flush()
+        if state["leg"] >= slots:
+            wrap_up()
+            return
+        axes = _selftest_axes(window)
+        if axes is None:
+            if state["waited"] >= RECIP_ATTACH_WAIT_S:
+                say(f"往返：接管后 {RECIP_ATTACH_WAIT_S:g} 秒还没接上命令通道，来回不走了")
+                wrap_up()
+                return
+            state["waited"] += RECIP_POLL_MS / 1000.0
+            QTimer.singleShot(RECIP_POLL_MS, tick)
+            return
+        # 偶数趟去 +A，奇数趟回起点——每趟都从这一头走到那一头，全程匀速。
+        target = abs(float(degrees)) if state["leg"] % 2 == 0 else 0.0
+        window._request("move", [(index, target) for index in axes])
+        state["prev"] = (state["leg"] + 1, target)
+        state["leg"] += 1
+        QTimer.singleShot(int(leg_s * 1000), tick)
+
+    def begin():
+        window._takeover()
+        QTimer.singleShot(int(RECIP_LEAD_S * 1000), tick)
+
+    QTimer.singleShot(0, begin)
 
 
 if __name__ == "__main__":

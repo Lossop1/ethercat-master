@@ -9,7 +9,8 @@
 #   solo     主站自己跑，不起桥、不起界面 —— 基线
 #   bridge   主站 + 桥，没有界面 —— 把"桥的开销"和"界面的开销"分开
 #   obs      主站 + 桥 + **只读**界面（无头）。这是"主站开着就开着监控"那条纪律的兑现
-#   drive    主站 + 桥 + 界面**接管并走一遍动作** —— 会让轴动起来，默认不跑（见下）
+#   drive    主站 + 桥 + 界面**接管并走经典往返**（全轴同时 30°、每趟 3 秒）——
+#            会让轴真动，默认不跑（见下）。幅度/时长可用 RECIP_DEG / RECIP_TRAVERSE 改
 #
 # 判据是 A/B 的：每个非 solo 臂跟同轮 solo 臂比报告里的**两个计数**
 #   deadline_missed_count / frame_interval_gap_count
@@ -27,10 +28,10 @@
 # 各自绑到主站用不着的核上（rt_affinity 自己从 /proc 读主站三个实时线程的掩码），
 # 而且 A/B 真的把差距量出来。抢资源这件事没有"理论上不会"。
 #
-# **drive 臂会让轴真动。** 涉及物理动作先确认，所以它不默认跑，而且光写进 ARMS 还不够，
-# 还要一个显式的 CONFIRM_MOTION=yes（见下面那道拦截）：
+# **drive 臂会让轴真动，而且是 30° 一档，不是点一下。** 涉及物理动作先确认，所以它
+# 不默认跑，而且光写进 ARMS 还不够，还要一个显式的 CONFIRM_MOTION=yes（见下面那道拦截）：
 #   sudo ARMS='solo obs drive' CONFIRM_MOTION=yes bash scripts/bench_gui_e2e.sh
-# 跑之前先确认轴周围没人没夹具，并给 5 号从站（小电机，会烫）留冷却间隔。
+# 跑之前先确认轴周围没人没夹具、30° 行程有净空，并给 5 号从站（小电机，会烫）留冷却间隔。
 #
 # **跑完立刻停机。** 每臂结束都 SIGINT 主站并等报告写完。不是 pkill：SIGINT 走的是
 # 安全门那条有序停机路径，报告才写得完整；pkill -9 会把驱动器留在使能态。
@@ -53,6 +54,10 @@ BUILD=${BUILD:-$REPO/build}
 MASTER_BIN=${MASTER_BIN:-$BUILD/tools/master/emaster-master}
 DUR=${DUR:-60}                 # 每个 GUI 臂跑多久
 ROUNDS=${ROUNDS:-1}
+# drive 臂由界面端发起的动作：经典的 30° 往返，每趟想要 3 秒（实际由点动速度定，
+# 默认 10°/s ⇒ 正好 3 秒，与经典台架测试一个形状）。
+RECIP_DEG=${RECIP_DEG:-30}
+RECIP_TRAVERSE=${RECIP_TRAVERSE:-3}
 ARMS=${ARMS:-solo bridge obs}
 CMD_PORT=${CMD_PORT:-5001}
 OBS_PORT=${OBS_PORT:-5002}
@@ -326,7 +331,12 @@ arm() {
         local CONN=""
         [ "$GUI_MODE" = "obs" ] && CONN="--obs-endpoint tcp:127.0.0.1:$OBS_PORT"
         # --tcp 一次给两个口（命令 PORT、观测 PORT+1），比分别写两个端点少一处写错的机会
-        [ "$GUI_MODE" = "drive" ] && CONN="--tcp 127.0.0.1:$CMD_PORT" && EXTRA="--selftest-takeover"
+        # drive 臂走的是**经典的 30° 往返**：起点 → +30° → 起点，只在正方向这一侧，
+        # 与 tools/test_external_motion_client.py --traverse 3 同形（10°/s ⇒ 3 秒一趟）。
+        # 界面自己靠点动速度算一趟多久，所以这里给的是"想要几秒"，实际不会快过
+        # 30 ÷ 10 = 3 秒。
+        [ "$GUI_MODE" = "drive" ] && CONN="--tcp 127.0.0.1:$CMD_PORT" \
+            && EXTRA="--selftest-recip $RECIP_DEG --selftest-traverse $RECIP_TRAVERSE"
         # 界面自己也绑核（rt_affinity 从 /proc 读主站的实时核，躲开它们）。
         # PYTHONPATH 要给到 tools/：界面是包（emaster_gui），不从仓库根 import 得到。
         QT_QPA_PLATFORM=offscreen PYTHONPATH="$REPO/tools" timeout $((DUR+60)) \

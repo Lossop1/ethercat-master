@@ -66,6 +66,15 @@ class EtherCATClient:
         # 主站的单步限幅是拿新目标和上一条已提交目标比的。
         self.last_commanded = None
 
+    def note(self, text):
+        """连接/通信出了什么事，往哪儿说。
+
+        默认照旧打到屏幕上（命令行工具的用法不变）。要收起来的人**覆盖这个方法**，
+        别去改 sys.stdout：那是整个进程共用的，界面里取数线程一改，界面线程同时
+        打的字就跟着一起被收走、丢掉。
+        """
+        print(text)
+
     # ---------- 连接管理 ----------
 
     def connect(self):
@@ -77,7 +86,7 @@ class EtherCATClient:
             self.last_io = time.time()
             return True
         except (OSError, emaster_endpoint.EndpointError) as exc:
-            print(f"连接失败: {exc}")
+            self.note(f"连接失败: {exc}")
             self.sock = None
             return False
 
@@ -123,7 +132,7 @@ class EtherCATClient:
             except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as exc:
                 self.disconnect()
                 if attempt == retries:
-                    print(f"通信失败（已重试 {retries} 次）: {exc}")
+                    self.note(f"通信失败（已重试 {retries} 次）: {exc}")
                     return None
         return None
 
