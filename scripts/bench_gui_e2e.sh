@@ -22,6 +22,25 @@
 # 要判断极值有没有真的变坏，看那一列的数，别让脚本替你下结论。
 #
 # ---------------------------------------------------------------------------
+# 观测开关：**主站默认不建观测套接字**，得由起它的人把 EMASTER_OBSERVATION 打开
+#
+# 2026-09-18 那次跑，四个臂全绿、A/B 三项全 0、五轴 30° 往返每一趟都走到了，而
+# **监控半边一帧都没收到**：主站压根没建 /tmp/emaster-<部署>-obs.sock，界面的取数
+# 线程每一轮都连不上，报告里那句"观测：一帧都没收到"就躺在输出里没人判。原因就是
+# 这个脚本起主站时没设那个环境变量——观测是主站的**旁路**，开关关掉时它连缓冲都不
+# 分配，而且只在报告里自证（report.observation.enabled=false）。
+#
+# 所以现在：需要监控的臂（bridge/obs/drive）由脚本把开关打开，并且**开局就查套接字
+# 在不在**，收尾还要拿 tools/gui_evidence.py 判一次"这一臂的监控到底成没成"。
+# 判红就明说这一臂不算通过——打印事实的地方不负责说这算不算数，这句话上一轮已经
+# 付过学费了。
+#
+# 这段接线本身怎么验：**不用上硬件**，拿 scripts/bench_gui_e2e_stub.py 当主站干跑一遍
+# （它只在 EMASTER_OBSERVATION=1 时才建观测套接字，所以"开关递到没有"真的会被判）。
+# 命令与注意事见那个文件的头部注释。台架上次是整场跑完才发现监控半边是空的，
+# 那种发现方式太晚了。
+#
+# ---------------------------------------------------------------------------
 # 三条不能省的前提
 #
 # **这一层不许和主站抢资源（用户定的）。** 所以这里不印"看起来没影响"就完事：桥和界面
@@ -44,8 +63,11 @@
 # 面用的（手动验证、看着曲线点按钮），不该把它搭进一个自动跑的取证脚本里——那等于
 # 每跑一次就多开一次局域网暴露面。所以：**自动取证走回环，跨机器手动来。**
 #
-# 2026-09-18 说明：本脚本写好时台架未上电，因此**脚本本身没有在真主站上跑过**。
-# 首次跑要当成"第一次运行"看，别当成已验证。
+# 2026-09-18 说明：本脚本已经在真主站上跑过一轮（solo/bridge/obs/drive，各 60 秒，
+# 四个臂都没有截止期错失、没有整帧缺失，五轴 30° 往返全部走到位）。但那一轮**监控
+# 半边一帧都没收到**——原因是主站起的时候没开观测开关，而脚本当时既不设它、也不判
+# "到底收到帧没有"（见上面「观测开关」那段）。这一轮之后才补上开关与判定。
+# 也就是说：**控制侧已被真机验证过，监控侧的判定逻辑还没有在真机上跑过。**
 set -u
 
 REPO=${REPO:-/home/orangepi/ethercat-master}
@@ -70,6 +92,15 @@ RUN_LOG=/tmp/gui_e2e_run.txt
 RPT_DIR=${RPT_DIR:-/tmp}
 
 SOCK=/tmp/emaster-${DEPLOY}.sock
+# 观测口。**它存不存在取决于主站的 EMASTER_OBSERVATION**，不是这张脚本说了算——
+# 所以下面每个需要观测的臂都要真的去看一眼它在不在。
+OBS_SOCK=/tmp/emaster-${DEPLOY}-obs.sock
+
+# 界面的自检日志判定器。**看它的退出码，不是看它打印了什么。**
+GUI_EVIDENCE=${GUI_EVIDENCE:-$REPO/tools/gui_evidence.py}
+# drive 臂"走到过多少度"的门槛：按幅度的 2/3 算。摆幅是可配的（RECIP_DEG），
+# 门槛要是写死 20°，把幅度调到 10° 就会误判成"轴没动"。
+MIN_PEAK_DEG=$(awk -v d="$RECIP_DEG" 'BEGIN{printf "%.1f", d * 2 / 3}')
 
 if [ "$(id -u)" != "0" ]; then
     echo "错误：需要 root（主站要 mlockall/SCHED_FIFO，套接字由 root 创建）" >&2
@@ -106,7 +137,8 @@ case " $ARMS " in
 MOTION
             exit 1
         fi
-        echo "** 已确认要动轴（CONFIRM_MOTION=yes）：drive 臂会走一遍小幅度动作" >&2
+        echo "** 已确认要动轴（CONFIRM_MOTION=yes）：drive 臂会走高经典往返" \
+             "（全轴同时 ${RECIP_DEG}°、每趟约 ${RECIP_TRAVERSE} 秒）" >&2
         ;;
 esac
 
@@ -117,9 +149,16 @@ esac
 # 已存在的、属主不是自己的文件，root 打不开来写。只要有过一次以别的用户跑起来，
 # 之后每次 root 跑都会静默失败。所以自己要先写的临时文件一律先删后建。
 mkdir -p "$EVIDENCE_DIR"
-rm -f "$RUN_LOG" /tmp/gui_e2e.pid /tmp/gui_e2e_master.log /tmp/gui_e2e_master_*.log \
-      /tmp/gui_e2e_bridge.log /tmp/gui_e2e_gui_*.txt 2>/dev/null
+rm -f "$RUN_LOG" /tmp/gui_e2e.pid /tmp/gui_e2e.obs /tmp/gui_e2e_master.log \
+      /tmp/gui_e2e_master_*.log /tmp/gui_e2e_bridge.log /tmp/gui_e2e_gui_*.txt \
+      /tmp/gui_e2e_verdict.txt 2>/dev/null
 : > "$RUN_LOG"
+
+# 逐臂存档的那批报告：**开跑前先清掉**。收尾的汇总按 $RPT_DIR/gui_e2e_report_*_r<轮>_<臂>.json
+# 找文件，上一轮留下的同名文件会被当成"这一轮的臂"，于是表里凭空多出几行（2026-09-18
+# 那次就多出一行 obs，读表的人会以为那一臂跑了两遍）。清的是本脚本自己写的文件，
+# 文件名前缀是它的，不是别人的。
+rm -f "$RPT_DIR"/gui_e2e_report_*.json 2>/dev/null
 
 say() { echo "$@" | tee -a "$RUN_LOG"; }
 
@@ -213,8 +252,14 @@ clean() {
     rm -f /tmp/emaster-*.sock
 }
 
-start_master() {
-    setsid bash -c "echo \$\$ > /tmp/gui_e2e.pid; cd $REPO; exec $MASTER_BIN --deployment $DEPLOY" \
+start_master() {   # $1 = 要不要开观测（0/1）
+    local want_obs=${1:-0}
+    # 开关只对**起主站的这一条命令**有效，所以塞进 setsid 的那层 bash 里，不要 export
+    # 到本脚本：solo 臂要的是"和加装观测之前逐字一致"的基线，多一个环境变量就不是了。
+    local env_prefix=""
+    [ "$want_obs" = "1" ] && env_prefix="EMASTER_OBSERVATION=1 "
+    rm -f "$OBS_SOCK"
+    setsid bash -c "echo \$\$ > /tmp/gui_e2e.pid; cd $REPO; exec ${env_prefix}$MASTER_BIN --deployment $DEPLOY" \
         > /tmp/gui_e2e_master.log 2>&1 &
     # pid 文件必须真的写进去：写不进去时后面的 kill -INT 会打空，而打空的长相是
     # "主站已自行退出"——一个看起来完全正常的假象，代价是整臂的停机路径和报告。
@@ -231,6 +276,14 @@ start_master() {
         [ "$st" = "4" ] && break
         sleep 1
     done
+    # 观测套接字有没有建起来。**走文件，不走 stdout**：这个函数是用 $(...) 接的、
+    # 跑在子壳里，在里面设的变量传不出来；而往 stdout 上再挤一个字，上面那个状态值
+    # 就比较不成了（父脚本为这条栽过一次，注释就在 say_err 那儿）。
+    local obs_up=0
+    if [ "$want_obs" = "1" ]; then
+        for _ in $(seq 1 40); do [ -S "$OBS_SOCK" ] && { obs_up=1; break; }; sleep 0.25; done
+    fi
+    printf '%s' "$obs_up" > /tmp/gui_e2e.obs
     # 只往 stdout 写状态值：调用方用 $(...) 接它，多打一个字就会让比较失败
     printf '%s' "$st"
 }
@@ -289,9 +342,13 @@ start_bridge() {
 
 # ---------------------------------------------------------------------------
 # 一个臂。
-#   $1=标签 $2=起桥(0/1) $3=起界面(no|obs|drive)
+#   $1=标签 $2=起桥(0/1) $3=起界面(no|obs|drive) $4=主站要不要开观测(0/1)
+#
+# 第 4 个参数**不是**"$3 是不是 obs"：solo 臂故意关着（基线要和加装观测之前逐字
+# 一致），而 bridge 臂要开着——它是"桥在、界面不在"那根标尺，得和 obs 臂同一个
+# 主站配置，否则两臂之间差的就不只是"界面在不在"了。
 arm() {
-    local TAG=$1 USE_BRIDGE=$2 GUI_MODE=$3
+    local TAG=$1 USE_BRIDGE=$2 GUI_MODE=$3 NEED_OBS=${4:-0}
     local STORE=/tmp/gui_e2e_master_${SEQ}_${TAG}.log
     local GUILOG=/tmp/gui_e2e_gui_${SEQ}_${TAG}.txt
     SEQ=$((SEQ+1))
@@ -304,8 +361,18 @@ arm() {
     say "################ 臂 $TAG  桥=$USE_BRIDGE 界面=$GUI_MODE  $(md5sum "$MASTER_BIN" | cut -c1-8) ################"
     cd "$REPO" || return 1
 
-    local ST; ST=$(start_master)
-    say "主站 state=$ST"
+    local ST; ST=$(start_master "$NEED_OBS")
+    say "主站 state=$ST（观测开关=$NEED_OBS）"
+    if [ "$NEED_OBS" = "1" ]; then
+        if [ "$(cat /tmp/gui_e2e.obs 2>/dev/null)" = "1" ]; then
+            say "观测套接字已在：$OBS_SOCK"
+        else
+            # 不在这里 return：控制侧（A/B 的两个计数、掉出 OP）照样是有效的证据，
+            # 丢掉它反而更亏。监空半边会在收尾的判定那一步判红。
+            say "** 主站没建观测套接字 $OBS_SOCK —— EMASTER_OBSERVATION 没生效"
+            say "** 这一臂的监控半边会是空的；往下照跑，但收尾判定会判红"
+        fi
+    fi
     if [ "$ST" != "4" ]; then
         tail -5 /tmp/gui_e2e_master.log | tee -a "$RUN_LOG"
         # **也要走停机**，不能直接 return：没进 OP 不等于进程没在跑。留着它，
@@ -351,6 +418,25 @@ arm() {
         fi
         say "--- 界面自检报告 ---"
         sed -n '/---- GUI 自检 ----/,/---- 自检结束 ----/p' "$GUILOG" | tee -a "$RUN_LOG"
+
+        say "--- 这一臂的监控/控制判定 ---"
+        # **看退出码**。上一轮台架就是只把这几行打印出来，于是"观测：一帧都没收到"
+        # 躺在输出里、纸面上却算通过：打印事实的地方不负责说这算不算数。
+        if [ ! -f "$GUI_EVIDENCE" ]; then
+            say "** 判定器不在：$GUI_EVIDENCE —— 这一臂的监控半边没判，不算通过"
+            GUI_VERDICT=2
+        else
+            python3 "$GUI_EVIDENCE" --expect "$GUI_MODE" \
+                --min-peak-deg "$MIN_PEAK_DEG" "$GUILOG" \
+                > /tmp/gui_e2e_verdict.txt 2>&1
+            GUI_VERDICT=$?
+            tee -a "$RUN_LOG" < /tmp/gui_e2e_verdict.txt
+        fi
+        case "$GUI_VERDICT" in
+            0) say "界面侧判定：通过（$GUI_MODE 臂的判据全部成立）" ;;
+            1) say "** 界面侧判定：有判据不成立 —— 这一臂的监控/控制**不算通过**" ;;
+            *) say "** 界面侧判定：这份日志判不了 —— 不是「没通过」，是「没证到」" ;;
+        esac
     else
         sleep "$DUR"
     fi
@@ -385,10 +471,12 @@ for ROUND in $(seq 1 "$ROUNDS"); do
     say "======== 第 $ROUND / $ROUNDS 轮 ========"
     for A in $ARMS; do
         case "$A" in
-            solo)   arm "r${ROUND}_solo"   0 no ;;
-            bridge) arm "r${ROUND}_bridge" 1 no ;;
-            obs)    arm "r${ROUND}_obs"    1 obs ;;
-            drive)  arm "r${ROUND}_drive"  1 drive ;;
+            # solo 故意关着观测：基线要能和加装观测之前逐字对照。代价写在收尾的
+            # 「没证到的」里——"不劣于基线"因此含着观测发布本身的代价。
+            solo)   arm "r${ROUND}_solo"   0 no    0 ;;
+            bridge) arm "r${ROUND}_bridge" 1 no    1 ;;
+            obs)    arm "r${ROUND}_obs"    1 obs   1 ;;
+            drive)  arm "r${ROUND}_drive"  1 drive 1 ;;
             *)      say "未知臂 $A（跳过）" ;;
         esac
     done
@@ -492,7 +580,11 @@ say "################ 汇总（A/B）################"
     echo "   跨机器要显式 --bind 管理口 IP，是手动验证那条路。"
     echo "4. **界面被杀死的处置**：本脚本用 timeout 兜底，没验过主站在界面卡死时"
     echo "   是什么表现（命令口的 5 秒空闲超时应该会收掉连接，但没实测）。"
-    echo "5. **本脚本首次真机运行尚未发生**（写好时台架未上电）。当作「第一次运行」看。"
+    echo "5. **solo 基线的观测是关着的**（要能和加装观测之前逐字对照）。所以"
+    echo "   「不劣于基线」这句话里头含着观测发布本身的代价，没有把它单独摘出来量。"
+    echo "   要摘出来得再加一个「solo + 观测」的臂——本脚本没有这个臂。"
+    echo "6. **判定器认的是界面报告的措辞**（tools/gui_evidence.py）。界面改了那几行字，"
+    echo "   它就判不了——那时会走「判不了」（退出码 2）而不是安静判过，但两边要一起改。"
 } | tee -a "$RUN_LOG"
 
 mkdir -p "$EVIDENCE_DIR"

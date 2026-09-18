@@ -94,6 +94,12 @@ class MainWindow(QMainWindow):
         self.session = None
         self.last_obs = None
         self.last_snapshot = None
+        # 两条通道各自最后一句"连接怎么了"。**这是为了收尾报告能说出为什么没收到帧**：
+        # 台架上观测口曾经整场一帧都没有，而日志里只有一句"观测：一帧都没收到"——
+        # 没有理由。查这一条要从界面翻到桥、再翻到主站的启动环境变量，代价远大于
+        # 在这里存一个字符串。
+        self.last_obs_link = None
+        self.last_cmd_link = None
 
         self.setWindowTitle(f"EtherCAT 主站监控 · {self.obs_endpoint.display}")
         self.resize(1180, 720)
@@ -310,6 +316,7 @@ class MainWindow(QMainWindow):
         self.poller.start()
 
     def _on_obs_link(self, payload):
+        self.last_obs_link = payload["text"]
         self.obs_label.setText(payload["text"])
         self.obs_label.setStyleSheet("color: #0a0;" if payload["ok"] else "color: #a00;")
         self.health_labels["link"].setText(payload["text"])
@@ -431,6 +438,7 @@ class MainWindow(QMainWindow):
         self._log("命令：已释放")
 
     def _on_cmd_link(self, payload):
+        self.last_cmd_link = payload["text"]
         self.cmd_label.setText(payload["text"])
         self.cmd_label.setStyleSheet("color: #0a0;" if payload["ok"] else "color: #a00;")
 
@@ -564,7 +572,14 @@ class MainWindow(QMainWindow):
         print(f"命令端点：{self.cmd_endpoint.display if self.cmd_endpoint else '（未给，不会接管）'}")
         print(f"接管中：{'是' if self.session is not None else '否'}")
         if self.last_obs is None:
-            print("观测：一帧都没收到")
+            # 带上"为什么"。只报"一帧都没收到"的话，台架上就得到桥和主站两头去翻，
+            # 而最常见的原因是上游套接字根本不存在（主站没开观测开关）——那句话
+            # 就在下面这一行里。
+            if self.last_obs_link is None:
+                print("观测：一帧都没收到，取数线程也没报过状态"
+                      "（它可能根本没起来）")
+            else:
+                print(f"观测：一帧都没收到；界面这边最后一句是「{self.last_obs_link}」")
         else:
             payload = self.last_obs
             last = payload["frames"][-1]
@@ -575,7 +590,12 @@ class MainWindow(QMainWindow):
                   f"帧级标志={emaster_client.frame_flags_text(last['flags'])}")
         self._report_charts()
         if self.last_snapshot is None:
-            print("轴表：没有快照（这次自检从头到尾没接管过）")
+            if self.cmd_endpoint is None:
+                print("轴表：没有快照（这次自检从头到尾没接管过）")
+            elif self.last_cmd_link is None:
+                print("轴表：没有快照，命令线程也没报过状态（它可能根本没起来）")
+            else:
+                print(f"轴表：没有快照；命令这边最后一句是「{self.last_cmd_link}」")
         else:
             snapshot = self.last_snapshot
             print(f"轴表：快照来自"

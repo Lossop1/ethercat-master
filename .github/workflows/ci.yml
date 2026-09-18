@@ -30,6 +30,17 @@ jobs:
       - name: 校验 SOEM 调用点
         run: bash scripts/checks/soem_call_sites.sh
 
+      # 两条纯 Python 的离线检查，都不需要硬件、不需要 PyQt5，所以在 CI 上跑得动。
+      # 它们钉住的是两件"出错了也不会喊"的事：界面自检日志的判定（上一轮台架监控
+      # 半边整场零帧，而脚本只把那句话打印出来就算通过），以及绑核缓存（失效时
+      # 程序照样跑，只是每秒多重绑 122 次、日志刷到 657 KB）。
+      # 放在构建之前：都是纯文本/纯 Python，几秒钟的事，应当快速失败。
+      - name: 界面证据判定（离线）
+        run: python3 scripts/checks/gui_evidence_check.py
+
+      - name: 绑核缓存（离线）
+        run: python3 scripts/checks/rt_affinity_check.py
+
       - name: 配置
         run: cmake --preset linux-debug
 

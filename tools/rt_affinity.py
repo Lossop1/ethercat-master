@@ -162,13 +162,24 @@ class _ThreadState(threading.local):
     announced = False
 
 
+# **必须是这一个实例，不能每次调用新建一个。** threading.local 的线程隔离是**按实例**
+# 分的：新实例有自己独立的每线程存储，读到的永远是类属性那份初值。所以
+# `pin_current_thread()` 里写成 `state = _ThreadState()` 的话，缓存一眼都没生效——
+# 每次调用 applied 都是 None，于是每次都真做一次 sched_setaffinity、并且每次
+# 都打一行"已绑核"。
+#
+# 2026-09-18 台架上量到过：桥的日志里这句话一秒钟 122 行、单文件 657 KB；而这里
+# 省掉那次系统调用正是 _ThreadState 存在的理由（桥每轮 select 都调 reconcile）。
+_STATE = _ThreadState()
+
+
 def pin_current_thread(decision, force=False):
     """把**当前线程**绑到主站用不着的核上。返回真的绑上的集合，或 None。
 
     **每个会自己醒来的线程各叫一次**，且要在它开始干活之前叫：已经跑起来的
     线程不会因为别的线程改了掩码而跟着变（模块开头那段实测）。
     """
-    state = _ThreadState()
+    state = _STATE
     target = decision.get(force=force)
     if target is None:
         return None

@@ -1,0 +1,12 @@
+QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+This plugin does not support propagateSizeHints()
+---- GUI 自检 ----
+界面：最小宽度 936 px，窗口 1180x866
+观测端点：tcp:127.0.0.1:5002
+命令端点：（未给，不会接管）
+接管中：否
+观测：收到 59976 帧，跳号 0 处，估算丢失 0 帧，重新对齐 0 次
+观测：publish_index=67890 cycle=67890 wkc=5 帧距=1.000ms 帧级标志=正常
+曲线：5 根轴，每根 3 条曲线
+轴表：没有快照（这次自检从头到尾没接管过）
+---- 自检结束 ----
