@@ -224,7 +224,9 @@
 
 结构示例：
 
-报告顶层是 `schema_version: 5`（少了故障字段的报告是 4 或更早，见 2.2）。
+报告顶层是 `schema_version: 7`（少了故障字段的报告是 4 或更早，见 2.2）。**版本 6 是没有的**——
+那号被一批游离提交占去了（它们发的报告带 `tracking_error` 遥测，当前 main 复现不出来），
+所以本仓库从 5 直接跳到 7，免得同一版本号下并存两种形状。
 
 ```json
 {
@@ -451,6 +453,10 @@ for i, axis in enumerate(report['axes']):
    全是干净的（15/15、0、0、0、false），所以**"总线有问题"不是一个可以拿来填空的解释**。
 6. **AL 侧有没有异常**：`shutdown_al` / `shutdown_al_entry` / `shutdown_al_pre_stop`
    三处快照。P12.17 那次五轴一律 `state=8 / status_code=0`——AL 侧一个错都没有。
+   **这三处都拍在"主站叫它们回 INIT 之前"**，所以拿它们回答不了"主站退出之后驱动器停在
+   哪一态"；那个问题看第四处 `shutdown_al_exit`（已经广播过全体回 INIT、还没关总线时
+   逐站读的）。`state` 是 AL 状态寄存器原值：8=OP、2=PRE-OP、20（0x14）=SAFE-OP+错误位。
+   **0 是"没读回来"，不是 INIT**——一根在场的轴不会是 0。
 7. **是谁让它停的**：`result.stop_requested` / `result.stop_source`。
 
 ---
@@ -502,6 +508,10 @@ for i, axis in enumerate(report['axes']):
 | final_drive_diagnostic.cia402_error_code | 603Fh | uint16 | — | SDO（停机诊断） |
 | final_drive_diagnostic.error_register | 1001h | uint8 | — | SDO（停机诊断） |
 | final_drive_diagnostic.extended_servo_error_code / .servo_error_code | 设备遥测字典里那两个扩展错误码 | uint32 | — | SDO（停机诊断） |
+| shutdown_al / .state / .status_code | AL 状态寄存器 / AL 状态码 | uint16 | — | 报告（停机流程中三次逐站读） |
+| shutdown_al_entry | 同上 | uint16 | — | 报告（周期回路刚退出时） |
+| shutdown_al_pre_stop | 同上 | uint16 | — | 报告（发第一个安全停机帧之前） |
+| shutdown_al_exit | 同上 | uint16 | — | 报告（已请求全体回 INIT、未关总线时；答"主站退出后驱动器在哪一态"） |
 | result.stop_requested | —（主站侧） | bool | — | 报告 |
 | result.stop_source | —（主站侧） | uint | — | 报告 |
 | report_archive_keep | —（部署配置） | uint32 | 份 | 报告 |

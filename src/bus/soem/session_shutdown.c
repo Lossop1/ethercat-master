@@ -1028,6 +1028,69 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
     emaster_soem_drain_errors(session);
     session->report->last_dc_time_ns = session->context.DCtime;
     session->report->restore_init_succeeded = emaster_soem_restore_init(&session->context);
+    /*
+     * 第四个 AL 坐标：已经请求过"全体回 INIT"之后、关总线之前逐站再读一次。
+     *
+     * 前三个坐标（shutdown_al / _entry / _pre_stop）**都拍在"叫它们回 INIT 之前"**，
+     * 所以"主站退出之后驱动器停在哪一态"在这份报告里原本没有任何读数：2026-09-28
+     * 用户连着两轮在台架上看到"电机并没有退出 OP"，报告既证实不了也证伪不了。
+     *
+     * 还要说清 `restore_init_succeeded` 为什么不够：它是**地址 0 的广播读**，而广播读
+     * 回读的是**环上最后一站**的值（SOEM 自己那句注释也只敢说"假定各站同态"）。逐站
+     * 读这一次，才分得出"八根都下去了"和"只下去了一部分"。
+     *
+     * 这一步只读不写：读数不会改变任何从站的状态。
+     */
+    ecx_readstate(&session->context);
+    {
+        size_t exit_in_op = 0U;
+        size_t exit_unreadable = 0U;
+
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+        {
+            const ec_slavet *slave = &session->context.slavelist[
+                emaster_soem_session_axis_slave(session, axis_index)];
+
+            session->axes[axis_index].shutdown_exit_al_state = slave->state;
+            session->axes[axis_index].shutdown_exit_al_status_code = slave->ALstatuscode;
+            if (slave->state == 0U)
+            {
+                ++exit_unreadable;
+            }
+            else if (slave->state == 8U)
+            {
+                ++exit_in_op;
+            }
+        }
+        printf("[SHUTDOWN] 关总线前(已请求回INIT) 汇总: 仍在OP=%zu/%zu", exit_in_op,
+               session->plan->axis_count);
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+        {
+            const ec_slavet *slave = &session->context.slavelist[
+                emaster_soem_session_axis_slave(session, axis_index)];
+
+            if (slave->state != 0U && slave->state != 8U)
+            {
+                printf("；不在OP: 轴%zu(state=%u,code=0x%04X)", axis_index + 1U,
+                       (unsigned int)slave->state, (unsigned int)slave->ALstatuscode);
+            }
+        }
+        if (exit_unreadable > 0U)
+        {
+            printf("；AL没读回来(state=0):");
+            for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+            {
+                const ec_slavet *slave = &session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis_index)];
+
+                if (slave->state == 0U)
+                {
+                    printf(" 轴%zu", axis_index + 1U);
+                }
+            }
+        }
+        printf("\n");
+    }
     if (!session->report->restore_init_succeeded &&
         session->report->status == EMASTER_CONTROL_SESSION_OK) {
         session->report->status = EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED;

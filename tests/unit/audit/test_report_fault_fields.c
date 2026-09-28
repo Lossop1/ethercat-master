@@ -9,7 +9,8 @@
  * 邮箱错误环为空、五轴 AL 一律 state 8 / code 0。要接着问"哪根轴在第几拍开始不对、
  * 603F 里有没有东西"，报告里当时一样都没有。
  *
- * 本测试钉住的就是那一轮补上的那几列（schema_version 5）：
+ * 本测试钉住的就是那一轮补上的那几列（schema_version 5），外加 P12.46 补的
+ * 第四个 AL 坐标 shutdown_al_exit（schema_version 7，跳过 6 的理由见 report_sections.c）：
  *
  *   1. 逐轴判故障的坐标：recorded / exchange / status_word / reason / isolated
  *      全部出现在该轴对象里，值是记下的那一个；
@@ -210,10 +211,43 @@ int main(int argc, char **argv)
               "轴 3 的 603F 真读到 0x0000：read=true 且值照印 0x0000");
     }
 
+    /* ── 5. 第四个 AL 坐标：主站退出之后驱动器停在哪一态 ───────────────── */
+    printf("关机坐标：逐站读，不是拿一个值照抄给全体\n");
+    {
+        static const struct
+        {
+            unsigned int position;
+            const char *expected;
+            const char *what;
+        } cases[] = {
+            {1U, "\"shutdown_al_exit\":{\"state\":2,\"status_code\":0}",
+             "轴 1 退到了 PRE-OP = 确实离开了 OP"},
+            {2U, "\"shutdown_al_exit\":{\"state\":20,\"status_code\":26}",
+             "轴 2 停在 SAFE-OP 且带 0x001A = 没退干净"},
+            {3U, "\"shutdown_al_exit\":{\"state\":8,\"status_code\":0}",
+             "轴 3 还在 OP = 广播没叫动它"},
+        };
+        size_t case_index;
+
+        for (case_index = 0U; case_index < sizeof(cases) / sizeof(cases[0]);
+             ++case_index)
+        {
+            if (!axis_section(text, cases[case_index].position, section, sizeof(section)))
+            {
+                check(false, "找得到那一轴的对象分界（第四个 AL 坐标）");
+                continue;
+            }
+            check(strstr(section, cases[case_index].expected) != NULL,
+                  cases[case_index].what);
+        }
+    }
+
     /* ── 停机来源与归档保留份数 ────────────────────────────────────────── */
     printf("结果级字段\n");
-    check(strstr(text, "\"schema_version\":5") != NULL,
-          "schema_version 是 5（加了字段就要升版本）");
+    /* 是 7 而不是 6：6 早被那批游离提交占用（带 tracking_error 的那种形状），
+     * 同一版本号下并存两种形状正是这次要避开的。见 report_sections.c 里那段注释。 */
+    check(strstr(text, "\"schema_version\":7") != NULL,
+          "schema_version 是 7（加了字段就要升版本；6 被游离提交占着）");
     check(strstr(text, "\"stop_requested\":true") != NULL,
           "result 里有 stop_requested");
     check(strstr(text, "\"stop_source\":2") != NULL,

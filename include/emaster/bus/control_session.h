@@ -368,6 +368,14 @@ typedef struct
     uint16_t shutdown_entry_al_status_code;
     uint16_t shutdown_pre_stop_al_state;
     uint16_t shutdown_pre_stop_al_status_code;
+    /*
+     * 第四个坐标：已经广播过"全体回 INIT"之后、关总线之前的那一次读数。前三个坐标
+     * 都拍在"主站叫它们回 INIT 之前"，所以它们答不了"主站退出后驱动器在哪一态"——
+     * 2026-09-28 用户连着两轮在台架上看到"电机没有退出 OP"，而报告里没有任何一条
+     * 读数能证实或证伪。这一条就是那个读数。
+     */
+    uint16_t shutdown_exit_al_state;
+    uint16_t shutdown_exit_al_status_code;
 } emaster_control_session_axis_result_t;
 
 /* 周期现场环的容量。64 条约等于 64 ms，够覆盖一次掉出 OP 前后的窗口。 */

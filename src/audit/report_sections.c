@@ -460,6 +460,14 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->shutdown_pre_stop_al_state,
         (unsigned int)axis->shutdown_pre_stop_al_status_code) >= 0);
     /*
+     * 第四个坐标：已经请求过"全体回 INIT"之后、关总线之前的那一次逐站读数。上面三个
+     * 都在"叫它们回 INIT 之前"，所以只有这一条能回答"主站退出后驱动器在哪一态"。
+     */
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"shutdown_al_exit\":{\"state\":%u,\"status_code\":%u}",
+        (unsigned int)axis->shutdown_exit_al_state,
+        (unsigned int)axis->shutdown_exit_al_status_code) >= 0);
+    /*
      * 首个 WKC 不符当下的逐轴 AL 快照，是全报告中唯一一次"帧已经不对、而驱动器
      * 尚未被任何停机流程碰过"的读数：轴若此刻仍在 OP（8），说明帧异常在前；若已到
      * SAFE-OP（20 / 0x001A），说明驱动器侧监督在前。
@@ -1098,8 +1106,19 @@ bool emaster_run_report_write(FILE *stream,
      * 不对"，实际没走那条路——环是**每会话一条**、只留最后 64 拍，且入环点在逐轴解码
      * 之前，读到的状态字还是上一拍的。替代方案是每轴一条全会话有效的首次越界记录，
      * 即上面的 fault_timeline。
+     *
+     * 版本 7：每轴新增 shutdown_al_exit——已经请求过"全体回 INIT"之后、关总线之前的
+     * 那一次逐站 AL 读数。前三个停机 AL 坐标（shutdown_al / _entry / _pre_stop）都拍在
+     * "叫它们回 INIT 之前"，所以版本 5 的报告答不了"主站退出之后驱动器停在哪一态"；
+     * 2026-09-28 用户连着两轮在台架上看到"电机没有退出 OP"，那两份报告既证实不了也
+     * 证伪不了，就是因为少了这一列（layering-plan P12.46）。
+     *
+     * **为什么跳过 6**：版本 6 已经被占用了——上面说的那批游离提交（957e9cd 等）产出的
+     * 报告就是 6，形状是"带 tracking_error 遥测"，当前 main 复现不出来，docs/requirements/
+     * capability-baseline.md §4.6 也是这么记的。要是这次也发 6，读者拿到一份 6 就得先猜
+     * 它是哪一种——这正是紧邻上文刚说过要避免的事。所以这里迈过 6 直接发 7。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":5,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":7,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));

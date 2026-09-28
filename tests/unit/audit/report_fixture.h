@@ -161,6 +161,23 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->axis_results[2].runtime_error_code_read = true;
     fixture->axis_results[2].runtime_error_code_age_ns = UINT64_C(5000000);
 
+    /*
+     * 第四个 AL 坐标（schema_version 7）："已经请求过全体回 INIT、还没关总线"的那次
+     * 逐站读数。三根轴特意给成三种不同的样子，好把"照抄一个值给全体"和"逐站读"分开：
+     *
+     *   轴 1 = 2（PRE-OP）      —— 确实退出了 OP；
+     *   轴 2 = 20 / 0x001A      —— 退到了 SAFE-OP 且带错误位，正是用户看到的那种"没退干净"；
+     *   轴 3 = 8（OP）          —— 广播叫不动它，还在 OP。
+     *
+     * 全 0 是"没读过"，不是合法读数之一，所以不能拿一根不赋值的轴来当对照。
+     */
+    fixture->axis_results[0].shutdown_exit_al_state = UINT16_C(2);
+    fixture->axis_results[0].shutdown_exit_al_status_code = UINT16_C(0);
+    fixture->axis_results[1].shutdown_exit_al_state = UINT16_C(20);
+    fixture->axis_results[1].shutdown_exit_al_status_code = UINT16_C(0x001A);
+    fixture->axis_results[2].shutdown_exit_al_state = UINT16_C(8);
+    fixture->axis_results[2].shutdown_exit_al_status_code = UINT16_C(0);
+
     fixture->report.axis_count = FIXTURE_AXIS_COUNT;
     fixture->report.axes = fixture->axis_results;
     fixture->report.status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;
