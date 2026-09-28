@@ -224,10 +224,24 @@
 
 结构示例：
 
+报告顶层是 `schema_version: 5`（少了故障字段的报告是 4 或更早，见 2.2）。
+
 ```json
 {
   "axes": [
     {
+      "fault": {"recorded": false, "status": 0, "isolated": false,
+                "reason": 0, "exchange": 0, "status_word": "0x0000"},
+      "fault_timeline": {
+        "enable_lost":    {"seen": false, "exchange": 0, "status_word": "0x0000"},
+        "fault_bit":      {"seen": false, "exchange": 0, "status_word": "0x0000"},
+        "warning":        {"seen": false, "exchange": 0, "status_word": "0x0000"},
+        "internal_limit": {"seen": false, "exchange": 0, "status_word": "0x0000"}
+      },
+      "final_drive_diagnostic": {"read_succeeded": true, "cia402_error_code": "0x0000",
+                                 "error_register": "0x00",
+                                 "extended_servo_error_code": "0x00000000",
+                                 "servo_error_code": "0x00000000"},
       "runtime": {
         "actual_current": -29,
         "dc_link_voltage": 48261,
@@ -246,7 +260,10 @@
         "current_loop_ki": 0,
         "current_loop_kd": 0,
         "slow_telemetry_read": true,
-        "slow_telemetry_age_ns": 182000000
+        "slow_telemetry_age_ns": 182000000,
+        "runtime_error_code_read": true,
+        "runtime_error_code": "0x2310",
+        "runtime_error_code_age_ns": 182000000
       }
     }
   ]
@@ -283,13 +300,86 @@
 > **在停机时刻补读一轮是不可行的**：一轮 36 次邮箱往返约 72–122 ms，而停机序言的预算
 > 只有 50 拍 = 50 ms（P11.9）。
 
+#### 2.2 运行期 603F：与慢速遥测同一条约定，但标志是**字段级**的（P12.17）
+
+`runtime_error_code` 是**会话运行期间**从驱动器读回的 603F（错误码）。它与后面 2.3 的
+`final_drive_diagnostic` 不是一回事：后者是停机诊断那一刻的值，会在停机过程中被覆盖，
+所以"运行期有没有报过错"只能看这一列。
+
+和温度一样，它有三个字段一组，**不能只看那个数字**：
+
+| 字段 | 含义 |
+| --- | --- |
+| `runtime_error_code_read` | **这一轴整场读到过 603F 没有**。`false` ⇒ 下一行的 `0x0000` **不是**驱动器说"没事"，是没读到 |
+| `runtime_error_code` | 读到的值，印成**带引号的十六进制串**（`"0x2310"`，不是数字） |
+| `runtime_error_code_age_ns` | 最后一次读到的时刻距**报告回填**多久（ns） |
+
+**为什么标志要单独一套**：温度读到、而错误码那一轮 SDO 超时是常事。共用一个轴级标志
+的话，"从没读到"会被印成 `0x0000`——看着像"驱动器说没事"，而它恰恰是排查故障时最想看的
+那一列。`scripts/analysis/extract_report.py` 在这一节认不到标志就印「—」。
+
+**为什么这一列重要**：2026-09-18 那次会话中止（P12.17），五根轴的 AL 侧一律
+`state=8 / status_code=0`、总线全干净（WKC 15/15、未回帧 0、邮箱错误 0），只有 CiA402 侧
+进了 Fault——那种情况下，"603F 里到底有没有东西"是唯一能指的线索。
+
+#### 2.3 每轴的故障坐标与"首次越界"时间线（P12.17）
+
+| 字段 | 含义 |
+| --- | --- |
+| `fault.recorded` | **这一轴被判过故障没有**。为 `false` 时下面几个数无意义（**不是**0 号交换） |
+| `fault.status` / `.isolated` / `.reason` | 判故障当时的轴状态、是否已隔离、原因枚举 |
+| `fault.exchange` / `.status_word` | 判故障那一刻的交换号与 6041 原值 |
+| `fault_timeline.enable_lost` | **这一轴第一次不在 Operation Enabled** 的交换号与当时状态字 |
+| `fault_timeline.fault_bit` | 第一次置起 CiA402 故障位 |
+| `fault_timeline.warning` / `.internal_limit` | 第一次置起警告位 / 内部限幅位 |
+
+四项各带 `seen`，因为"没出现过"与"出现在第 0 拍"必须分得开。`enable_lost` 以"这一轴已经
+进过一次 Operation Enabled"为前提——使能阶段本来就不是 Operation Enabled，不设这个前提
+的话每根轴的第 0 拍都会命中。
+
+> **`enable_lost` 会对着停机响，读的时候要连着交换号看**：正常停机时每根轴也都要离开
+> Operation Enabled（停机序言），所以**健康会话里它一样是 `seen=true`**，`exchange` 就是
+> 那根轴离开使能的时刻。判"哪根轴先坏的"要比 **交换号**：全场一起在停机那一刻变的，是
+> 被停下来的那些；早得多的那个（几个交换号甚至几千拍之前）才是先出问题的。要一个"只有
+> 故障才会响"的信号，用 `fault_bit`。
+
+**这是"哪根轴在第几拍开始不对"的唯一来源**。报告里另外两处都答不了：现场环
+（`cycle_trace`）是**每会话一条**记录、只留最后 64 拍，而且入环点在逐轴解码之前（环里的
+状态字还是上一拍的）；`first_runtime_failure` 只留全局第一次，且不说是哪一轴的第几个信号。
+
+`final_drive_diagnostic` 是**停机那一刻**读回的驱动器诊断（`cia402_error_code` /
+`error_register` / `extended_servo_error_code` / `servo_error_code`），形状与 SAFE-OP 阶
+段那一份 `safeop_mode_readback` 相同，好让分析脚本共用一套正则。
+
+> **读报告时的一个坑**：会话中止（例如驱动器进故障）时，报告末尾那一大段
+> `post_cycle_diagnostic`（`0x200E:*` 等）会**逐条 `succeeded=false`**——那是会话已经
+> 停了、诊断根本没跑起来，**不是"驱动器不应答"**。把它们读成驱动器故障会走错方向。
+
+#### 2.4 报告顶层的停机与归档字段
+
+| 字段 | 含义 |
+| --- | --- |
+| `result.stop_requested` | 这一轮被停下来了没有。全报告里只有安全门一个写点 |
+| `result.stop_source` | 谁停的：`0` = 没停，`1` = 应用侧回调（SIGINT 等），`2` = **命令口**（`stop` / `shutdown`） |
+| `report_archive_keep` | 这一轮实际生效的归档保留份数（削旧会真的删文件，删完从磁盘上看不出来曾经有过） |
+
+`stop_source` 是命令口停机与 SIGINT 之间**唯一的差别**——两条路走的是同一段停机代码：
+同一个 `EMASTER_SAFETY_REASON_STOP_REQUESTED` 原因位、同样把目标置成安全停机、同样进
+`STOPPING`、同样写 `report->stop_requested`（P12.1 修好之前，命令口那条路是个空操作，
+见协议文档 §4.4）。
+
 ### 3. Python 分析示例
 
 ```python
 import json
+import sys
 
-# 读取报告
-with open('runtime/reports/orangepi-dual-bench-latest.json') as f:
+# 报告路径从命令行收。把路径写死有过一次实害（P12.30）：工具硬编码了另一份报告，
+# 传进去的路径被无声忽略，"读某份报告"拿到的其实是另一份的数字。
+if len(sys.argv) < 2:
+    raise SystemExit("用法：python3 <本脚本> <报告.json>")
+
+with open(sys.argv[1]) as f:
     report = json.load(f)
 
 for i, axis in enumerate(report['axes']):
@@ -345,6 +435,24 @@ for i, axis in enumerate(report['axes']):
 2. 电压快速上升：再生制动能量无法消耗
 3. 电压波动：电源容量不足或电缆压降
 
+### 5. 某根轴进了 CiA402 Fault（例如 P12.17 那次会话中止）
+
+按这个顺序读，**每一步都先看标志再看数字**：
+
+1. **哪根轴**、**哪一拍**开始的：`fault_timeline.fault_bit.exchange`（第一次置起故障位，
+   只有故障才响）；`enable_lost.exchange`（第一次不在 Operation Enabled）要**比交换号**看，
+   因为正常停机也会让它响（见 2.3 的提示）。两个交换号相同 ⇒ 这一轴是直接掉进故障的。
+2. **当时的状态字**：`fault_timeline.*.status_word` 是 6041 的原值，别用别的字段换算。
+3. **驱动器自己报了什么**：`runtime_error_code_read`（先看它！）⇒ `runtime_error_code`。
+   整场没读到就是没读到，那不是 0x0000。
+4. **停机那一刻的驱动器诊断**：`final_drive_diagnostic`（603F / 1001h / 扩展码）。
+5. **总线是不是干净的**：`expected_wkc` vs `actual_wkc`、`wkc_error_count`、
+   `wkc_no_frame_count`、`soem_errors.count`、`cycle_deadline_missed`。P12.17 那次这几项
+   全是干净的（15/15、0、0、0、false），所以**"总线有问题"不是一个可以拿来填空的解释**。
+6. **AL 侧有没有异常**：`shutdown_al` / `shutdown_al_entry` / `shutdown_al_pre_stop`
+   三处快照。P12.17 那次五轴一律 `state=8 / status_code=0`——AL 侧一个错都没有。
+7. **是谁让它停的**：`result.stop_requested` / `result.stop_source`。
+
 ---
 
 ## 性能优化建议
@@ -386,6 +494,17 @@ for i, axis in enumerate(report['axes']):
 | motor_temperature | 200Bh:02h | int16 | 0.1°C | SDO |
 | slow_telemetry_read | —（主站侧标志） | bool | — | 报告 |
 | slow_telemetry_age_ns | —（主站侧计时） | uint64 | ns | 报告 |
+| runtime_error_code | 603Fh | uint16 | — | SDO（运行期） |
+| runtime_error_code_read | —（主站侧标志） | bool | — | 报告 |
+| runtime_error_code_age_ns | —（主站侧计时） | uint64 | ns | 报告 |
+| fault.* | —（主站侧判定） | — | — | 报告 |
+| fault_timeline.* | —（主站侧判定） | — | — | 报告 |
+| final_drive_diagnostic.cia402_error_code | 603Fh | uint16 | — | SDO（停机诊断） |
+| final_drive_diagnostic.error_register | 1001h | uint8 | — | SDO（停机诊断） |
+| final_drive_diagnostic.extended_servo_error_code / .servo_error_code | 设备遥测字典里那两个扩展错误码 | uint32 | — | SDO（停机诊断） |
+| result.stop_requested | —（主站侧） | bool | — | 报告 |
+| result.stop_source | —（主站侧） | uint | — | 报告 |
+| report_archive_keep | —（部署配置） | uint32 | 份 | 报告 |
 | actual_velocity (SDO) | 200Bh:08h | int32 | rpm | SDO |
 | target_velocity (SDO) | 200Bh:09h | int32 | rpm | SDO |
 | velocity_loop_kp | 2008h:01h | uint16 | 0.01 | SDO (SAFE-OP) |

@@ -20,11 +20,19 @@
  *   1. 读到过 → 年龄 = now - last_read_ns；
  *   2. **被截断的那一轮**（valid=false、last_read_ns 是上一轮留下的）→ 仍然有年龄。
  *      这一条是判别力的关键：实现退回去按 valid 判，它必红；
- *   3. 轴号越界、axis_count=0（观测线程一次都没发布过）→ 没有年龄；
- *   4. 时钟异常（now 比 last_read 小）→ 年龄取 0，不返回负数、不返回"没有"；
- *   5. 年龄的输出参数可以为 NULL（只要"有没有"这个答案）；
- *   6. 时间戳要真的穿过 seqlock 发布/读取那条路（发布是按字段拷贝 + axes 整块
+ *   3. 603F 的字段级年龄（见下）；
+ *   4. 轴号越界、axis_count=0（观测线程一次都没发布过）→ 没有年龄；
+ *   5. 时钟异常（now 比 last_read 小）→ 年龄取 0，不返回负数、不返回"没有"；
+ *   6. 年龄的输出参数可以为 NULL（只要"有没有"这个答案）；
+ *   7. 时间戳要真的穿过 seqlock 发布/读取那条路（发布是按字段拷贝 + axes 整块
  *      memcpy 的，将来有人改成逐字段拷贝而漏掉新字段，这里会红）。
+ *
+ * 第 3 节问的是**另一个**函数：603F（错误码）那套**字段级**的年龄（P12.17 的补充仪表）。
+ * 第 4~7 节里凡带"603F"字样的断言也在问它。它与轴级那套不是重复：
+ *   - 温度读到了、错误码这一轮超时，是常事。共用轴级标志会把快照里残留的 0x0000
+ *     当成"运行期读到的 0x0000"印出去——正是 P11.8 那个形状换了根轴。
+ *   - 所以这里同时钉住："读到 0x0000"算读到了（驱动器不报错就是报 0），
+ *     "轴级读到了但错误码这轮没读到"必须仍然答"没有"。
  *
  * 编译与运行（本机 MinGW 与 Pi 都适用；不依赖 SOEM、不访问总线）：
  *   gcc -std=c11 -O2 -Iinclude -o tmp/test_slow_age \
@@ -59,6 +67,14 @@ static void set_axis(emaster_observation_slow_state_t *state, uint32_t index, bo
     state->axes[index].valid = valid;
     state->axes[index].last_read_ns = last_read_ns;
     state->axes[index].mosfet_temperature = 420 + (int32_t)index;
+}
+
+/* 603F 的时间戳与轴级时间戳分开给：两者独立保留，正是要钉住的那条性质。 */
+static void set_error_code(emaster_observation_slow_state_t *state, uint32_t index,
+                           uint16_t code, uint64_t last_read_ns)
+{
+    state->axes[index].error_code = code;
+    state->axes[index].error_code_last_read_ns = last_read_ns;
 }
 
 int main(void)
@@ -104,7 +120,35 @@ int main(void)
         check(age == UINT64_C(410000000), "年龄来自最后一次读到的那一轮，不是最后一轮");
     }
 
-    /* ── 3. 越界与没发布过 ─────────────────────────────────────────────── */
+    /* ── 3. 603F 的字段级年龄 ─────────────────────────────────────────── */
+    printf("603F 的字段级年龄\n");
+    /* 轴 0：读到过 0x2310。轴 1：读到过 0x0000——"读到 0"也是读到了。 */
+    set_error_code(&state, 0U, UINT16_C(0x2310), now - UINT64_C(90000000));
+    set_error_code(&state, 1U, UINT16_C(0x0000), now - UINT64_C(30000000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_error_code_age(&state, 0U, now, &age),
+          "读到过 603F 的轴应当有错误码年龄");
+    check(age == UINT64_C(90000000), "错误码年龄 = now - 读到它的时刻");
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_error_code_age(&state, 1U, now, &age),
+          "**读到 0x0000 也算读到了**——驱动器不报错就是报 0，不许当成'没读到'");
+    check(age == UINT64_C(30000000), "读到 0x0000 时年龄照给");
+
+    /*
+     * 这条是整节的关键：轴级时间戳有值（温度读到了），603F 的时间戳为 0（这一轮的
+     * 错误码读超时）。轴级 age 答"有"，字段级 age 必须答"没有"——共用轴级标志的
+     * 实现会在这里红，那正是把残留的 0x0000 印成真读数的那条路。
+     */
+    set_axis(&state, 2U, false, now - UINT64_C(510000000));
+    set_error_code(&state, 2U, UINT16_C(0x0000), UINT64_C(0));
+    check(emaster_observation_slow_axis_age(&state, 2U, now, NULL),
+          "这一轴的温度读到过（轴级时间戳有值）");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_error_code_age(&state, 2U, now, &age),
+          "但 603F 从没读到过——字段级必须答'没有'，不许拿轴级时间戳顶替");
+    check(age == AGE_SENTINEL, "答'没有'时不得写输出参数");
+
+    /* ── 4. 越界与没发布过 ─────────────────────────────────────────────── */
     printf("越界与没发布过\n");
     age = AGE_SENTINEL;
     check(!emaster_observation_slow_axis_age(&state, 5U, now, &age),
@@ -115,21 +159,36 @@ int main(void)
     emaster_observation_slow_state_t empty = {0};
     check(!emaster_observation_slow_axis_age(&empty, 0U, now, &age),
           "axis_count=0（观测线程一次都没发布过）应当没有年龄");
+    check(!emaster_observation_slow_axis_error_code_age(&empty, 0U, now, &age),
+          "603F：axis_count=0 时同样没有年龄");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_error_code_age(&state, 5U, now, &age) &&
+              !emaster_observation_slow_axis_error_code_age(
+                  &state, EMASTER_OBSERVATION_MAX_AXES, now, &age),
+          "603F：轴号越界（含 >= 容量上限）应当没有年龄，且不得越界读数组");
+    check(age == AGE_SENTINEL, "603F 越界时不得写输出参数");
 
-    /* ── 4. 时钟异常不给负数 ───────────────────────────────────────────── */
+    /* ── 5. 时钟异常不给负数 ───────────────────────────────────────────── */
     printf("时钟异常\n");
     set_axis(&state, 1U, true, now + UINT64_C(5000));
     age = AGE_SENTINEL;
     check(emaster_observation_slow_axis_age(&state, 1U, now, &age),
           "now 比 last_read 小时，读数仍然是读到的");
     check(age == UINT64_C(0), "时钟异常时年龄取 0，不给负数");
+    set_error_code(&state, 1U, UINT16_C(0x2310), now + UINT64_C(5000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_error_code_age(&state, 1U, now, &age) &&
+              age == UINT64_C(0),
+          "603F：时钟异常时同样取 0，不给负数");
 
-    /* ── 5. 只要答案不要年龄 ───────────────────────────────────────────── */
+    /* ── 6. 只要答案不要年龄 ───────────────────────────────────────────── */
     printf("输出参数可以为空\n");
     check(emaster_observation_slow_axis_age(&state, 0U, now, NULL),
           "不关心年龄时也应当能问'有没有'");
+    check(emaster_observation_slow_axis_error_code_age(&state, 0U, now, NULL),
+          "603F：不关心年龄时也应当能问'有没有'");
 
-    /* ── 6. 时间戳要真的穿过发布/读取 ─────────────────────────────────── */
+    /* ── 7. 时间戳要真的穿过发布/读取 ─────────────────────────────────── */
     printf("时间戳穿过 seqlock\n");
     static emaster_observation_slow_t snapshot; /* 静态：这块近 1 KiB，别压在栈上 */
     emaster_observation_slow_state_t published;
@@ -143,10 +202,19 @@ int main(void)
     check(emaster_observation_slow_read(&snapshot, &readback), "刚发布的快照应当读得到");
     check(readback.axes[0].last_read_ns == state.axes[0].last_read_ns,
           "发布/读取之后时间戳必须原样还在（逐字段拷贝漏掉新字段会在这里红）");
+    check(readback.axes[0].error_code_last_read_ns ==
+              state.axes[0].error_code_last_read_ns,
+          "603F 的时间戳也必须原样穿过发布/读取（它是新字段，最容易被漏掉）");
+    check(readback.axes[2].error_code_last_read_ns == UINT64_C(0),
+          "从没读到过的 603F 时间戳穿过发布之后必须仍然是 0（不是被别的轴顶替）");
     age = AGE_SENTINEL;
     check(emaster_observation_slow_axis_age(&readback, 0U, now, &age) &&
               age == UINT64_C(182000000),
           "从发布回来的快照取年龄，结果应当与发布前一致");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_error_code_age(&readback, 2U, now, &age) &&
+              age == AGE_SENTINEL,
+          "从发布回来的快照里，603F 没读到的轴仍然答'没有'");
 
     if (failures != 0U)
     {

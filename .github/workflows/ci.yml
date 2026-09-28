@@ -59,6 +59,42 @@ jobs:
       - name: 报告慢速遥测渲染（离线）
         run: python3 scripts/checks/report_telemetry_check.py
 
+      # 本轮"证据留得住 + 停得下来"那一半的守卫。它们盯的三种死法有一个共同的性子：
+      # **出错了也不喊**——报告文件照旧躺在原地、工具照旧退出 0、主站照旧跑着。
+      # ① 归档静默削旧（P12.29）：削掉的正是要回头比对的底稿；
+      # ② 分析工具硬编码报告路径（P12.30）：读某份报告拿到的是另一份的数字；
+      # ③ 命令口的 stop 走了一条不接安全门的空路（P12.1）：回 OK，什么都不发生。
+      # 后面每条的 --mutate 是同一批检查的对抗性对照：把缺陷塞回临时副本，必须变红。
+      - name: 分析工具不得硬编码报告路径（离线）
+        run: python3 scripts/checks/analysis_tools_check.py
+
+      - name: 硬编码路径检查的判别力（离线，期望不通过）
+        run: python3 scripts/checks/analysis_tools_check.py --mutate
+
+      - name: 命令口停机走安全门（离线）
+        run: python3 scripts/checks/stop_path_check.py
+
+      - name: 停机路径检查的判别力（离线，期望不通过）
+        run: python3 scripts/checks/stop_path_check.py --mutate
+
+      - name: 慢速遥测渲染的判别力（离线，期望不通过）
+        run: python3 scripts/checks/report_telemetry_check.py --mutate
+
+      # 下面两条自带 cc 编译（把报告库单独编出来跑），所以不用等 cmake 那两步：
+      # 它们判的分别是"报告还解析得动吗"（少一个闭括号，C 断言全过、整份 JSON 死掉）
+      # 与"削旧删了谁、删的时候出没出声"。
+      - name: 报告故障字段的 JSON 合法性（离线）
+        run: python3 scripts/checks/report_axis_fault_check.py
+
+      - name: 故障字段检查的判别力（离线，期望不通过）
+        run: python3 scripts/checks/report_axis_fault_check.py --mutate
+
+      - name: 归档削旧与删除留声（离线）
+        run: python3 scripts/checks/report_archive_check.py
+
+      - name: 削旧检查的判别力（离线，期望不通过）
+        run: python3 scripts/checks/report_archive_check.py --mutate
+
       # 控制台引擎与按键层的离线回归，外加启动窗口那条检查的对抗性对照。
       # 对照单独跑一次是有意的：它证明"主站还在启动"那段窗口的检查抓得住
       # 裸下标（2026-09-18 面板一帧就死、主站没人看着跑到两根轴进故障那个）。

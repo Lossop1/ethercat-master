@@ -152,6 +152,17 @@ static void prune_archives(const char *directory, const char *prefix, uint32_t k
     DIR *dir;
     struct dirent *entry;
 
+    /*
+     * 上面那句"keep 为 0 时不做任何事"此前只写在注释里，代码走的是 `count > keep`
+     * ——keep 为 0 时循环条件是 `index < count`，于是目录里同前缀的每一份都被删掉。
+     * "我不想留历史"就这样变成了"把别人留的历史也删了"，而且删除当时一句日志都不打。
+     * 判据补在这里而不是靠调用方记得别传 0：这是删除路径，删错了没法回滚（P12.32）。
+     */
+    if (keep == 0U)
+    {
+        return;
+    }
+
     dir = opendir(directory);
     if (dir == NULL)
     {
@@ -191,10 +202,24 @@ static void prune_archives(const char *directory, const char *prefix, uint32_t k
         {
             char victim[PATH_MAX];
 
-            if (snprintf(victim, sizeof(victim), "%s/%s", directory, names[index]) > 0)
+            if (snprintf(victim, sizeof(victim), "%s/%s", directory, names[index]) <= 0)
             {
-                (void)unlink(victim);
+                continue;
             }
+            if (unlink(victim) != 0)
+            {
+                /* 删不掉也要说：否则下一轮再数份数时会对不上账。 */
+                fprintf(stderr, "归档削旧失败：%s（%s）\n", victim, strerror(errno));
+                continue;
+            }
+            /*
+             * 每削一份都出声。这里原先只调 unlink、一个字都不写，于是"报告不见了"
+             * 和"这一轮根本没跑"在现场长得一模一样——查问题时最容易走的那条错路。
+             * 删除本身是设计的一部分，不该让它成为静默的：缺证据必须看得见（P12.29）。
+             */
+            fprintf(stderr,
+                    "归档削旧：%s 被删除（前缀 %s 下原有 %zu 份，保留 %lu 份）\n",
+                    victim, prefix, count, (unsigned long)keep);
         }
     }
     free(names);
@@ -214,6 +239,15 @@ static void archive_report(const char *path, const char *stem, uint32_t keep)
     struct tm utc;
     struct timespec now;
 
+    /*
+     * keep 为 0 = 不留历史，按配置说明是"只保留 run_report_path 那一份"。副本这一步
+     * 就得停在这里：照旧建的话，它立刻成为目录里唯一的一份，"不留历史"反而留下一份；
+     * 而下面的削旧在 keep 为 0 时已经不许动手了，建了就再没人来收（P12.32）。
+     */
+    if (keep == 0U)
+    {
+        return;
+    }
     if (!archive_directory_for(path, directory, sizeof(directory)) ||
         !archive_prefix_for(stem, prefix, sizeof(prefix)))
     {

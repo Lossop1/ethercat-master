@@ -186,6 +186,46 @@ def check_idle_timeout(context):
             sock.close()
 
 
+def check_shutdown_stops_the_command_face(context):
+    """命令口 stop/shutdown 之后，这一面应当收摊（P12.1）。
+
+    真主站收到它就走安全门停机、进程退出，套接字随之消失。假主站此前复刻的是那个
+    **空操作**（只置报告字段、什么都不发生），于是离线检查看到的是"发了 shutdown、
+    一切照旧"——已修好的行为在夹具里反而被当成没发生。这里钉住两点：受理（回复仍是
+    OK|stop requested），以及之后**接不上也读不到**：新连接建不上，在服务的那条连接
+    被服务端关闭。少判后者，假主站只要回一句 OK 就能过。
+    """
+    with fake_master.FakeMaster() as master:
+        sock = _cmd_connect(master)
+        try:
+            reply = _ask(sock, "shutdown")
+            want(emaster_client.reply_kind(reply) == "ok",
+                 f"shutdown 应当被受理：{reply!r}")
+            want("stop requested" in reply, f"回复文本变了：{reply!r}")
+
+            # 在服务的连接：服务端应当单方面关掉，recv 读到 EOF。
+            sock.settimeout(3.0)
+            try:
+                data = sock.recv(64)
+            except (socket.timeout, ConnectionResetError, OSError):
+                data = b""
+            want(data == b"", f"停机后这条连接应当被关掉，却收到 {data[:40]!r}")
+        finally:
+            sock.close()
+
+        # 命令面：新连接建不上（真主站此时进程已经没了）。
+        try:
+            fresh = socket.create_connection(("127.0.0.1", master.port), 2.0)
+        except OSError:
+            fresh = None
+        want(fresh is None, "停机后命令口还接得上新连接——这一面没有收摊")
+        if fresh is not None:
+            fresh.close()
+
+        want(master.snapshot_counters()["stop_requests"] == 1,
+             "停机请求没被记下来")
+
+
 # ---------------------------------------------------------------- 观测口
 
 def check_obs_info_head_latest(context):
@@ -426,6 +466,7 @@ CHECKS = [
     ("命令口：单步超限先回 OK 再打掉会话", check_step_violation_is_faithful),
     ("命令口：一次 read 一条命令，多的记成丢弃", check_no_pipelining),
     ("命令口：空闲超时单方面断开", check_idle_timeout),
+    ("命令口：stop/shutdown 之后命令面收摊（P12.1）", check_shutdown_stops_the_command_face),
     ("观测口：INFO/HEAD/LATEST 与 newest 是开区间上界", check_obs_info_head_latest),
     ("观测口：DUMP 窗口自洽且 publish_index 连续", check_obs_dump_window),
     ("观测口：环写满后下界上移、越界起点被钳", check_obs_ring_overwrite),

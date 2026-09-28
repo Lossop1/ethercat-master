@@ -9,6 +9,28 @@ import re
 import sys
 
 
+def field_int(block, key, default=None):
+    """从一轴的 runtime 块里取一个整数。取不到返回 default——调用方要能区分
+    "值是 0"与"没有这个字段"，所以默认值由调用方给，不在这里替它编一个 0。"""
+    hit = re.search(rb'"%s":(-?\d+)' % key, block)
+    return int(hit.group(1)) if hit else default
+
+
+def field_hex(block, key, default=None):
+    """报告里的错误码/状态字印成**带引号的十六进制串**（`"0x2310"`），不是数字。
+
+    用 field_int 去取它会一无所获、然后安静地拿到调用方的默认值——603F 于是永远印成
+    0x0000，看着像"驱动器说没事"。这一列恰恰是 P12.17 要问的东西。
+    """
+    hit = re.search(rb'"%s":"0[xX]([0-9A-Fa-f]+)"' % key, block)
+    return int(hit.group(1), 16) if hit else default
+
+
+def field_flag(block, key):
+    hit = re.search(rb'"%s":(true|false)' % key, block)
+    return hit is not None and hit.group(1) == b"true"
+
+
 def main():
     path = sys.argv[1]
     with open(path, "rb") as handle:
@@ -74,19 +96,11 @@ def main():
     print("\n== 慢速遥测（「—」= 这一轴整场都没读到过，不是 0）==")
     for index, block in enumerate(re.findall(rb'"runtime":\{[^}]*\}', data)):
 
-        def raw(key, default=None):
-            hit = re.search(rb'"%s":(-?\d+)' % key, block)
-            return int(hit.group(1)) if hit else default
-
-        def flag(key):
-            hit = re.search(rb'"%s":(true|false)' % key, block)
-            return hit is not None and hit.group(1) == b"true"
-
         def scaled(key, divisor, unit, digits):
-            value = raw(key)
+            value = field_int(block, key)
             return "—" if value is None else f"{value / divisor:.{digits}f}{unit}"
 
-        if not flag(b"slow_telemetry_read"):
+        if not field_flag(block, b"slow_telemetry_read"):
             print(f"  轴{index + 1} mosfet=— motor=— 母线=— 电流=—"
                   f"   （没读到）")
             continue
@@ -94,7 +108,20 @@ def main():
               f" motor={scaled(b'motor_temperature', 10.0, '°C', 1)}"
               f" 母线={scaled(b'dc_link_voltage', 1000.0, 'V', 1)}"
               f" 电流={scaled(b'actual_current', 1000.0, 'A', 3)}"
-              f"   读到，读数年龄 {raw(b'slow_telemetry_age_ns', 0) / 1e6:.1f} ms"
+              f"   读到，读数年龄 {field_int(block, b'slow_telemetry_age_ns', 0) / 1e6:.1f} ms"
+              f"（0 点 = 报告回填）")
+
+    # 运行期 603F（驱动器错误码）。与上面同一条约定（P11.8），但**标志是字段级的**：
+    # 温度读到、而错误码那一轮 SDO 超时是常事，共用一个轴级标志会把"从没读到"印成
+    # 0x0000。这一列对 P12.17 直接有用——那次五轴 AL 侧一律 state=8/code=0、总线全干净，
+    # 603F 里有没有东西就是关键一问；把它印成 0x0000 等于把线索改没。
+    print("\n== 运行期 603F（「—」= 从没读到过，不是 0x0000）==")
+    for index, block in enumerate(re.findall(rb'"runtime":\{[^}]*\}', data)):
+        if not field_flag(block, b"runtime_error_code_read"):
+            print(f"  轴{index + 1} 603F=—    （没读到）")
+            continue
+        print(f"  轴{index + 1} 603F=0x{field_hex(block, b'runtime_error_code', 0):04X}"
+              f"   读到，读数年龄 {field_int(block, b'runtime_error_code_age_ns', 0) / 1e6:.1f} ms"
               f"（0 点 = 报告回填）")
 
 

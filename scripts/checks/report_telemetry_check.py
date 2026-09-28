@@ -2,7 +2,7 @@
 """报告里慢速遥测那一节怎么印，离线验。
 
     python3 scripts/checks/report_telemetry_check.py
-    python3 scripts/checks/report_telemetry_check.py --mutate   # 证明这检查抓得住"照旧印 0"
+    python3 scripts/checks/report_telemetry_check.py --mutate   # 两处对照，证明抓得住"照旧印 0"
 
 为什么值得单独验：这几个量（温度/母线电压/电流）是 50 ms 一轮的 SDO 轮询，停机信号会
 截断最后一轮，于是报告里那几个 0 有两种来历——真读到 0，或者压根没读到。数字上两者
@@ -12,6 +12,11 @@
 
 检查喂的是一份合成报告：一根轴读到 42.0°C、一根轴真读到 0.0°C、一根轴从没读到。
 后两根必须印得**不一样**，这才是判据。
+
+运行期 603F（驱动器错误码）走同一条判据、同一份合成报告，但**标志是字段级的**：
+温度读到而错误码那一轮 SDO 超时是常事，共用一个轴级标志会把"从没读到"印成
+`0x0000`，看着像"驱动器说没事"——而 P12.17 里五轴 AL 侧一律 state=8/code=0、
+总线全干净，603F 里有没有东西正是关键一问，印错就把线索改没了。
 """
 
 import os
@@ -23,8 +28,11 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXTRACTOR = os.path.join(ROOT, "scripts", "analysis", "extract_report.py")
 
-# 变异：把"认标志"那句拿掉，退回到"照旧印数字"的老写法。
-MUTATE_FROM = 'if not flag(b"slow_telemetry_read"):'
+# 变异：把"认标志"那句拿掉，退回到"照旧印数字"的老写法。两处守卫是同一类错法，但
+# 由两组断言分别看着（慢速遥测 / 603F），所以要各证一次：只拆一处的变异若把两半都
+# 判红，那说明这两组断言里有一组其实没在盯自己的那一列。
+MUTATE_TELEMETRY_FROM = 'if not field_flag(block, b"slow_telemetry_read"):'
+MUTATE_CODE_FROM = 'if not field_flag(block, b"runtime_error_code_read"):'
 MUTATE_TO = 'if False:  # 变异：不认标志'
 
 PASSED = 0
@@ -44,21 +52,33 @@ def bad(what, expected, actual):
 
 
 def make_report(path):
-    """合成一份单行报告：三根轴，两种"0"各一根。"""
+    """合成一份单行报告：三根轴，两种"0"各一根。
 
-    def axis(mosfet, motor, voltage, current, read, age_ns):
+    同时喂上运行期 603F 那一列（P12.17）：轴 1 读到 0x2310、轴 2 真读到 0x0000、
+    轴 3 从没读到。后两根必须印得**不一样**——这与慢速遥测是同一条判据，但标志是
+    字段级的，不能借用温度那个轴级标志。
+    """
+
+    def axis(mosfet, motor, voltage, current, read, age_ns, code, code_read,
+             code_age_ns):
         return (f'"runtime":{{"status_word":"0x1237","control_word":"0x000F",'
                 f'"actual_current":{current},"dc_link_voltage":{voltage},'
                 f'"mosfet_temperature":{mosfet},"motor_temperature":{motor},'
                 f'"slow_telemetry_read":{"true" if read else "false"},'
-                f'"slow_telemetry_age_ns":{age_ns}}}')
+                f'"slow_telemetry_age_ns":{age_ns},'
+                f'"runtime_error_code_read":{"true" if code_read else "false"},'
+                f'"runtime_error_code":"0x{code:04X}",'
+                f'"runtime_error_code_age_ns":{code_age_ns}}}')
 
     body = (b'"cycle_count":60000,"op_reached":true,'
-            + axis(420, 350, 48100, -30, True, 182000000).encode()   # 读到 42.0°C
+            # 轴 1：读到 42.0°C，603F 读到 0x2310
+            + axis(420, 350, 48100, -30, True, 182000000, 0x2310, True, 182000000).encode()
             + b","
-            + axis(0, 0, 0, 0, True, 5000000).encode()               # 真读到 0
+            # 轴 2：温度真读到 0，603F 真读到 0x0000
+            + axis(0, 0, 0, 0, True, 5000000, 0x0000, True, 5000000).encode()
             + b","
-            + axis(0, 0, 0, 0, False, 0).encode())                   # 从没读到
+            # 轴 3：两样都没读到
+            + axis(0, 0, 0, 0, False, 0, 0x0000, False, 0).encode())
     with open(path, "wb") as handle:
         handle.write(body)
 
@@ -75,10 +95,27 @@ def run(extractor):
     return proc.returncode, proc.stdout
 
 
+def section(out, title):
+    """取一个 `== 标题 ==` 小节。
+
+    必须**在下一节处截断**：抽取器的输出是一节接一节，而每一节的轴行都以「轴」开头。
+    只按标题往后切的话，后面几节的轴行会混进来——本文件加了 603F 那一节之后，
+    慢速遥测的"三根轴各印一行"会变成"六根轴"，检查自己先红了。
+    """
+    tail = out.split(title, 1)[-1]
+    return tail.split("\n== ", 1)[0]
+
+
 def telemetry_lines(out):
-    """抓出那一节里的轴行。"""
-    block = out.split("慢速遥测", 1)[-1]
-    return [line for line in block.splitlines() if line.strip().startswith("轴")]
+    """抓出慢速遥测那一节里的轴行。"""
+    return [line for line in section(out, "慢速遥测").splitlines()
+            if line.strip().startswith("轴")]
+
+
+def error_code_lines(out):
+    """抓出运行期 603F 那一节里的轴行。"""
+    return [line for line in section(out, "运行期 603F").splitlines()
+            if line.strip().startswith("轴")]
 
 
 def check(extractor):
@@ -87,6 +124,9 @@ def check(extractor):
         bad("抽取器退出码为 0", "0", f"{code}；输出尾部：{out[-400:]}")
         return
     ok("抽取器退出码为 0（合成报告没让它崩）")
+
+    # 603F 那一列先判：慢速遥测那半在行数不对时会提前返回，放在后面会被它连累着跳过。
+    check_error_codes(out)
 
     lines = telemetry_lines(out)
     if len(lines) == 3:
@@ -123,6 +163,39 @@ def check(extractor):
         ok("轴3 没有把 0 印成读数")
 
 
+def check_error_codes(out):
+    """运行期 603F 那一列（P12.17）：与慢速遥测同一条判据，但标志是字段级的。
+
+    现场最要紧的一句：驱动器 AL 侧干净（state=8/code=0）、总线也干净时，603F 里
+    有没有东西是唯一能指的线索。把"没读到"印成 0x0000 就等于说"驱动器说没事"。
+    """
+    lines = error_code_lines(out)
+    if len(lines) == 3:
+        ok("603F：三根轴各印一行")
+    else:
+        bad("603F：三根轴各印一行", "3 行", f"{len(lines)} 行：{lines}")
+        return
+
+    if "0x2310" in lines[0]:
+        ok("603F：轴1 读到 0x2310 就印 0x2310（印成 0x0000 说明取值那步取错了形态）")
+    else:
+        bad("603F：轴1 印出读到的 0x2310", "0x2310", lines[0])
+    if "182.0 ms" in lines[0]:
+        ok("603F：轴1 给出读数年龄")
+    else:
+        bad("603F：轴1 给出读数年龄", "182.0 ms", lines[0])
+
+    if "0x0000" in lines[1]:
+        ok("603F：轴2 真读到 0x0000 就印 0x0000（与没读到的印法不同）")
+    else:
+        bad("603F：轴2 真读到 0x0000", "0x0000", lines[1])
+
+    if "—" in lines[2] and "0x" not in lines[2]:
+        ok("603F：轴3 从没读到就印「—」，一个十六进制数都不印")
+    else:
+        bad("603F：轴3 从没读到就印「—」", "含「—」且不含 0x", lines[2])
+
+
 def main():
     argv = sys.argv[1:]
     if argv and argv[0] == "--mutate":
@@ -131,20 +204,32 @@ def main():
             return 2
         with open(EXTRACTOR, encoding="utf-8") as handle:
             source = handle.read()
-        if MUTATE_FROM not in source:
-            print("变异点找不到——抽取器里那句认标志的写法变了，这个检查得跟着改。",
-                  file=sys.stderr)
-            return 2
-        with tempfile.TemporaryDirectory() as tmp:
-            mutated = os.path.join(tmp, "extract_report_mutated.py")
-            with open(mutated, "w", encoding="utf-8") as handle:
-                handle.write(source.replace(MUTATE_FROM, MUTATE_TO, 1))
-            check(mutated)
-        if FAILED:
-            print(f"\n变异被抓住：{FAILED} 项不符（这正是要证明的）")
-            return 0
-        print("\n变异没被抓住——这个检查抓不住“照旧印 0”那种写法，等于摆设")
-        return 1
+        for anchor in (MUTATE_TELEMETRY_FROM, MUTATE_CODE_FROM):
+            if anchor not in source:
+                print("变异点找不到——抽取器里那句认标志的写法变了，这个检查得跟着改。",
+                      file=sys.stderr)
+                return 2
+        global PASSED, FAILED
+        mutants = {
+            "慢速遥测不认标志": source.replace(MUTATE_TELEMETRY_FROM, MUTATE_TO, 1),
+            "603F 不认标志": source.replace(MUTATE_CODE_FROM, MUTATE_TO, 1),
+        }
+        for name, text in mutants.items():
+            PASSED = 0
+            FAILED = 0
+            print(f"--- 变异：{name} ---")
+            with tempfile.TemporaryDirectory() as tmp:
+                mutated = os.path.join(tmp, "extract_report_mutated.py")
+                with open(mutated, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                check(mutated)
+            if FAILED:
+                print(f"      {FAILED} 项不符（抓住了）")
+            else:
+                print("      一项都没判红——变异混过去了")
+                return 1
+        print("\n两个变异都被抓住（这正是要证明的）")
+        return 0
 
     extractor = os.path.abspath(argv[0]) if argv else EXTRACTOR
     if not os.path.exists(extractor):

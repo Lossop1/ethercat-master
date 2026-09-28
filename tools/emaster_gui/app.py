@@ -278,8 +278,9 @@ class MainWindow(QMainWindow):
         for button in (self.halt_button, self.resume_button, self.quick_stop_button,
                        self.home_button, self.reanchor_button):
             stops.addWidget(button)
-        stops.addWidget(_wrap_note("这五个都不会让主站停机——真正的停机是给主站 "
-                                   "SIGINT。命令协议里的 stop/shutdown 是空操作。"), 1)
+        stops.addWidget(_wrap_note("这五个都不会让主站停机。真要停机：命令协议的 "
+                                   "stop/shutdown 会走安全门停机（下一拍生效，"
+                                   "P12.1 之前是空操作），或者直接给主站 SIGINT。"), 1)
         column.addLayout(stops)
 
         walk_row = QHBoxLayout()

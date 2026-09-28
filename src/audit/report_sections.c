@@ -470,6 +470,60 @@ static bool write_axis(FILE *stream,
         axis->first_mismatch_al_read ? "true" : "false",
         (unsigned int)axis->first_mismatch_al_state,
         (unsigned int)axis->first_mismatch_al_status_code) >= 0);
+    /*
+     * P12.17: 这一轴被判故障的坐标。recorded 为假时后四个字段无意义（不是 0 号
+     * 交换），所以显式给出记录标志，不靠读者去猜 0 的含义。
+     *
+     * exchange 装的是 session->exchange。它与 result.cycle_count 在正常会话里相等，
+     * 失败路径上会分叉，所以键名不叫 cycle。
+     */
+    REQUIRE_WRITE(fprintf(
+        stream,
+        ",\"fault\":{\"recorded\":%s,\"status\":%u,\"isolated\":%s,\"reason\":%u,"
+        "\"exchange\":%" PRIu64 ",\"status_word\":\"0x%04X\"}",
+        axis->fault_recorded ? "true" : "false", (unsigned int)axis->axis_status,
+        axis->fault_isolated ? "true" : "false", (unsigned int)axis->fault_reason,
+        axis->fault_cycle, (unsigned int)axis->fault_status_word) >= 0);
+    /*
+     * P12.17: 每轴各自的"首次越界"坐标。
+     *
+     * 这是"哪根轴在第几拍开始不对"的唯一来源。报告里另外两处都答不了：现场环
+     * （cycle_trace）是每会话一条记录、只留最后 64 拍；first_runtime_failure 只留
+     * 全局第一次，且不说是哪一轴的第几个信号。四项都自带 seen，因为"没出现过"与
+     * "出现在第 0 拍"必须分得开。
+     */
+    REQUIRE_WRITE(fprintf(
+        stream,
+        ",\"fault_timeline\":{"
+        "\"enable_lost\":{\"seen\":%s,\"exchange\":%" PRIu64 ",\"status_word\":\"0x%04X\"},"
+        "\"fault_bit\":{\"seen\":%s,\"exchange\":%" PRIu64 ",\"status_word\":\"0x%04X\"},"
+        "\"warning\":{\"seen\":%s,\"exchange\":%" PRIu64 ",\"status_word\":\"0x%04X\"},"
+        "\"internal_limit\":{\"seen\":%s,\"exchange\":%" PRIu64 ",\"status_word\":\"0x%04X\"}}",
+        axis->enable_lost_seen ? "true" : "false", axis->enable_lost_exchange,
+        (unsigned int)axis->enable_lost_status_word,
+        axis->fault_bit_seen ? "true" : "false", axis->fault_bit_exchange,
+        (unsigned int)axis->fault_bit_status_word,
+        axis->warning_bit_seen ? "true" : "false", axis->warning_bit_exchange,
+        (unsigned int)axis->warning_bit_status_word,
+        axis->internal_limit_seen ? "true" : "false", axis->internal_limit_exchange,
+        (unsigned int)axis->internal_limit_status_word) >= 0);
+    /*
+     * P12.17: 停机那一刻读回的驱动器诊断。
+     *
+     * 这块数据一直存在于会话结果里（drive_diagnostic），只是从没写进报告——报告里
+     * 只有 safeop_drive_diagnostic（SAFE-OP 时那一次）。键名与形状照抄它，好让分析
+     * 脚本共用一套正则。
+     */
+    REQUIRE_WRITE(fprintf(
+        stream,
+        ",\"final_drive_diagnostic\":{\"read_succeeded\":%s,\"cia402_error_code\":\"0x%04X\","
+        "\"error_register\":\"0x%02X\",\"extended_servo_error_code\":\"0x%08lX\","
+        "\"servo_error_code\":\"0x%08lX\"}",
+        axis->drive_diagnostic.read_succeeded ? "true" : "false",
+        (unsigned int)axis->drive_diagnostic.cia402_error_code,
+        (unsigned int)axis->drive_diagnostic.error_register,
+        (unsigned long)axis->drive_diagnostic.extended_servo_error_code,
+        (unsigned long)axis->drive_diagnostic.servo_error_code) >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
         ",\"safeop_mode_readback\":{\"read_succeeded\":%s,\"mode_display\":%d,"
@@ -495,6 +549,14 @@ static bool write_axis(FILE *stream,
         ",\"mosfet_temperature\":%d,\"motor_temperature\":%d"
         /* 这几个慢速量读没读到、多久以前读到的：没有它，下面的 0 与"没读到"长得一样。 */
         ",\"slow_telemetry_read\":%s,\"slow_telemetry_age_ns\":%" PRIu64
+        /*
+         * P12.17: 运行期的 603F，与上面几个慢速量同源同约定。单独一套 read/age，
+         * 因为它是字段级的：温度读到而错误码这轮超时是常事，共用轴级标志会把
+         * "从没读到"印成 0x0000。运行期报过错、停机时 603F 又被清掉的情况下，
+         * 这一列是唯一的痕迹。
+         */
+        ",\"runtime_error_code_read\":%s,\"runtime_error_code\":\"0x%04X\""
+        ",\"runtime_error_code_age_ns\":%" PRIu64
         ",\"gain_parameters_read\":%s"
         ",\"velocity_loop_kp\":%u,\"velocity_loop_ki\":%u,\"velocity_loop_kd\":%u"
         ",\"position_loop_kp\":%u,\"position_loop_ki\":%u,\"position_loop_kd\":%u"
@@ -547,6 +609,9 @@ static bool write_axis(FILE *stream,
         (int)axis->motor_temperature,
         axis->slow_telemetry_read ? "true" : "false",
         axis->slow_telemetry_age_ns,
+        axis->runtime_error_code_read ? "true" : "false",
+        (unsigned int)axis->runtime_error_code,
+        axis->runtime_error_code_age_ns,
         axis->gain_parameters_read ? "true" : "false",
         (unsigned int)axis->velocity_loop_kp,
         (unsigned int)axis->velocity_loop_ki,
@@ -1022,7 +1087,19 @@ bool emaster_run_report_write(FILE *stream,
     {
         return false;
     }
-    REQUIRE_WRITE(fputs("{\"schema_version\":4,\"generated_at_utc\":", stream) != EOF);
+    /*
+     * 版本 5：deployment 下新增 report_archive_keep；result 下新增停机来源
+     * （stop_requested / stop_source）；每轴新增 fault、fault_timeline、
+     * final_drive_diagnostic 三块与 runtime 里的运行期 603F。加字段也升版本——
+     * 这个仓库里每次改报告形状都升，读者要能靠版本号判断"这份报告里有没有那一列"，
+     * 否则同一版本号下两种形状并存，正是此前 v6 游离提交那份报告造成的问题。
+     *
+     * 注：原先打算把每轴状态字塞进周期现场环（cycle_trace）来回答"哪根轴第几拍开始
+     * 不对"，实际没走那条路——环是**每会话一条**、只留最后 64 拍，且入环点在逐轴解码
+     * 之前，读到的状态字还是上一拍的。替代方案是每轴一条全会话有效的首次越界记录，
+     * 即上面的 fault_timeline。
+     */
+    REQUIRE_WRITE(fputs("{\"schema_version\":5,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1038,6 +1115,13 @@ bool emaster_run_report_write(FILE *stream,
      */
     REQUIRE_WRITE(fputs(",\"report_path\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, report->report_path));
+    /*
+     * 本次生效的归档保留份数。削旧会真的删掉旧报告，而删掉之后从磁盘上看不出来
+     * 曾经有过那些文件——把生效值写进报告，至少让"这一轮按多少份的窗口在留证据"
+     * 成为报告自己能回答的问题（P12.29）。
+     */
+    REQUIRE_WRITE(fprintf(stream, ",\"report_archive_keep\":%u",
+                          (unsigned int)plan->deployment->report_archive_keep) >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
         "},\"result\":{\"status_code\":%u,\"control_state\":%u,\"io_map_size\":%zu,"
@@ -1067,7 +1151,13 @@ bool emaster_run_report_write(FILE *stream,
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
         "\"motion_completed\":%s,\"safe_output_sent\":%s,"
-        "\"safe_state_reached\":%s,\"shutdown_stop_fault\":%d,"
+        /*
+         * P12.1: 停机请求与它的来源。stop_requested 此前根本没进报告（只有终端摘要
+         * 用），于是"这一轮是被停下来的"在报告里读不出来；来源则是套接字命令与
+         * 应用回调之间唯一的差别——两条路走的是同一段停机代码，差别只在这一个数。
+         */
+        "\"safe_state_reached\":%s,\"stop_requested\":%s,\"stop_source\":%u,"
+        "\"shutdown_stop_fault\":%d,"
         "\"dc_late_consecutive_threshold\":%" PRIu32 ","
         "\"dc_late_threshold_exceeded\":%s,\"dc_late_threshold_axis\":%zu,"
         "\"sync0_disabled\":%s,"
@@ -1097,6 +1187,8 @@ bool emaster_run_report_write(FILE *stream,
         report->motion_completed ? "true" : "false",
         report->safe_output_sent ? "true" : "false",
         report->safe_state_reached ? "true" : "false",
+        report->stop_requested ? "true" : "false",
+        (unsigned int)report->stop_source,
         (int)report->shutdown_stop_fault,
         report->dc_late_consecutive_threshold,
         report->dc_late_threshold_exceeded ? "true" : "false",

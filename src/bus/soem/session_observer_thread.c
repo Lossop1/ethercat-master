@@ -297,6 +297,13 @@ static void observer_store_telemetry(emaster_observation_slow_axis_t *slot,
             if (succeeded)
             {
                 slot->error_code = (uint16_t)value;
+                /*
+                 * 603F 单独打一个时间戳（P12.17）。轴级的 last_read_ns 只在下面
+                 * "这一轴本轮读到过"时打，粒度是轴；而报告要回答"驱动器是多久以前
+                 * 报的这个错"，用的是这一条 SDO 的自己时刻。读到 0x0000 也算读到，
+                 * 所以打戳与取值同在一个 succeeded 分支里，不额外要求值非零。
+                 */
+                slot->error_code_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_BUS_VOLTAGE:

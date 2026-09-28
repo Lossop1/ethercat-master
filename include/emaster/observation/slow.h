@@ -42,6 +42,15 @@ typedef struct
      * 读到的 42.0 °C"印成 0——"没读到"与"读到 0"从此不可区分（P11.8）。
      */
     uint64_t last_read_ns;
+    /*
+     * 603F 自己的"最后一次读到"时刻，语义与 last_read_ns 相同，但粒度是**字段级**。
+     *
+     * last_read_ns 说的是"这一轴本轮有没有读到至少一条"，而 603F 只是这一轴若干条
+     * SDO 里的一条：温度读到了、错误码这轮超时，是常事。拿轴级的年龄当错误码的年龄，
+     * 报告里那个"多久以前读到的"就会偏新——而 603F 的**全部意义**就是"驱动器什么时候
+     * 报的错"，年龄偏新等于把故障时刻往后挪。0 = 从没读到过。
+     */
+    uint64_t error_code_last_read_ns;
     int32_t  actual_current;
     int32_t  dc_link_voltage;
     int32_t  mosfet_temperature;
@@ -104,5 +113,16 @@ bool emaster_observation_slow_read(const emaster_observation_slow_t *snapshot,
 bool emaster_observation_slow_axis_age(const emaster_observation_slow_state_t *state,
                                        uint32_t axis_index, uint64_t now_ns,
                                        uint64_t *out_age_ns);
+
+/*
+ * 同上，但问的是 603F 这一条：读到过就返回 true 并写 *out_age_ns，从没读到过
+ * （或轴号越界）就返回 false 且**不写** *out_age_ns。
+ *
+ * 与轴级 age 分开是必要的，不是重复：这两个问题在"温度读到了、错误码没读到"时
+ * 答案不同，而报告里那一个是"驱动器什么时候开始报错"。
+ */
+bool emaster_observation_slow_axis_error_code_age(
+    const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
+    uint64_t *out_age_ns);
 
 #endif /* EMASTER_OBSERVATION_SLOW_H */

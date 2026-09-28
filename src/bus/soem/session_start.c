@@ -345,9 +345,17 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
             {
                 break;
             }
-            if (session->stop_requested != NULL &&
-                session->stop_requested(session->stop_user_data)) {
+            /*
+             * 走同一个 accessor（P12.1）：这条停机只可能由回调发起（命令口要等
+             * 命令服务器起来，那时早已过了 DC 启动段），但读点必须共用一个，否则
+             * "谁在读停机请求"就有两处，两处再各自演化就是原来的病。
+             */
+            if (emaster_soem_session_stop_requested(session)) {
                 session->report->stop_requested = true;
+                if (session->report->stop_source == EMASTER_STOP_SOURCE_NONE)
+                {
+                    session->report->stop_source = EMASTER_STOP_SOURCE_APPLICATION;
+                }
                 return status;
             }
         }

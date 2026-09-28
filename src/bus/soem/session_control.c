@@ -14,6 +14,37 @@ static uint64_t absolute_position_difference(int32_t left, int32_t right) {
     return (uint64_t)(difference < 0 ? -difference : difference);
 }
 
+/*
+ * P12.17: 记下"这一轴第一次被判故障"。
+ *
+ * 这几个字段原先只有 AXIS_ISOLATION 分支才写，而默认策略是全局停机，于是报告里
+ * 既读不出这一轮走了哪条臂，也读不出故障发生在哪一拍——P12.17 那份 22.4 s 的报告
+ * 里，轴 2/3/5 已经是 CiA402 Fault 而这三个字段全空，只能说"故障过一次"。
+ *
+ * 刻意**不**置 fault_isolated：那个标志不只用于审计，还被观测路径读成
+ * AXIS_FLAG_ISOLATED 并参与"跳过此轴"的判定（session_observation.c）。在全局停机
+ * 下置它，会把一次记录变成一次控制行为改变。
+ *
+ * fault_cycle 装的是 session->exchange，不是 report->cycle_count。二者在正常会话里
+ * 相等，失败路径上会分叉，报告里的键名必须说清是哪一个。
+ */
+static void record_axis_fault(emaster_soem_session_t *session, size_t axis_index,
+                              emaster_control_session_status_t fault_reason)
+{
+    emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
+
+    /* 首因优先：故障之后又判出来的别的理由，不覆盖第一次那一个。 */
+    if (axis->fault_recorded)
+    {
+        return;
+    }
+    axis->fault_recorded = true;
+    axis->axis_status = EMASTER_AXIS_STATUS_FAULTED;
+    axis->fault_cycle = session->exchange;
+    axis->fault_reason = fault_reason;
+    axis->fault_status_word = axis->status_word;
+}
+
 /* P2.5: 单轴故障处理 - 隔离故障轴，不影响其他轴 */
 static void handle_axis_fault(
     emaster_soem_session_t *session,
@@ -22,11 +53,9 @@ static void handle_axis_fault(
 {
     emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
 
-    /* 标记故障 */
-    axis->axis_status = EMASTER_AXIS_STATUS_FAULTED;
+    record_axis_fault(session, axis_index, fault_reason);
+    /* 隔离标志只在这一条分支上置——它会让这一轴被跳过，是控制行为而不只是记录。 */
     axis->fault_isolated = true;
-    axis->fault_cycle = session->exchange;
-    axis->fault_reason = fault_reason;
 
     /* 将该轴控制器目标设为 Quick-Stop */
     emaster_cia402_controller_set_goal(&session->controllers[axis_index],
@@ -370,6 +399,41 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 axis_result->switched_on_seen |=
                     session->controller_outputs[axis_index].observed_state ==
                     EMASTER_CIA402_STATE_SWITCHED_ON;
+                /*
+                 * P12.17: 每轴各自"第一次出现这个信号"的交换号与当时状态字。
+                 *
+                 * 放在这里是因为它是逐轴、每拍、且发生在本次解码之后——报告要问的
+                 * "轴 3 是从第几拍开始不在 Operation Enabled 的"，只有这个位置答得
+                 * 出来。现场环答不出：它是每会话一条记录、只留最后 64 拍，而且入环
+                 * 点在交换函数里、比这里早，环里的状态字还是上一拍的。
+                 *
+                 * 每项都是**首次**为准（_seen 一旦为真就不再改写），因为"哪一拍开始
+                 * 坏的"要的是起点，不是最后一次。
+                 */
+                if (axis_result->operation_enabled_seen && !operation_enabled &&
+                    !axis_result->enable_lost_seen) {
+                    /* 以"已经使能过一次"为前提：使能阶段本来就不在 Operation
+                     * Enabled，不设这个前提的话每根轴的第 0 拍都会命中。 */
+                    axis_result->enable_lost_seen = true;
+                    axis_result->enable_lost_exchange = session->exchange;
+                    axis_result->enable_lost_status_word = axis_result->status_word;
+                }
+                if (session->controller_outputs[axis_index].fault_present &&
+                    !axis_result->fault_bit_seen) {
+                    axis_result->fault_bit_seen = true;
+                    axis_result->fault_bit_exchange = session->exchange;
+                    axis_result->fault_bit_status_word = axis_result->status_word;
+                }
+                if (axis_result->status_warning && !axis_result->warning_bit_seen) {
+                    axis_result->warning_bit_seen = true;
+                    axis_result->warning_bit_exchange = session->exchange;
+                    axis_result->warning_bit_status_word = axis_result->status_word;
+                }
+                if (axis_result->internal_limit_active && !axis_result->internal_limit_seen) {
+                    axis_result->internal_limit_seen = true;
+                    axis_result->internal_limit_exchange = session->exchange;
+                    axis_result->internal_limit_status_word = axis_result->status_word;
+                }
                 if (!session->images[axis_index].tx_mode_available &&
                     axis_result->mode_display_sdo_read) {
                     axis_result->mode_display = axis_result->mode_display_sdo;
@@ -414,6 +478,12 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         continue;
                     } else {
                         /* 全局停止（默认）：任一轴故障 → 所有轴停止 */
+                        /*
+                         * P12.17: 也要落盘。这条路不隔离任何轴（不置 fault_isolated），
+                         * 但"哪根轴、第几拍、什么原因、当时状态字是多少"必须留下——
+                         * 否则报告里只剩一个 first_runtime_failure，读不出是几号轴。
+                         */
+                        record_axis_fault(session, axis_index, axis_health_status);
                         emaster_soem_session_note_runtime_failure(session, axis_health_status, &safety_status);
                         safety_denied = true;
                         /* 继续检查其他轴，收集所有故障信息 */
@@ -862,15 +932,27 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             break;
                         }
 
+                        /*
+                         * P12.1: 这两条原先写的是 report->stop_requested，而安全门读的是
+                         * session->stop_requested 那个**回调**。两个名字像，意思不同，于是
+                         * "从命令口停机"是一句空话：报告里多一个 true，轴上什么都没发生。
+                         * 现在改成抬高安全门真正读的那个输入，由它按与 SIGINT 完全相同
+                         * 的那段代码停机——安全停机帧、AL 快照、审计轨迹逐拍一致，报告里
+                         * 唯一的差别是 stop_source。
+                         *
+                         * 响应字符串不动：它说的是"已受理"，而这正是事实；生效在下一拍。
+                         */
                         case EMASTER_COMMAND_STOP_MOTION:
-                            session->report->stop_requested = true;
+                            emaster_soem_session_request_stop(
+                                session, EMASTER_STOP_SOURCE_COMMAND);
                             (void)snprintf(response.message, sizeof(response.message),
                                 "stop requested");
                             response.success = true;
                             break;
 
                         case EMASTER_COMMAND_SHUTDOWN:
-                            session->report->stop_requested = true;
+                            emaster_soem_session_request_stop(
+                                session, EMASTER_STOP_SOURCE_COMMAND);
                             (void)snprintf(response.message, sizeof(response.message),
                                 "shutdown requested");
                             response.success = true;

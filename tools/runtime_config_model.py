@@ -6,10 +6,17 @@ import json
 from pathlib import Path
 from typing import Any
 
-# 报告历史副本的默认保留份数。取 20 是因为台架上"最近若干轮"是要反复对比的对象，
-# 而单份报告在审计封顶后约几十 MB——20 份是几十到几百 MB 量级，不会撑爆 runtime/。
+# 报告历史副本的默认保留份数。
+#
+# 曾经是 20，理由是"20 份够反复对比"。实践把这个数字证伪了：台架上同一个前缀连跑
+# 十几轮做 A/B，第 21 轮就把第一轮的底稿删了——而"哪一轮丢过帧、丢了几次"恰恰要
+# 靠回头比对才能回答（P12.29 就是这么丢了 P11.5 的 r5–r10）。削旧本身不吭声又加重
+# 了后果：报告没了，也不知道是被削掉的。
+#
+# 现在按"一个前缀下能留住整个试验周期的全部轮次"取值。单份报告审计封顶后约
+# 35–327 MB，200 份约 25 GB；台架机上 runtime/ 所在的 886 GB 卷用掉 9%，放得下。
 # 想要保留更久或一份不留，在部署配置里写 report_archive_keep。
-DEFAULT_REPORT_ARCHIVE_KEEP = 20
+DEFAULT_REPORT_ARCHIVE_KEEP = 200
 
 
 def load_documents(paths: list[Path], kind: str) -> list[dict[str, Any]]:

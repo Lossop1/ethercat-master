@@ -85,6 +85,15 @@ typedef struct {
     bool motion_prepared;
     emaster_control_session_stop_requested_t stop_requested;
     void *stop_user_data;
+    /*
+     * P12.1: 命令口（套接字 stop/shutdown）发起的停机请求。
+     *
+     * 名字与上面那个只差一个词，但两者**不是一回事**：上面是调用者装的函数指针
+     * （SIGINT 那条路），这里是本会话自己的粘性标志。安全门要读的是"这两条路的
+     * 或"，所以只允许通过 emaster_soem_session_stop_requested() 读——直接读其中
+     * 一个，就等于又把它拆回两条路，那正是 P12.1 的病灶。
+     */
+    bool stop_requested_by_command;
     emaster_control_session_state_changed_t state_changed;
     void *state_user_data;
     emaster_control_session_feedback_updated_t feedback_updated;
@@ -264,6 +273,19 @@ emaster_control_session_status_t emaster_soem_session_apply_safety(
     bool all_modes_confirmed,
     emaster_control_session_status_t current_status,
     bool *denied);
+/*
+ * P12.1: 停机请求的**唯一读点**——回调或命令口标志，任一为真即为真。安全门与
+ * 启动阶段都走这个 accessor，全仓不许再出现第二个 `->stop_requested(` 调用点；
+ * 两个读点各读一路，就是这次要修的那个缺陷本身。
+ */
+bool emaster_soem_session_stop_requested(const emaster_soem_session_t *session);
+/*
+ * P12.1: 命令口请求停机。只置标志，不直接终止、不自己发安全停机帧——真正的停机
+ * 由安全门在下一拍判定后走与 SIGINT 完全相同的那段代码，报告里两边只有一个差别：
+ * stop_source。source 先写者赢，免得同一拍里命令与回调互相覆盖。
+ */
+void emaster_soem_session_request_stop(emaster_soem_session_t *session,
+                                       emaster_stop_source_t source);
 
 /* 非周期阶段：发现、PDO 布局、SDO 初始化和 DC 配置，最终到达 SAFE-OP。 */
 emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_session_t *session);

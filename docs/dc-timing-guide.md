@@ -439,6 +439,7 @@ for (i = 0; i < axis_count; i++) {
 ### Python 分析脚本
 
 ```python
+import sys
 import json
 import numpy as np
 
@@ -469,8 +470,14 @@ def analyze_timing(report_path):
             print(f"    最大值: {np.max(data)/1000:.1f} µs")
             print()
 
-analyze_timing('runtime/reports/orangepi-dual-bench-latest.json')
+if len(sys.argv) < 2:
+    raise SystemExit("用法：python3 <本脚本> <报告.json>")
+
+analyze_timing(sys.argv[1])
 ```
+
+> 报告路径从命令行收，别写死在脚本里。写死过一回（P12.30）：工具读的是自己硬编码的那份
+> 报告，传进去的路径被无声忽略，于是"读某份报告"实际拿到的是另一份的数字。
 
 ---
 

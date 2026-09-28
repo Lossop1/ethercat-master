@@ -299,8 +299,11 @@ port 层用三个互斥量保护 `getindex`/`tx`/`rx`；rx 路径把别的线程
   （`max_following_error_counts: 0`，实测 `max_observed` 991/1029）
 - **CSP36° 成功基线的报告来自游离提交** 957e9cd / 4468712 / a58e352 / a860181 /
   5deb751 / c9dd001 / 2c06636 / cee7b9d —— 从任何分支都不可达。它们产出的
-  schema_version 6 报告带 `tracking_error` 遥测，而当前 main 只发 schema_version 4
-  且无这些字段 ⇒ **该成功证据无法从当前 main 复现**
+  schema_version 6 报告带 `tracking_error` 遥测，而当前 main 只发 schema_version 5
+  且无这些字段 ⇒ **该成功证据无法从当前 main 复现**（2026-09-28 更正：本轮之前 main 发的是
+  schema_version 4；本轮加了停机来源、每轴 fault / fault_timeline / final_drive_diagnostic
+  与运行期 603F，版本随之升到 5。这份"证不出来"的结论不受影响——6 里的 `tracking_error`
+  仍然没有）
 
 ### 4.7 已实现但未被验证过的
 

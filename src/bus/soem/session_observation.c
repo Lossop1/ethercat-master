@@ -260,6 +260,7 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
     {
         emaster_control_session_axis_result_t *axis;
         uint64_t age_ns = 0U;
+        uint64_t error_code_age_ns = 0U;
 
         if (axis_index >= (size_t)EMASTER_OBSERVATION_MAX_AXES ||
             axis_index >= (size_t)state.axis_count)
@@ -298,6 +299,25 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
             {
                 axis->drive_diagnostic.cia402_error_code = state.axes[axis_index].error_code;
             }
+        }
+        /*
+         * P12.17: 运行期的 603F 另存一份，**在 slow_telemetry_read 之外**。
+         *
+         * 上面那份 drive_diagnostic 会被停机诊断覆盖，所以它回答的是"停机那一刻
+         * 驱动器报什么"。而"运行期有没有报过错"要看这里——P12.17 那份报告里三根轴
+         * 已经是 CiA402 Fault 而 AL 侧 status_code 全是 0，那么运行期 603F 里有没有
+         * 东西，就是下一个该问的问题。
+         *
+         * 判据用**字段级**的 age，不用轴级的 slow_telemetry_read：两者在"温度读到了、
+         * 错误码这一轮超时"时答案不同，而那种情况下用轴级标志会把快照里残留的
+         * 0x0000 当成"运行期读到的 0x0000"印出去——正是 P11.8 那个形状。
+         */
+        axis->runtime_error_code_read = emaster_observation_slow_axis_error_code_age(
+            &state, (uint32_t)axis_index, now_ns, &error_code_age_ns);
+        if (axis->runtime_error_code_read)
+        {
+            axis->runtime_error_code = state.axes[axis_index].error_code;
+            axis->runtime_error_code_age_ns = error_code_age_ns;
         }
     }
 }

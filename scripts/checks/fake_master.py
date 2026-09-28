@@ -152,6 +152,9 @@ class FakeMaster:
             "aborts": 0,
             "rejects_not_running": 0,
             "unknown_commands": 0,
+            # 命令口 stop/shutdown 收到几次。停机之后命令面就收了摊，所以这个数
+            # 只可能是 1——多过 1 说明"停机了还接得上命令"，那就不是停机。
+            "stop_requests": 0,
             "clients_kicked_unread": 0,
             "obs_accepts": 0,          # 观测口一共 accept 过几次
             "clients_replaced_obs": 0,  # 其中"顶掉了上一个"的次数
@@ -172,6 +175,10 @@ class FakeMaster:
         self.inject_torque_unavailable = False
 
         self.running = False
+        # 收到 stop/shutdown 之后置真：命令面（accept 循环 + 在服务的那条连接）收摊，
+        # 模拟真主站停机后进程退出、套接字消失。观测面与发布面照常跑——假主站不真的
+        # 退出，测试夹具还得用它。
+        self.stopping = False
         self._threads = []
         self._ready_at = time.monotonic() + ready_after
         self.cmd_listener = None
@@ -277,10 +284,26 @@ class FakeMaster:
 
     # ---------- 命令口 ----------
 
-    def _command_loop(self):
-        while self.running:
+    def _close_command_listener(self):
+        """收掉命令口监听。真主站停机是进程退出，监听套接字随之消失；只让 accept
+        循环转完是不够的——监听套接字还开着，内核照样替我们把新连接握手做完，
+        客户端看上去"还连得上"，与真主站不是一回事。"""
+        listener, self.cmd_listener = self.cmd_listener, None
+        if listener is not None:
             try:
-                conn, _ = self.cmd_listener.accept()
+                listener.close()
+            except OSError:
+                pass
+
+    def _command_loop(self):
+        while self.running and not self.stopping:
+            listener = self.cmd_listener
+            # 停机那条线程可能刚把监听收走（stop 也一样），这里的本地引用要么是
+            # 有效的，要么已经被置空——置空就结束，别对 None 调 accept。
+            if listener is None:
+                break
+            try:
+                conn, _ = listener.accept()
             except socket.timeout:
                 continue
             except OSError:
@@ -329,6 +352,10 @@ class FakeMaster:
             reply = self._handle(text.strip())
             if not self._write(conn, reply + "\n"):
                 self.bump("clients_kicked_unread")
+                return
+            if self.stopping:
+                # 回复先出去、再收摊：客户端的正确观测是"收到 OK，然后连接断了"，
+                # 与真主站停机后进程退出的观测顺序一致。
                 return
 
     @staticmethod
@@ -384,8 +411,15 @@ class FakeMaster:
                 return f"OK|quick stop requested for {self.axes_count} axes"
 
             if name in ("stop", "shutdown"):
-                # 真主站：只置 stop_requested，健康会话里安全门恒 false，
-                # 所以**什么都不会发生**。这里如实复刻这个空操作。
+                # P12.1 修好之前，真主站这里只置报告字段 report->stop_requested，
+                # 安全门读的是回调，于是**什么都不会发生**；本假主站当时把那个空操作
+                # 原样复刻了下来，等于把缺陷固化成了期望。现在它与真主站一致：
+                # 受理（回复字符串不变，说的就是"已受理"），然后停机——真主站是进程
+                # 退出，假主站不能真退（还要给客户端喂协议），于是让**命令面消失**：
+                # 命令口不再接受新连接，当前连接在回复写完之后关闭。
+                self.bump("stop_requests")
+                self.stopping = True
+                self._close_command_listener()
                 return "OK|stop requested"
 
             if name == "set_external_target":

@@ -35,6 +35,35 @@ emaster_control_session_status_t emaster_soem_session_publish_feedback(
     return status;
 }
 
+bool emaster_soem_session_stop_requested(const emaster_soem_session_t *session)
+{
+    if (session == NULL)
+    {
+        return false;
+    }
+    return session->stop_requested_by_command ||
+           (session->stop_requested != NULL && session->stop_requested(session->stop_user_data));
+}
+
+void emaster_soem_session_request_stop(emaster_soem_session_t *session,
+                                       emaster_stop_source_t source)
+{
+    if (session == NULL)
+    {
+        return;
+    }
+    session->stop_requested_by_command = true;
+    /*
+     * 来源先写者赢。安全门在下一拍才把 report->stop_requested 置真，所以这里不能
+     * 等它——否则应用层回调与命令同一拍到达时，后写的那一方会覆盖掉先发生的那个，
+     * 而报告要回答的恰恰是"谁先让它停的"。
+     */
+    if (session->report != NULL && session->report->stop_source == EMASTER_STOP_SOURCE_NONE)
+    {
+        session->report->stop_source = source;
+    }
+}
+
 static void collect_safety_conditions(
     emaster_soem_session_t *session,
     bool feedback_valid,
@@ -114,8 +143,8 @@ emaster_control_session_status_t emaster_soem_session_apply_safety(
     {
         return EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     }
-    stop_requested = session->stop_requested != NULL &&
-                     session->stop_requested(session->stop_user_data);
+    /* 两条路经同一个 accessor 汇成一路，见 P12.1。 */
+    stop_requested = emaster_soem_session_stop_requested(session);
     collect_safety_conditions(session, feedback_valid, all_modes_confirmed,
                               current_status, stop_requested, &conditions);
     if (!emaster_safety_evaluate(&conditions, &decision))
@@ -147,6 +176,10 @@ emaster_control_session_status_t emaster_soem_session_apply_safety(
     if (stop_requested)
     {
         session->report->stop_requested = true;
+        if (session->report->stop_source == EMASTER_STOP_SOURCE_NONE)
+        {
+            session->report->stop_source = EMASTER_STOP_SOURCE_APPLICATION;
+        }
         return session->fault_latched ? current_status : EMASTER_CONTROL_SESSION_OK;
     }
     if (!feedback_valid && current_status == EMASTER_CONTROL_SESSION_OK)

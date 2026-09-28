@@ -22,9 +22,14 @@
 #   REPORT_INTERVAL  客户端打印目标/实际的采样间隔（秒），默认 10。
 #                    调成 1 能看出"轴从哪一刻起不再跟目标"，用来判断驱动器
 #                    什么时候掉出 OP（客户端只发不跟 = 驱动器不再执行目标）。
-#   SETTLE_TICKS 客户端结束后等主站自行退出再 SIGINT 的观察拍数（0.5 秒/拍），
-#                默认 10 拍 = 5 秒。设 0 = 立刻 SIGINT，不给保持窗口——用来
-#                分辨"掉出 OP 发生在命令流运行期"还是"发生在这段保持窗口里"。
+#   SETTLE_TICKS 客户端结束后的保持窗口拍数（0.5 秒/拍），默认 10 拍 = 5 秒；
+#                窗口内主站仍在跑、但已无命令流，用来分辨"掉出 OP 发生在命令流
+#                运行期"还是"发生在这段保持窗口里"。设 0 = 不给窗口。
+#                **窗口在发 shutdown 之前**：shutdown 会真的停机，摆在它后面窗口
+#                就没了（P12.1 修好后如此）。
+#
+# 退出码：0 = 客户端跑满且命令流连续；1 = 命令流出现过 200ms 空档；2 = 主站中途
+#         中断了命令流；3 = P12.1 端到端判据失败（命令口 shutdown 没让主站退出）。
 #
 # 报告路径取自部署配置的 run_report_path，无需另行指定。
 
@@ -140,35 +145,56 @@ tail -6 "$CLIENT_LOG"
 echo ""
 echo "终点：$(timeout 3 nc -U "$SOCK" <<< "status" 2>/dev/null | tr '|' '\n' | grep '^a' | tr '\n' ' ')"
 
-# 停机走 SIGINT，不走套接字的 shutdown。
-# 已知缺陷：套接字的 stop/shutdown 只置 report->stop_requested，这条路径不经过
-# 安全门（session_supervisor 的 collect_safety_conditions），而 session_control.c
-# 的退出分支要求 safety_denied——健康会话里 safety_denied 恒为 false，于是
-# stop/shutdown 是空操作，会话不会结束，报告也写不出来。
-# SIGINT 经 main.c 的 application_stop_requested 回调进入安全门，会真正停机。
-# 这里仍然发一次 shutdown 并记录结果，用来观察该缺陷是否已被修复。
-echo "shutdown" | timeout 3 nc -U "$SOCK" > /dev/null 2>&1
+# 停机：先给保持窗口，再从命令口发 shutdown，看主站是否自行退出。
+#
+# **保持窗口必须在 shutdown 之前**，这个顺序不是随手排的。窗口的作用是分辨
+# "掉出 OP 发生在命令流运行期"还是"发生在这段保持窗口里"——命令流已经停了，
+# 只有主站还在跑的这一段才能把两者分开。此前 shutdown 是个空操作（见下），
+# 窗口摆在它后面、看起来一样能观察；P12.1 修好之后 shutdown 真的会停机，窗口
+# 摆在它后面就会**无声地**缩成零长度，那种分辨能力跟着一起消失。
+#
+# P12.1 的端到端判据就在下面那段：shutdown 之后主站应当**自行退出**，走的是与
+# SIGINT 完全相同的那条路。此前命令口的 stop/shutdown 只置报告字段
+# report->stop_requested，不经过安全门（安全门读的是回调），于是它是一句空话：
+# 报告里多一个 true，轴上什么都没发生，主站也不退。那时这段逻辑只能等超时、
+# 然后把超时记成"已知缺陷"——等于把缺陷写成了期望。现在等不到就是**失败**。
 if [ "$SETTLE_TICKS" -gt 0 ]; then
+    echo "保持窗口：$SETTLE_TICKS 拍 × 0.5s（客户端已退出，主站仍在跑）"
     for _ in $(seq 1 "$SETTLE_TICKS"); do
         kill -0 "$MASTER_PID" 2>/dev/null || break
         sleep 0.5
     done
 else
-    echo "SETTLE_TICKS=0：不给保持窗口，直接 SIGINT"
+    echo "SETTLE_TICKS=0：不给保持窗口，客户端一退出就发 shutdown"
 fi
+
+STOP_RC=0
 if kill -0 "$MASTER_PID" 2>/dev/null; then
-    echo "shutdown 未使主站退出（已知缺陷），改发 SIGINT"
-    kill -INT "$MASTER_PID" 2>/dev/null
+    echo "shutdown → 期望主站自行退出（生效延迟约 1 个周期 + 停机序言）"
+    echo "shutdown" | timeout 3 nc -U "$SOCK" > /dev/null 2>&1
+    SELF_EXIT=0
     for _ in $(seq 1 60); do
-        kill -0 "$MASTER_PID" 2>/dev/null || break
+        if ! kill -0 "$MASTER_PID" 2>/dev/null; then SELF_EXIT=1; break; fi
         sleep 0.5
     done
+    if [ "$SELF_EXIT" = "1" ]; then
+        echo "命令口 shutdown 使主站自行退出（P12.1 通过）"
+    else
+        echo "FAIL：shutdown 后 30 秒主站仍在运行——P12.1 的缺陷回来了"
+        STOP_RC=1
+        kill -INT "$MASTER_PID" 2>/dev/null
+        for _ in $(seq 1 60); do
+            kill -0 "$MASTER_PID" 2>/dev/null || break
+            sleep 0.5
+        done
+    fi
+else
+    echo "注意：保持窗口里主站已经不在了（掉出/崩溃），P12.1 这条判据本轮没跑到"
 fi
 if kill -0 "$MASTER_PID" 2>/dev/null; then
     echo "SIGINT 后主站仍未退出，强制结束"
     pkill -9 -f emaster-master 2>/dev/null
-else
-    echo "主站已自行退出"
+    STOP_RC=1
 fi
 
 # 归档不在这里做：主站 publish 时会自己留一份历史副本（硬链接，名字是
@@ -217,4 +243,11 @@ grep -n "WKC\|首次不符\|总线状态" "$LOG" | tail -15
 
 echo ""
 echo "=== 完成 $TAG ==="
-finish "$CLIENT_RC"
+# 停机那条判据单独占一个退出码：它与客户端的 0/1/2 是三件不同的事，混进同一个
+# 数字里就没法从 _done 一眼看出"这一轮是跑得好还是停机坏了"。
+if [ "$STOP_RC" != "0" ] && [ "$CLIENT_RC" = "0" ]; then
+    echo "退出码 3：客户端那部分没问题，但命令口 shutdown 没能停住主站（P12.1）"
+    finish 3
+else
+    finish "$CLIENT_RC"
+fi

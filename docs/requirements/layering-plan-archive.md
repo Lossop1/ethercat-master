@@ -60,7 +60,9 @@ origin/main 18 个提交，实际只差 1 个）。
 (1) 全部 sync0_margin 数据早于修复 `6c4ea9d`，旧公式存在回绕假象，修复后无任何新数据；
 (2) 测量时无 RT 保障（mlockall / SCHED_FIFO / CPU 亲和均缺失），抖动量无法归因于总线；
 (3) 产出 schema_version 6 报告的提交是游离提交，当前 main 只发 schema_version 4 且无
-`tracking_error` 字段，无法复现。
+`tracking_error` 字段，无法复现。（这句是**当时的**记录；2026-09-28 起 main 发
+schema_version 5——那一次升版加的是停机来源与逐轴故障字段，`tracking_error` 仍然没有，
+所以这条理由的结论不变。）
 有效替代基线为 P1.4（2026-09-11，15分钟，deadline_missed=0），见 [[ethercat-csp36-timing-baseline]]。
 
 **P0.4**：`orangepi_bench.json` 的悬空引用随 P0.1 一并修复。

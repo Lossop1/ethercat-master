@@ -84,6 +84,20 @@ typedef enum
     EMASTER_CONTROL_STATE_FAULTED
 } emaster_control_state_t;
 
+/*
+ * P12.1: 停机请求的来源。写进报告，好让"这一轮是谁让它停的"成为报告自己能回答的
+ * 问题——套接字 stop/shutdown 与 SIGINT 走同一条安全链路，差别只有这一个字段。
+ *
+ * 叫 APPLICATION 而不是 SIGNAL：主站之外的那条回调也可能因为"保持阶段跑完了"
+ * 这类非信号理由返回真，把它一律读成信号会得出错误结论。
+ */
+typedef enum
+{
+    EMASTER_STOP_SOURCE_NONE = 0,
+    EMASTER_STOP_SOURCE_APPLICATION,
+    EMASTER_STOP_SOURCE_COMMAND
+} emaster_stop_source_t;
+
 /* P2.5: 单轴状态，用于故障隔离和恢复 */
 typedef enum
 {
@@ -294,8 +308,51 @@ typedef struct
     /* P2.5: 轴级故障恢复 */
     emaster_axis_status_t axis_status;
     bool fault_isolated;               /* 此轴已隔离，不影响其他轴 */
-    uint64_t fault_cycle;              /* 故障发生的周期号 */
+    uint64_t fault_cycle;              /* 故障发生的交换号（session->exchange，不是 report->cycle_count） */
     emaster_control_session_status_t fault_reason; /* 故障原因 */
+    /*
+     * P12.17: 上面四个字段原先只在 AXIS_ISOLATION 策略下才被赋值，而默认策略是
+     * 全局停机，于是"这一轮到底是不是走了隔离"在报告里读不出来；判定当下的状态字
+     * 也没有留，看不出驱动器是故障位还是状态机掉出了 OP。fault_recorded 把这个
+     * 空缺补上：它与 fault_cycle==0（"没记过"）同义，但显式写出来才不会让读者
+     * 去猜 0 号交换与"没有故障"的区别。
+     */
+    bool fault_recorded;
+    uint16_t fault_status_word;        /* 记录故障那一刻的 6041 原始值 */
+    /*
+     * P12.17: 每轴各自的"首次越界"坐标。
+     *
+     * 现场环（cycle_trace）回答不了这个问题：它是**每会话一条**记录、只有最后 64 拍，
+     * 而且入环点在交换函数内部、逐轴解码之前，所以环里的状态字还是上一拍的。要问
+     * "轴 3 是在第几拍开始不在 Operation Enabled"，需要的是每轴一条、全会话有效、
+     * 且写在解码之后的记录——就是下面这几组。
+     *
+     * enable_lost 以"该轴已经进过一次 Operation Enabled"为前提：使能阶段本来就不是
+     * Operation Enabled，不设这个前提的话每根轴的第 0 拍都会命中。
+     */
+    bool enable_lost_seen;
+    uint64_t enable_lost_exchange;
+    uint16_t enable_lost_status_word;
+    bool fault_bit_seen;
+    uint64_t fault_bit_exchange;
+    uint16_t fault_bit_status_word;
+    bool warning_bit_seen;
+    uint64_t warning_bit_exchange;
+    uint16_t warning_bit_status_word;
+    bool internal_limit_seen;
+    uint64_t internal_limit_exchange;
+    uint16_t internal_limit_status_word;
+    /*
+     * P12.17: 运行期的驱动器 603F。
+     *
+     * 它和 drive_diagnostic.cia402_error_code 不是一回事：后者会被停机诊断在
+     * flush_slow 之后覆盖（session_observer.c 成功即无条件写），所以那份值回答的是
+     * "停机那一刻驱动器报什么"，而"运行期有没有报过错"要看这三个字段。age_ns 沿用
+     * P11.8 的约定：没有它，0x0000 与"整场没读到"长得一样。
+     */
+    uint16_t runtime_error_code;
+    bool runtime_error_code_read;
+    uint64_t runtime_error_code_age_ns;
     emaster_dc_axis_result_t dc;
     /* 每个物理从站单独保存周期时序统计，传播延迟不能在多轴间混合。 */
     emaster_cyclic_timing_stats_t timing;
@@ -743,7 +800,13 @@ typedef struct
     bool all_axes_enabled_reached;
     bool motion_started;
     bool motion_completed;
+    /*
+     * 全报告里这个布尔只有一个写点：安全门（session_supervisor.c）。命令口发起的
+     * 停机也得走同一条路，否则报告会一边说"允许控制"（safety_control_permitted
+     * 保持真）一边停机——那是最危险的一种错法。
+     */
     bool stop_requested;
+    emaster_stop_source_t stop_source;
     bool safe_output_sent;
     bool safe_state_reached;
     /*
