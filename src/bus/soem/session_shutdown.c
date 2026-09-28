@@ -69,6 +69,7 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
     size_t axis_index;
     uint64_t start_ns;
     uint64_t end_ns;
+    size_t unreadable_count = 0U;
 
     if (session == NULL || session->plan == NULL)
     {
@@ -84,6 +85,10 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
         printf("[SHUTDOWN] %s 轴%zu: AL state=%u, status_code=0x%04X\n", label,
                axis_index + 1U, (unsigned int)slave->state,
                (unsigned int)slave->ALstatuscode);
+        if (slave->state == 0U)
+        {
+            ++unreadable_count;
+        }
         if (at_entry)
         {
             session->axes[axis_index].shutdown_entry_al_state = slave->state;
@@ -95,6 +100,43 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
             session->axes[axis_index].shutdown_pre_stop_al_status_code = slave->ALstatuscode;
         }
     }
+    /*
+     * 汇总一行。加它的原因：2026-09-28 排查时，"这一轮哪几根轴不在 OP" 得人眼从上面
+     * 八行里挑出 state=20 的那几行，报告里也只有逐轴坐标、没有一句汇总结论。
+     *
+     * state 是 AL 状态寄存器的原值（见 SOEM 的 ecx_readstate），所以：
+     *   0  = 这次根本没读回来（在册从站最低是 INIT=1，"0" 只可能是没读到），
+     *   8  = OP 且无错，其余值 = 不在 OP 或带错误位（20 = 0x14 = SAFE-OP + 错误）。
+     * "读不到"单独说，不让它跟"真的在 INIT"混在一起——这两个的下一步差得远。
+     */
+    printf("[SHUTDOWN] %s 汇总: 在OP=%zu/%zu", label,
+           session->plan->axis_count - unreadable_count, session->plan->axis_count);
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+    {
+        const ec_slavet *slave = &session->context.slavelist[
+            emaster_soem_session_axis_slave(session, axis_index)];
+
+        if (slave->state != 0U && slave->state != 8U)
+        {
+            printf("；不在OP: 轴%zu(state=%u,code=0x%04X)", axis_index + 1U,
+                   (unsigned int)slave->state, (unsigned int)slave->ALstatuscode);
+        }
+    }
+    if (unreadable_count > 0U)
+    {
+        printf("；AL没读回来(state=0):");
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+        {
+            const ec_slavet *slave = &session->context.slavelist[
+                emaster_soem_session_axis_slave(session, axis_index)];
+
+            if (slave->state == 0U)
+            {
+                printf(" 轴%zu", axis_index + 1U);
+            }
+        }
+    }
+    printf("\n");
     end_ns = monotonic_ns();
     return end_ns > start_ns ? end_ns - start_ns : 0U;
 }
