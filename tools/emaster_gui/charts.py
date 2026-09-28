@@ -57,6 +57,16 @@ TOP_MARGIN = 4
 BOTTOM_MARGIN = 22                  # 留给时间轴
 MIN_PANE_H = 24
 
+# 横条顶上留给标题那一条的高度。标题写在 `top + 12`，纵轴上端的刻度值写在
+# `to_y(hi) + 4`——两个都在 x=6，标题没占住地方的时候刻度值会压到标题上（P12.18）。
+TITLE_H = 14
+# 标题下面至少要留得下一段曲线，不然横条只是个标题。
+MIN_PLOT_H = 16
+# 曲线区上下各让出来的边距：极值不贴边框线，刻度值也不出界。
+HEADROOM = 7
+# 上端刻度值的基线，画在曲线区上边往下这么些像素。
+LABEL_DROP = 4
+
 # 一张图至少要这么高。三个横条（位置 3 份、误差 2 份、力矩 2 份）各要留得下刻度和
 # 一条像样的曲线，低于这个数就只剩三条细缝了。容器的最小高度也用它。
 MIN_CHART_H = 210
@@ -297,15 +307,27 @@ class AxisChart(QWidget):
             return
 
         t0, t1, plot, panes = self._ensure_columns(width)
+        for pane, top, pane_h in self._pane_bands(height):
+            self._draw_pane(painter, pane, top, pane_h, panes)
+
+        self._draw_time_axis(painter, height, t0, t1)
+
+    @staticmethod
+    def _pane_bands(height):
+        """一张图的高度切成哪几个横条：[(横条, 上边, 高)]，按从上到下的顺序。
+
+        画和检查都走这一份，检查里就不用把切法再抄一遍——抄的那份一旦跟这里走岔了，
+        检查会绿着而屏幕上不是那么回事。
+        """
         plot_height = height - TOP_MARGIN - BOTTOM_MARGIN
         weight_sum = sum(PANE_HEIGHT_WEIGHT)
+        bands = []
         top = TOP_MARGIN
         for pane in PANE_ORDER:
             pane_h = int(plot_height * PANE_HEIGHT_WEIGHT[pane] / weight_sum)
-            self._draw_pane(painter, pane, top, pane_h, panes)
+            bands.append((pane, top, pane_h))
             top += pane_h
-
-        self._draw_time_axis(painter, height, t0, t1)
+        return bands
 
     def _pane_series(self, pane, panes):
         if pane == PANE_ACTUAL:
@@ -343,8 +365,27 @@ class AxisChart(QWidget):
         hi += pad
         return lo, hi
 
+    @staticmethod
+    def _pane_geometry(top, pane_h):
+        """一个横条的几何：曲线区的上下边、标题的基线。
+
+        曲线区上下各让出 `HEADROOM`：极值贴着边框线不好看，而且上端的刻度值是画在
+        曲线区上边**往下** `LABEL_DROP` 处的，不留这点它就出界了。上边另外还让出
+        标题那一条 `TITLE_H`。
+
+        **上端刻度值的基线必须落在标题基线以下。** 标题和刻度值都从 x=6 起画，标题
+        在 `top + 12`；曲线区上边要是跑到标题基线上面去（`TITLE_H` 没让出来就是），
+        刻度值就压在标题上——P12.18 就是这个，两个只差一个像素，看着像字糊了。
+        几何单独拿出来，就是为了让 `scripts/checks/chart_check.py` 能钉住这一条。
+        """
+        title_baseline = top + 12
+        plot_top = top + TITLE_H + HEADROOM
+        plot_bottom = top + pane_h - HEADROOM
+        return plot_top, plot_bottom, title_baseline
+
     def _draw_pane(self, painter, pane, top, pane_h, panes):
-        if pane_h < MIN_PANE_H:
+        # 连标题带一段曲线都放不下就整个横条不画——画了也只是一条压在一起的字。
+        if pane_h < max(MIN_PANE_H, TITLE_H + MIN_PLOT_H):
             return
         entries = self._pane_series(pane, panes)
         bounds = self._draw_frame(painter, pane, top, pane_h, entries)
@@ -352,14 +393,15 @@ class AxisChart(QWidget):
             return
         lo, hi = bounds
         span = hi - lo
-        inner = max(1, pane_h - 14)
+        plot_top, plot_bottom, _title = self._pane_geometry(top, pane_h)
+        inner = max(1, plot_bottom - plot_top)
 
         def to_y(value):
-            return top + pane_h - int((value - lo) * inner / span) - 7
+            return plot_bottom - int((value - lo) * inner / span)
 
         painter.setPen(COLOR_TEXT)
-        painter.drawText(6, to_y(hi) + 4, f"{int(hi)}")
-        painter.drawText(6, to_y(lo) + 4, f"{int(lo)}")
+        painter.drawText(6, to_y(hi) + LABEL_DROP, f"{int(hi)}")
+        painter.drawText(6, to_y(lo) + LABEL_DROP, f"{int(lo)}")
 
         for _name, (lows, highs, broken), color in entries:
             painter.setPen(QPen(color, 1))

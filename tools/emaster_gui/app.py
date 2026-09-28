@@ -31,16 +31,17 @@ import traceback
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import (QApplication, QComboBox, QDoubleSpinBox, QGridLayout,
-                             QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
-                             QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
-                             QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                             QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                             QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+                             QSizePolicy, QTableWidget, QTableWidgetItem, QVBoxLayout,
+                             QWidget)
 
 import emaster_client
 import emaster_endpoint
 import rt_affinity
 
 from emaster_client import MASTER_STATES
-from emaster_console import DEFAULT_JOG_SPEED, DEFAULT_RANGE_DEG
+from emaster_console import DEFAULT_JOG_SPEED, DEFAULT_RANGE_DEG, parse_axis_targets
 from emaster_gui import charts, poller
 
 # 表格里那几列的标题。顺序就是"出事时你会想先看谁"。
@@ -303,6 +304,25 @@ class MainWindow(QMainWindow):
             walk_row.addWidget(button)
         walk_row.addStretch(1)
         column.addLayout(walk_row)
+
+        multi_row = QHBoxLayout()
+        multi_row.addWidget(QLabel("多轴"))
+        self.multi_edit = QLineEdit()
+        self.multi_edit.setPlaceholderText("如 1:5 4:5　或　5 0 0 0 5")
+        self.multi_edit.setToolTip(
+            "和 TUI 面板同一套写法：\n"
+            "  1:5 4:5      只让轴1、轴4各走 +5°，其余不动\n"
+            "  5 0 0 0 5    按轴号顺序一次给全部轴\n"
+            "  5            只动「轴号」里选中的那根\n"
+            "多轴是一条命令发出去的：同时起步、同时到位。")
+        self.multi_edit.returnPressed.connect(self._walk_multi)
+        multi_row.addWidget(self.multi_edit)
+        multi_button = QPushButton("多轴一起走")
+        multi_button.setToolTip("把上面的写法发给主站。没写到的轴不动（就地保持）")
+        multi_button.clicked.connect(self._walk_multi)
+        multi_row.addWidget(multi_button)
+        multi_row.addStretch(1)
+        column.addLayout(multi_row)
         return box
 
     # ---------------------------------------------------------------- 观测
@@ -507,6 +527,43 @@ class MainWindow(QMainWindow):
                 return
         self._request("move", [(int(self.axis_spin.value()) - 1,
                                float(self.degree_spin.value()))])
+
+    def _walk_multi(self):
+        """多轴框里的那一行 → 一条 `set_external_target`。
+
+        解析用的是面板那支共用的 `parse_axis_targets`，两边语法一致。轴数得从主站
+        那边问（`last_snapshot`），不能让框里写 7 就发 7——部署几根轴是主站说了算，
+        越界的轴号在引擎那边会被整条拒绝，不如在这里说清楚。
+        """
+        text = self.multi_edit.text().strip()
+        if not text:
+            self._log("多轴：框里先写目标，例如 1:5 4:5")
+            return
+        count = int((self.last_snapshot or {}).get("axis_count") or 0)
+        if count <= 0:
+            self._log("多轴：还没接上主站，不知道有几根轴——接管并等第一帧状态回来再发")
+            return
+        try:
+            pairs = parse_axis_targets(text, count, int(self.axis_spin.value()) - 1)
+        except ValueError:
+            self._log(f"多轴：没看懂「{text}」。写法：1:5 4:5 ｜ 5 0 0 0 5 ｜ 5")
+            return
+        if not pairs:
+            return
+        out_of_range = [index for index, _ in pairs if not 0 <= index < count]
+        if out_of_range:
+            self._log(f"多轴：轴号 {out_of_range[0] + 1} 不在 1..{count} 里")
+            return
+        if not self.args.no_confirm:
+            moving = "、".join(f"轴{index + 1} {degrees:+.3f}°"
+                              for index, degrees in pairs)
+            answer = QMessageBox.question(
+                self, "多轴一起走",
+                f"{moving}\n（相对启动位置；没写到的轴不动）\n确认吗？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+        self._request("move", pairs)
 
     def _nudge(self, degrees):
         if not self.args.no_confirm:
@@ -734,12 +791,19 @@ def _schedule_selftest_drive(window, seconds):
     只做**小幅度**的东西：接管 → 点动一点 → 回起点 → 急停 → 复位 → 释放。幅度刻意
     压得很小（0.2° 量级），因为这段代码在台架上也会跑，而台架上的轴是带着真实负载的。
     大步往返留给人在场的验证环节——那一段在 _schedule_selftest_reciprocate 里。
+
+    `multi` 那一拍走的是**多轴输入框**那条路（往框里填字再按「多轴一起走」），不是直接
+    调动作：新加的控件要是没接上，这里就能碰出来。走的轴跟上面那两下点动是同一根，
+    幅度取 0.3°——比那两下的 0.2° 大一档，就为了**让它成为这一轮的最大偏移**：
+    「曾到过」取的是绝对值最大的那一个（而且严格大于才更新），所以控件要是没接上，
+    这一条会停在 0.200、离线回归当场变红。同幅度的话两条谁也不压谁，检查就哑了。
     """
     span = max(1.0, seconds)
     plan = [
         (0.10, "takeover", None),
         (0.25, "nudge", 0.2),
         (0.40, "nudge", -0.2),
+        (0.47, "multi", (1, 0.3)),
         (0.55, "home", None),
         (0.70, "halt", None),
         (0.80, "resume", None),
@@ -758,6 +822,10 @@ def _selftest_step(window, action, amount):
             window._release()
         elif action == "nudge":
             window._request("nudge", 0, amount)
+        elif action == "multi":
+            axis, degrees = amount
+            window.multi_edit.setText(f"{axis}:{degrees}")
+            window._walk_multi()
         else:
             window._request(action)
     return step

@@ -156,8 +156,11 @@ def check_takeover_moves_within_limits(context):
         want(len(moved) == fake_master.DEFAULT_AXES,
              f"报告里只有 {len(moved)} 行的轴信息")
         axis1 = moved[0]
-        want("曾到过=+0.200°" in axis1,
-             f"轴1 没有按自检计划走那 0.2°：{axis1}")
+        # 0.300 是**多轴输入框**那一拍走的（自检计划里它刻意比点动的 0.2 大一档，好让它
+        # 成为最大的那个偏移）。这里断言 0.300 而不是 0.200，等于顺带钉住"框里填的字真的
+        # 走到了引擎"——控件要是没接上，最大偏移会停在点动给的 0.200，这条就红了。
+        want("曾到过=+0.300°" in axis1,
+             f"轴1 没有按自检计划走（点动 ±0.2° 之后多轴框里再走 +0.3°）：{axis1}")
         for line in moved[1:]:
             want("曾到过=+0.000°" in line,
                  f"没让它动的轴却动了：{line}")

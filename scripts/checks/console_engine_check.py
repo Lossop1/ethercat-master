@@ -64,7 +64,8 @@ MUTATING = "--mutate-startup-window" in sys.argv
 if MUTATING and not install_mutated_console():
     sys.exit(2)
 
-from emaster_console import ConsoleClient, Engine, selftest  # noqa: E402
+from emaster_console import (ConsoleClient, Engine, Panel,  # noqa: E402
+                             parse_axis_targets, selftest)
 
 AXES = 5
 MAX_STEP = 6400
@@ -226,6 +227,8 @@ def main():
         return 1
     if startup_window_check() != 0:
         return 1
+    if target_syntax_check() != 0:
+        return 1
     return mode_guard_check()
 
 
@@ -291,6 +294,76 @@ def startup_window_check():
         print("\n启动窗口失败项：" + "，".join(failures))
         return 1
     print("启动窗口通过：主站还在启动时面板不崩，余量显示为未知")
+    return 0
+
+
+def target_syntax_check():
+    """目标行那套写法：面板和图形界面用的是**同一支**解析，写歪的必须被挡下。
+
+    2026-09-19 图形界面加了多轴输入框，解析就是从面板那里提出来的
+    （`parse_axis_targets`）。多轴命令在协议上本来就是一条 `set_external_target`
+    带全部轴，两边各写一套语法没有道理——但"共用"这件事得有东西钉着，不然哪天其中
+    一边加了新写法，另一边不认，人会在图形界面里写不出面板能写的东西。
+
+    所以这里两个方向都钉：写得对的三种写法两边结果必须一模一样；写得歪的（越界轴号、
+    个数不对、不是数）两边必须一样地抛 ValueError。还有一条是"没写到的轴不能出现"——
+    图形界面上"只动轴1和轴4、其余不动"就是靠它。
+    """
+    count, selected = AXES, 2
+    good = ["30", "30 12 5 0 0", "1:30 4:12", "5,0,0,0,5", "5，0，0，0，5",
+            "  ", "1:0"]
+    bad = ["1:30 6:12", "0:5", "30 12 5", "abc", "1:", ":5", "1:30 2:x", "30 12 5 0 0 0"]
+
+    failures = []
+
+    expected = {              # 抽几条把结果本身也钉住，不然"两边一样"可能是两边都错
+        "30": [(2, 30.0)],
+        "30 12 5 0 0": [(0, 30.0), (1, 12.0), (2, 5.0), (3, 0.0), (4, 0.0)],
+        "1:30 4:12": [(0, 30.0), (3, 12.0)],
+        "  ": [],
+    }
+    for text, want_pairs in expected.items():
+        got = parse_axis_targets(text, count, selected)
+        if got != want_pairs:
+            failures.append(f"「{text}」解成了 {got}，应当是 {want_pairs}")
+
+    # 子集：没写到的轴一个都不能冒出来（"其余不动"靠的就是这条）
+    subset = parse_axis_targets("1:30 4:12", count, selected)
+    touched = sorted(index for index, _ in subset)
+    if touched != [0, 3]:
+        failures.append(f"「1:30 4:12」动到了轴 {touched}，应当只有 [0, 3]")
+
+    panel = Panel.__new__(Panel)          # 只借它的解析，不建整个面板
+    panel.engine = type("E", (), {"axis_count": count, "selected_axis": selected})()
+
+    for text in good:
+        try:
+            module_pairs = parse_axis_targets(text, count, selected)
+        except ValueError as exc:
+            failures.append(f"模块解析把「{text}」当成了歪的：{exc}")
+            continue
+        try:
+            panel_pairs = panel.parse_targets(text)
+        except ValueError as exc:
+            failures.append(f"面板解析把「{text}」当成了歪的：{exc}")
+            continue
+        if module_pairs != panel_pairs:
+            failures.append(f"「{text}」两边解析不一致："
+                            f"模块 {module_pairs}，面板 {panel_pairs}")
+
+    for text in bad:
+        for label, call in (("模块", lambda: parse_axis_targets(text, count, selected)),
+                            ("面板", lambda: panel.parse_targets(text))):
+            try:
+                got = call()
+            except ValueError:
+                continue
+            failures.append(f"{label}解析没挡住歪的「{text}」，还给出了 {got}")
+
+    if failures:
+        print("\n目标写法检查失败项：" + "；".join(failures))
+        return 1
+    print(f"目标写法通过：{len(good)} 条对的、{len(bad)} 条歪的，面板与图形界面同一支解析")
     return 0
 
 

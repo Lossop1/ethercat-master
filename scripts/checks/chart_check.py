@@ -242,6 +242,45 @@ def check_paints_empty_and_flat(context):
         want(True, label)
 
 
+def check_top_label_clears_the_title(context):
+    """上端刻度值不能压在横条标题上（P12.18）。
+
+    **这条只能钉几何，钉不了像素。** 本机的 offscreen 后端一个字的墨都不落
+    （`drawText` 画完，图上跟背景一模一样），所以拿画面数墨的写法在这儿恒绿——
+    环境一变结果就变，那比没有检查还坏。改成钉不变量：曲线区上边必须落在标题基线
+    以下、且留得下一行字。画的时候用的就是同一个 `_pane_geometry`，所以真改坏了
+    这条会红。
+
+    带对照：把 `TITLE_H` 置 0 就退回改前那一版几何（曲线区把标题那一条也算进去），
+    对照组必须红。没有它，这条断言证明不了"它拦得住那个 bug"。
+    """
+    def worst_gap(title_h):
+        """所有横条里，上端刻度值基线离标题基线最近的那个距离（像素）。"""
+        original = charts.TITLE_H
+        charts.TITLE_H = title_h
+        try:
+            gaps = []
+            for height in (charts.MIN_CHART_H, 300, 480, 900):
+                for _pane, top, pane_h in charts.AxisChart._pane_bands(height):
+                    plot_top, _plot_bottom, title_baseline = \
+                        charts.AxisChart._pane_geometry(top, pane_h)
+                    label_baseline = plot_top + charts.LABEL_DROP
+                    gaps.append(label_baseline - title_baseline)
+        finally:
+            charts.TITLE_H = original
+        return min(gaps)
+
+    fixed = worst_gap(charts.TITLE_H)
+    # 一行字大致 12–14 px；差一个像素那种（改前是 -1）先不说够不够看，已经在标题上面了。
+    want(fixed >= 12,
+         f"上端刻度值离标题基线只差 {fixed} px，会压在标题上")
+
+    broken = worst_gap(0)
+    want(broken < 12,
+         f"对照组（TITLE_H=0，退回改前的几何）居然也满足不变量（{broken} px）——"
+         f"那这条检查拦不住 P12.18，白拿它当回归")
+
+
 def check_panel_only_feeds_the_shown_axis(context):
     """一次只收当前显示的那根轴——五根全收是五倍的开销，而屏幕上只看得到一根。"""
     panel = charts.ChartPanel(AXIS_COUNT, seconds=10.0, hz=1000.0)
@@ -271,9 +310,14 @@ CHECKS = [
     ("offscreen 下真的画得出来（有像素落下）", check_paints_without_crashing),
     ("没数据和一条平线都画得出来", check_paints_empty_and_flat),
     ("只喂当前显示的那根轴", check_panel_only_feeds_the_shown_axis),
+    ("上端刻度值不压在横条标题上（带 TITLE_H=0 对照）", check_top_label_clears_the_title),
 ]
 
 NOT_COVERED = [
+    "**字画没画出来**：本机的 offscreen 后端 `drawText` 一个像素都不落（空数据、"
+    "「窗口太小」那条提示，渲染完都是纯背景色）。所以凡是跟文字有关的（标题压刻度值、"
+    "字太挤、字被裁掉）这里都验不了，只能钉几何不变量。文字究竟长什么样，得在真界面上"
+    "看——P12.18 那条就是这么发现的，修完也得到真界面上再核一眼。",
     "**画出来的形状对不对**：这里只数了「有像素落下」，没有比对像素位置。断言某个值"
     "该落在第几行，等于把 to_y 重抄一遍，抄错了照样绿。台架上人看一眼曲线跟轴的实际"
     "动作对不对得上——这条只能靠眼睛。",

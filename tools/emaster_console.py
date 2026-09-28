@@ -138,6 +138,37 @@ HELP_TEXT = """
 """.rstrip()
 
 
+def parse_axis_targets(text, axis_count, selected_axis):
+    """把一行输入翻成 [(轴号, 相对启动位置的度数)]。写法就是 HELP_TEXT 里那三种。
+
+    面板和图形界面共用这一份：多轴命令在协议上本来就是一条（`set_external_target`
+    一次带全部轴），两边没道理各写一套语法，写歪了更难查。轴号按 1 起数地输，
+    这里减成 0 起数。
+
+    `axis_count` 是当前部署的轴数，`selected_axis` 是不写轴号时默认落在哪根上。
+    看不懂就抛 ValueError，调用方自己去提示——这里不管怎么显示给用户。
+    """
+    tokens = text.replace(",", " ").replace("，", " ").split()
+    if not tokens:
+        return []
+    if any(":" in token for token in tokens):
+        pairs = []
+        for token in tokens:
+            axis_text, sep, value_text = token.partition(":")
+            if not sep or not axis_text or not value_text:
+                raise ValueError(token)
+            index = int(axis_text) - 1
+            if not 0 <= index < axis_count:
+                raise ValueError(token)
+            pairs.append((index, float(value_text)))
+        return pairs
+    if len(tokens) == 1:
+        return [(selected_axis, float(tokens[0]))]
+    if len(tokens) == axis_count:
+        return [(index, float(value)) for index, value in enumerate(tokens)]
+    raise ValueError(text)
+
+
 # ---------------------------------------------------------------- 客户端
 
 
@@ -1323,25 +1354,7 @@ class Panel:
     def parse_targets(self, text):
         """输入行 → [(轴号, 相对启动位置的度数)]。三种写法见 HELP_TEXT。"""
         engine = self.engine
-        tokens = text.replace(",", " ").replace("，", " ").split()
-        if not tokens:
-            return []
-        if any(":" in token for token in tokens):
-            pairs = []
-            for token in tokens:
-                axis_text, sep, value_text = token.partition(":")
-                if not sep or not axis_text or not value_text:
-                    raise ValueError(token)
-                index = int(axis_text) - 1
-                if not 0 <= index < engine.axis_count:
-                    raise ValueError(token)
-                pairs.append((index, float(value_text)))
-            return pairs
-        if len(tokens) == 1:
-            return [(engine.selected_axis, float(tokens[0]))]
-        if len(tokens) == engine.axis_count:
-            return [(index, float(value)) for index, value in enumerate(tokens)]
-        raise ValueError(text)
+        return parse_axis_targets(text, engine.axis_count, engine.selected_axis)
 
     def handle_prefix_key(self, key):
         prefix = self.pending_prefix
