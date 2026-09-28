@@ -1,5 +1,7 @@
 #include "session_internal.h"
 
+#include "emaster/thread_sched.h"
+
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -468,6 +470,13 @@ static void *observer_thread_func(void *arg)
     struct timespec interval = {0, 50000000}; /* 50ms */
     uint64_t iteration = 0U;
     emaster_observer_stop_trace_t *trace = &session->report->observer_stop;
+
+    /*
+     * 按设计本条线程是"非 RT"（本文件顶部第一行就写着），但 pthread_create 会从
+     * 主线程继承 SCHED_FIFO 与优先级，不显式退一次就名不副实：它会与周期线程同核
+     * 同级别，两边互不抢占。理由与内核实测见 emaster/thread_sched.h。
+     */
+    (void)emaster_thread_leave_realtime("观测线程");
 
     /*
      * 常开路径只留一行。原先启动五行、每轴头三次读取的明细、每 20 轮一条的汇总

@@ -30,6 +30,14 @@ jobs:
       - name: 校验 SOEM 调用点
         run: bash scripts/checks/soem_call_sites.sh
 
+      # 又一条纯文本的结构检查，与上面那条同源。主线程在进 OP 前先把自己升成
+      # SCHED_FIFO 并绑核，而 Linux 上 pthread_create 新建的线程会**继承**创建者
+      # 的调度策略与优先级——于是"非实时"的观测/监听线程会悄悄变成 SCHED_FIFO，
+      # 与周期线程同核同级。同核同优先级的 FIFO 之间不抢占，所以后果是周期被整段
+      # 挡住，而表面上总线照通、帧距照对。新加一个线程却忘了那一句时，这条拦住它。
+      - name: 主站线程调度（离线）
+        run: python3 scripts/checks/master_thread_sched_check.py
+
       # 两条纯 Python 的离线检查，都不需要硬件、不需要 PyQt5，所以在 CI 上跑得动。
       # 它们钉住的是两件"出错了也不会喊"的事：界面自检日志的判定（上一轮台架监控
       # 半边整场零帧，而脚本只把那句话打印出来就算通过），以及绑核缓存（失效时

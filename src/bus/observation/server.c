@@ -2,6 +2,8 @@
 
 #include "emaster/observation/server.h"
 
+#include "emaster/thread_sched.h"
+
 #include <errno.h>
 #include <poll.h>
 #include <pthread.h>
@@ -444,6 +446,14 @@ static void drop_client(emaster_observation_server_t *server)
 static void *observe_thread(void *arg)
 {
     emaster_observation_server_t *server = (emaster_observation_server_t *)arg;
+
+    /*
+     * 观测通道按设计就该是"慢一点是功能问题"的那一类（本文件顶部写着"观测通道
+     * 一旦能阻塞，它就多了一条把非实时负载传导到周期线程的路"）。但它照样从主线程
+     * 继承了 SCHED_FIFO，于是那条传导路径是通过"同优先级互不抢占"实现的。退掉
+     * 实时调度，理由与内核实测见 emaster/thread_sched.h。
+     */
+    (void)emaster_thread_leave_realtime("观测服务线程");
 
     while (server->running)
     {

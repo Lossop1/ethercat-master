@@ -2,6 +2,8 @@
 
 #include "emaster/bus/command_server.h"
 
+#include "emaster/thread_sched.h"
+
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
@@ -115,6 +117,13 @@ static void *listen_thread(void *arg)
 {
     emaster_command_server_t *server = (emaster_command_server_t *)arg;
     char buffer[512];
+
+    /*
+     * 命令监听不是实时工作，但 pthread_create 会从主线程继承 SCHED_FIFO，不显式退
+     * 一次就会与周期线程同核同级、互不抢占——一条解析加日志的长路径足以挡住一整拍。
+     * 理由与内核实测见 emaster/thread_sched.h。
+     */
+    (void)emaster_thread_leave_realtime("命令监听线程");
     ssize_t bytes_read;
     size_t queue_count; /* 锁内快照，供解锁后的 fprintf 使用 */
     emaster_command_t command;
