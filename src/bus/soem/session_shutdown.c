@@ -70,6 +70,7 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
     uint64_t start_ns;
     uint64_t end_ns;
     size_t unreadable_count = 0U;
+    size_t in_op_count = 0U;
 
     if (session == NULL || session->plan == NULL)
     {
@@ -88,6 +89,10 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
         if (slave->state == 0U)
         {
             ++unreadable_count;
+        }
+        else if (slave->state == 8U)
+        {
+            ++in_op_count;
         }
         if (at_entry)
         {
@@ -108,9 +113,13 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
      *   0  = 这次根本没读回来（在册从站最低是 INIT=1，"0" 只可能是没读到），
      *   8  = OP 且无错，其余值 = 不在 OP 或带错误位（20 = 0x14 = SAFE-OP + 错误）。
      * "读不到"单独说，不让它跟"真的在 INIT"混在一起——这两个的下一步差得远。
+     *
+     * 在OP 直接数 state==8，不要写成"总数减读不到的"：2026-09-28 台架第一轮就栽在这，
+     * 当时三根轴是 20（SAFE-OP + 错误）而不是 0，于是那一行打出"在OP=8/8"，同时又
+     * 在它后面列了三根"不在OP"——一句话里自相矛盾。台架验证就该抓出这种东西。
      */
-    printf("[SHUTDOWN] %s 汇总: 在OP=%zu/%zu", label,
-           session->plan->axis_count - unreadable_count, session->plan->axis_count);
+    printf("[SHUTDOWN] %s 汇总: 在OP=%zu/%zu", label, in_op_count,
+           session->plan->axis_count);
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
         const ec_slavet *slave = &session->context.slavelist[
