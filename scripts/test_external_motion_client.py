@@ -23,6 +23,10 @@
   --traverse S   往返模式单程耗时（秒，默认 3）
   --wave W       往返波形：triangle（默认，匀速）或 sine（两端速度为零）
   --total S      往返模式总时长上限（秒，0 = 不限）
+  --only N       只让第 N 根轴走（1 起，按 status 里的轴序），其余轴钉在起点
+                 不动；0 = 全部轴一起走（默认）。注意不是"少发几个数"——主站
+                 按 count == 轴数 精确核对，所以其余轴照样每条命令都要带上，
+                 只是值取起点，等于让它们原地保持
   --dry-run      不连主站，只按参数生成目标、核对限幅并打印统计
 
 退出时停止发送，主站自动进入 HOLD（保持最后目标），不停机。
@@ -176,6 +180,22 @@ def sine_phase(t, traverse):
     return 0.5 * (1.0 - math.cos(math.pi * t / traverse))
 
 
+def axis_deltas(axis_count, delta, only):
+    """每轴各自的位移：only=0 全部轴都走，only=N（1 起）只有第 N 轴走。
+
+    主站按 count == axis_count 精确核对（session_control.c 的 SET_EXTERNAL_TARGET
+    分支），少发几个数会被整条拒掉，所以"只动一根轴"只能靠把其余轴的目标钉在起点
+    上来实现——它们照常收到目标，只是那条目标等于原地保持。
+    """
+    if only <= 0:
+        return [delta] * axis_count
+    if only > axis_count:
+        raise SystemExit(f"--only {only} 超出轴数 {axis_count}")
+    deltas = [0] * axis_count
+    deltas[only - 1] = delta
+    return deltas
+
+
 def check_step_limit(delta, traverse, rate, max_step):
     """往返模式下按标称频率核对单步增量，必要时拉长单程时间。
 
@@ -195,10 +215,10 @@ def check_step_limit(delta, traverse, rate, max_step):
                       f"（每步约 {span / (required * rate * RATE_MARGIN):.0f} counts）")
 
 
-def dry_run(start, delta, args):
+def dry_run(start, deltas, args):
     """不连主站，按参数生成一个往返周期的目标序列并核对步长。"""
     phase_fn = sine_phase if args.wave == "sine" else triangle_phase
-    traverse, message = check_step_limit(delta, args.traverse, args.rate, args.max_step)
+    traverse, message = check_step_limit(deltas, args.traverse, args.rate, args.max_step)
     if message:
         print(message, flush=True)
     period = 1.0 / args.rate
@@ -209,7 +229,7 @@ def dry_run(start, delta, args):
     for index in range(steps + 1):
         t = index * period
         f = phase_fn(t, traverse)
-        frame = [int(round(p + d * f)) for p, d in zip(start, delta)]
+        frame = [int(round(p + d * f)) for p, d in zip(start, deltas)]
         step = max(abs(a - b) for a, b in zip(frame, prev))
         max_step = max(max_step, step)
         prev = frame
@@ -326,6 +346,11 @@ def main():
                         help="打印目标/实际采样的间隔（秒），默认 10。"
                              "调小可以看到「轴从哪一刻起不再跟目标」，"
                              "用来判断驱动器是什么时候掉出 OP 的")
+    parser.add_argument("--only", type=int, default=0,
+                        help="只让第 N 根轴走（1 起，按 status 里的轴序），"
+                             "其余轴钉在起点原地保持；0 = 全部轴一起走（默认）")
+    parser.add_argument("--dry-run-axes", type=int, default=3,
+                        help="仅 --dry-run 用：离线生成的轴数（默认 3）")
     parser.add_argument("--dry-run", action="store_true",
                         help="不连主站，只生成目标并核对限幅")
     args = parser.parse_args()
@@ -337,11 +362,15 @@ def main():
 
     if args.dry_run:
         # 本地核对用：按台架的编码器折算（16384 counts/rev × 28:1 减速比），
-        # 起点取 0，不连主站、不碰硬件。
+        # 起点取 0，不连主站、不碰硬件。轴数可指定，用来离线核对"只动一根轴"
+        # 时其余轴的目标确实钉在起点上。
         per_degree = counts_per_degree("OK|axes=1,enc=16384|a1:bus=1,enc=16384,gear=28/1")
-        delta = [int(round(args.degrees * per_degree))] * 3
-        print(f"[dry-run] counts/度={per_degree:.2f} 位移={delta[0]} counts", flush=True)
-        max_step = dry_run([0, 0, 0], delta, args)
+        delta = int(round(args.degrees * per_degree))
+        deltas = axis_deltas(args.dry_run_axes, delta, args.only)
+        which = "全部轴" if args.only <= 0 else f"只有第 {args.only} 轴"
+        print(f"[dry-run] counts/度={per_degree:.2f} 位移={delta} counts "
+              f"轴数={args.dry_run_axes} {which}", flush=True)
+        max_step = dry_run([0] * args.dry_run_axes, deltas, args)
         return 0 if max_step <= args.max_step else 1
 
     if args.socket_path is None:
@@ -358,25 +387,28 @@ def main():
 
     per_degree = counts_per_degree(topology)
     delta = int(round(args.degrees * per_degree))
+    deltas = axis_deltas(len(start), delta, args.only)
+    moving = [index + 1 for index, value in enumerate(deltas) if value != 0]
     max_step = parse_field(topology, "max_step") or 0
-    print(f"[client] counts/度={per_degree:.2f} 位移={delta} counts max_step={max_step}",
-          flush=True)
+    print(f"[client] counts/度={per_degree:.2f} 位移={delta} counts max_step={max_step} "
+          f"轴数={len(start)} 会动的是第 {moving} 轴", flush=True)
     print(f"[client] 起点={start}", flush=True)
 
     if args.cycles is not None:
-        traverse, message = check_step_limit([delta] * len(start), args.traverse,
+        traverse, message = check_step_limit(deltas, args.traverse,
                                              args.rate, max_step)
         if message:
             print(message, flush=True)
         args.traverse = traverse
         print(f"[client] 往返模式：{start} <-> "
-              f"{[position + delta for position in start]}，单程 {traverse:.2f}s，"
+              f"{[position + step for position, step in zip(start, deltas)]}，"
+              f"单程 {traverse:.2f}s，"
               f"波形 {args.wave}，"
               f"{'不限次数' if args.cycles == 0 else f'{args.cycles} 次'}",
               flush=True)
-        return run_reciprocate(client, start, [delta] * len(start), args, max_step)
+        return run_reciprocate(client, start, deltas, args, max_step)
 
-    targets = [position + delta for position in start]
+    targets = [position + step for position, step in zip(start, deltas)]
     print(f"[client] 终点={targets}", flush=True)
 
     period = 1.0 / args.rate
@@ -395,7 +427,8 @@ def main():
     errors = 0
     try:
         for step in range(1, steps + 1):
-            frame = [position + delta * step // steps for position in start]
+            frame = [position + axis_delta * step // steps
+                     for position, axis_delta in zip(start, deltas)]
             response = client.command("set_external_target " + " ".join(str(v) for v in frame))
             sent += 1
             if not response.startswith("OK|"):

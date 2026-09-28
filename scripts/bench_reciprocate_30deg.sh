@@ -22,6 +22,10 @@
 #   REPORT_INTERVAL  客户端打印目标/实际的采样间隔（秒），默认 10。
 #                    调成 1 能看出"轴从哪一刻起不再跟目标"，用来判断驱动器
 #                    什么时候掉出 OP（客户端只发不跟 = 驱动器不再执行目标）。
+#   ONLY_AXIS    只让第 N 根轴走（1 起，按 status 里的轴序），其余轴留在起点
+#                原地保持；0 = 全部轴一起走（默认）。"有一根轴不跟"的排查用
+#                这个把那一根单独拎出来——全动时它不动，可能是它自己的问题，
+#                也可能是多轴一起时的别的问题；单独动它还不动，就只剩它自己。
 #   SETTLE_TICKS 客户端结束后的保持窗口拍数（0.5 秒/拍），默认 10 拍 = 5 秒；
 #                窗口内主站仍在跑、但已无命令流，用来分辨"掉出 OP 发生在命令流
 #                运行期"还是"发生在这段保持窗口里"。设 0 = 不给窗口。
@@ -45,6 +49,7 @@ WAVE=${WAVE:-triangle}
 TAG=${TAG:-recip30}
 REPORT_INTERVAL=${REPORT_INTERVAL:-10}
 SETTLE_TICKS=${SETTLE_TICKS:-10}
+ONLY_AXIS=${ONLY_AXIS:-0}
 
 SOCK=/tmp/emaster-${DEPLOYMENT}.sock
 LOG=/tmp/${TAG}_master.log
@@ -89,6 +94,9 @@ finish() {
 
 echo "=== 台架连续往返 $STAMP ==="
 echo "部署=$DEPLOYMENT 时长=${DURATION}s 单程=${TRAVERSE}s 位移=${DEGREES}度 频率=${RATE}Hz 波形=$WAVE"
+if [ "$ONLY_AXIS" != "0" ]; then
+    echo "只动第 $ONLY_AXIS 轴，其余轴钉在起点原地保持"
+fi
 echo "主站日志=$LOG 客户端日志=$CLIENT_LOG"
 
 # 清理上次遗留：先停主站，再删套接字，避免新主站绑到旧 inode 上
@@ -136,7 +144,7 @@ echo "=== 往返 $DURATION 秒 ==="
 python3 -u "$REPO/scripts/test_external_motion_client.py" "$SOCK" \
     --cycles 0 --total "$DURATION" --traverse "$TRAVERSE" \
     --degrees "$DEGREES" --rate "$RATE" --wave "$WAVE" --ready 30 \
-    --report-interval "$REPORT_INTERVAL" \
+    --report-interval "$REPORT_INTERVAL" --only "$ONLY_AXIS" \
     > "$CLIENT_LOG" 2>&1
 CLIENT_RC=$?
 echo "客户端退出码=$CLIENT_RC（0=跑满时长且命令流连续，1=出现过 200ms 空档，2=主站中断了命令流）"
