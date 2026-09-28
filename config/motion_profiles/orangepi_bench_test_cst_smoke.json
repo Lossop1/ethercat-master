@@ -15,6 +15,7 @@
       "acceleration_millidegrees_per_second2": 0,
       "deceleration_millidegrees_per_second2": 0,
       "max_following_error_millidegrees": 50000,
+      "max_step_millidegrees": 50000,
       "max_velocity_error_millidegrees_per_second": 0,
       "expected_position_scale": {
         "encoder_increments": 16384,
@@ -30,6 +31,7 @@
       "acceleration_millidegrees_per_second2": 0,
       "deceleration_millidegrees_per_second2": 0,
       "max_following_error_millidegrees": 50000,
+      "max_step_millidegrees": 50000,
       "max_velocity_error_millidegrees_per_second": 0,
       "expected_position_scale": {
         "encoder_increments": 16384,
@@ -45,6 +47,7 @@
       "acceleration_millidegrees_per_second2": 0,
       "deceleration_millidegrees_per_second2": 0,
       "max_following_error_millidegrees": 50000,
+      "max_step_millidegrees": 50000,
       "max_velocity_error_millidegrees_per_second": 0,
       "expected_position_scale": {
         "encoder_increments": 16384,
@@ -60,6 +63,7 @@
       "acceleration_millidegrees_per_second2": 0,
       "deceleration_millidegrees_per_second2": 0,
       "max_following_error_millidegrees": 50000,
+      "max_step_millidegrees": 50000,
       "max_velocity_error_millidegrees_per_second": 0,
       "expected_position_scale": {
         "encoder_increments": 16384,
@@ -75,6 +79,7 @@
       "acceleration_millidegrees_per_second2": 0,
       "deceleration_millidegrees_per_second2": 0,
       "max_following_error_millidegrees": 50000,
+      "max_step_millidegrees": 50000,
       "max_velocity_error_millidegrees_per_second": 0,
       "expected_position_scale": {
         "encoder_increments": 16384,

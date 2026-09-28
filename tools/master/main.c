@@ -494,24 +494,52 @@ int main(int argc, char **argv) {
         if (limit_millidegrees == 0) {
             limit_millidegrees = 2000;  /* 默认 2° */
         }
+        /*
+         * P12.22：单步上限是**独立**的一道闸，不再借用跟随误差窗的值。
+         * 两者量级上必须满足 跟随误差窗 ≥ 单步上限（见 runtime_config.h 的说明
+         * 与校验器），但相等只是巧合，不是关系——单步上限由外部控制器的发送
+         * 频率决定，跟随误差窗由轴的跟随能力决定。
+         */
+        uint32_t step_millidegrees = motion_axis->max_step_millidegrees;
+        if (step_millidegrees == 0) {
+            step_millidegrees = 2000;  /* 默认 2° */
+        }
         following_error_counts = (uint64_t)(counts_per_degree * (double)limit_millidegrees / 1000.0);
-        max_step_counts = following_error_counts;
-        fprintf(stderr, "[P6.3] 跟随误差限幅: %.2f° = %lu counts "
+        max_step_counts = (uint64_t)(counts_per_degree * (double)step_millidegrees / 1000.0);
+        if (max_step_counts > following_error_counts) {
+            /* 配置校验器已经拦住这一条；这里是主站自己的最后一道，因为生成的 C
+             * 有可能来自一份没过校验的配置。宁可拒跑，也不要带着一道会误跳的闸进 OP。 */
+            fprintf(stderr, "[P6.3] 错误：单步上限 %.2f° 大于跟随误差窗 %.2f°，"
+                            "合法的大步进会立刻触发跟随误差保护，拒绝启动\n",
+                    (double)step_millidegrees / 1000.0,
+                    (double)limit_millidegrees / 1000.0);
+            free(plan_axes);
+            free(results);
+            return 1;
+        }
+        fprintf(stderr, "[P6.3] 跟随误差限幅: %.2f° = %lu counts；单步上限: %.2f° = %lu counts "
                         "(enc=%u/%u, gear=%u:%u, %.2f counts/deg)%s\n",
                 (double)limit_millidegrees / 1000.0,
                 (unsigned long)following_error_counts,
+                (double)step_millidegrees / 1000.0,
+                (unsigned long)max_step_counts,
                 motion_axis->expected_encoder_increments,
                 motion_axis->expected_encoder_motor_revolutions,
                 motion_axis->expected_gear_motor_revolutions,
                 motion_axis->expected_gear_shaft_revolutions,
                 counts_per_degree,
-                motion_axis->max_following_error_millidegrees == 0 ? " (default)" : "");
+                motion_axis->max_following_error_millidegrees == 0 ||
+                        motion_axis->max_step_millidegrees == 0
+                    ? " (default)"
+                    : "");
     } else {
         /* 兜底：无 motion_axis 配置时仍给一个保守值。
          * 6400 counts 在 16384 enc × 28:1 gear 下约 5.02°（1274.31 counts/度），
-         * 不是 2°。实际值随编码器分辨率和减速比变化。 */
+         * 不是 2°。实际值随编码器分辨率和减速比变化。
+         * 两道闸在这里取同一个保守值——是"没有配置信息"时的兜底，不是两者的
+         * 关系；有运动方案时它们各自从配置读自己的值。 */
         following_error_counts = 6400;
-        max_step_counts = following_error_counts;
+        max_step_counts = 6400;
         fprintf(stderr, "[P6.3] 警告：无 motion_axis 配置，使用兜底限幅 %lu counts\n",
                 (unsigned long)following_error_counts);
     }

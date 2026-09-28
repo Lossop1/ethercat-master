@@ -198,6 +198,7 @@ def motion_declarations(motions: list[dict[str, Any]]) -> tuple[str, str]:
                 f"UINT32_C({axis['acceleration_millidegrees_per_second2']}), "
                 f"UINT32_C({axis['deceleration_millidegrees_per_second2']}), "
                 f"UINT32_C({axis['max_following_error_millidegrees']}), "
+                f"UINT32_C({axis['max_step_millidegrees']}), "
                 f"UINT32_C({axis['max_velocity_error_millidegrees_per_second']}), "
                 f"UINT32_C({axis['expected_position_scale']['encoder_increments']}), "
                 f"UINT32_C({axis['expected_position_scale']['encoder_motor_revolutions']}), "

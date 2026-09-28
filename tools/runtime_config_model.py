@@ -583,6 +583,7 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             acceleration = axis.get("acceleration_millidegrees_per_second2", 0)
             deceleration = axis.get("deceleration_millidegrees_per_second2", 0)
             following_error = axis.get("max_following_error_millidegrees")
+            max_step = axis.get("max_step_millidegrees")
             velocity_error = axis.get("max_velocity_error_millidegrees_per_second", 0)
             expected_scale = axis.get("expected_position_scale")
             if axis_id in axis_ids:
@@ -624,6 +625,22 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数"
                 )
+            if (
+                not isinstance(max_step, int)
+                or isinstance(max_step, bool)
+                or not 0 < max_step <= 0xFFFFFFFF
+            ):
+                raise ValueError(
+                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限必须是正整数"
+                )
+            # 结构性约束，不是口味问题：目标一跳 S，跟随误差立刻就是 S。
+            # 单步上限高于跟随误差窗，等于让一条合法命令当场把跟随误差闸打跳。
+            if max_step > following_error:
+                raise ValueError(
+                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限 "
+                    f"({max_step} 毫度) 不能大于跟随误差窗 ({following_error} 毫度)："
+                    "目标跳一步就会立刻触发跟随误差保护"
+                )
             if not isinstance(expected_scale, dict):
                 raise ValueError(
                     f"运动方案 {profile_id} 的轴 {axis_id} 缺少 expected_position_scale"
@@ -655,6 +672,7 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "acceleration_millidegrees_per_second2": acceleration,
                     "deceleration_millidegrees_per_second2": deceleration,
                     "max_following_error_millidegrees": following_error,
+                    "max_step_millidegrees": max_step,
                     "max_velocity_error_millidegrees_per_second": velocity_error,
                     "expected_position_scale": scale_values,
                 }

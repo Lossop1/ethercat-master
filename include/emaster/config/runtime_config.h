@@ -135,6 +135,18 @@ typedef struct
     uint32_t acceleration_millidegrees_per_second2;
     uint32_t deceleration_millidegrees_per_second2;
     uint32_t max_following_error_millidegrees;
+    /*
+     * 相邻两条外部目标之间允许的最大增量（负载侧毫度，换算成 counts 后使用）。
+     * 它与 max_following_error_millidegrees 是**两个独立的闸**，不要合并：
+     *   - 这一条管"命令合不合理"——上一条写出的 607A 与这一条的差；
+     *   - 那一条管"轴跟没跟上"——实际位置与已提交目标的差。
+     * 两者有量级关系而非相等关系：目标跳 S 之后，跟随误差立刻就是 S，
+     * 所以上限必须满足 跟随误差窗 ≥ 单步上限，否则一条合法的大步进会当场把
+     * 跟随误差闸打跳。要收紧跟随误差窗，就必须先收紧单步上限，而单步上限
+     * 的下限由外部控制器的**发送频率**决定（50 Hz 裸发满量程摆动的单步是
+     * 40°，1 kHz 插值后每拍只有 2°）。详见 docs/requirements/layering-plan.md P12.22/P12.27。
+     */
+    uint32_t max_step_millidegrees;
     uint32_t max_velocity_error_millidegrees_per_second;
     /* 执行前必须与当前物理从站的 608F/6091 读回完全一致。 */
     uint32_t expected_encoder_increments;

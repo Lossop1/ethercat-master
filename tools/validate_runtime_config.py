@@ -558,6 +558,7 @@ def validate_motion_profiles(
                 axis_id = axis_id_value if non_empty_string(axis_id_value) else ""
                 relative_angle = axis.get("relative_angle_millidegrees")
                 following_error = axis.get("max_following_error_millidegrees")
+                max_step = axis.get("max_step_millidegrees")
                 expected_scale = axis.get("expected_position_scale")
                 check.require(bool(axis_id), f"运动方案 {profile_id} 的轴 ID 不能为空")
                 check.require(
@@ -575,6 +576,24 @@ def validate_motion_profiles(
                     and not isinstance(following_error, bool)
                     and 0 < following_error <= 0xFFFFFFFF,
                     f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数",
+                )
+                check.require(
+                    isinstance(max_step, int)
+                    and not isinstance(max_step, bool)
+                    and 0 < max_step <= 0xFFFFFFFF,
+                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限必须是正整数",
+                )
+                # 结构性约束：目标跳一步 S，跟随误差立刻就是 S。单步上限高于跟随
+                # 误差窗，等于让一条合法命令当场触发跟随误差保护。
+                check.require(
+                    not (
+                        isinstance(max_step, int)
+                        and not isinstance(max_step, bool)
+                        and isinstance(following_error, int)
+                        and not isinstance(following_error, bool)
+                        and max_step > following_error
+                    ),
+                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限不能大于跟随误差窗",
                 )
                 check.require(
                     isinstance(expected_scale, dict),

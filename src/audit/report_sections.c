@@ -615,6 +615,7 @@ static bool write_motion(FILE *stream, const emaster_motion_profile_t *motion)
             ",\"acceleration_millidegrees_per_second2\":%" PRIu32
             ",\"deceleration_millidegrees_per_second2\":%" PRIu32
             ",\"max_following_error_millidegrees\":%" PRIu32
+            ",\"max_step_millidegrees\":%" PRIu32
             ",\"max_velocity_error_millidegrees_per_second\":%" PRIu32
             ",\"expected_position_scale\":{\"encoder_increments\":%" PRIu32
             ",\"encoder_motor_revolutions\":%" PRIu32
@@ -625,6 +626,7 @@ static bool write_motion(FILE *stream, const emaster_motion_profile_t *motion)
             axis->acceleration_millidegrees_per_second2,
             axis->deceleration_millidegrees_per_second2,
             axis->max_following_error_millidegrees,
+            axis->max_step_millidegrees,
             axis->max_velocity_error_millidegrees_per_second,
             axis->expected_encoder_increments,
             axis->expected_encoder_motor_revolutions,
