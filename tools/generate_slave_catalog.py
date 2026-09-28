@@ -123,6 +123,7 @@ TELEMETRY_SEMANTIC_VALUES = {
     "target_velocity": "EMASTER_TELEMETRY_TARGET_VELOCITY",
     "extended_error_code": "EMASTER_TELEMETRY_EXTENDED_ERROR_CODE",
     "servo_error_code": "EMASTER_TELEMETRY_SERVO_ERROR_CODE",
+    "target_position_readback": "EMASTER_TELEMETRY_TARGET_POSITION_READBACK",
 }
 
 

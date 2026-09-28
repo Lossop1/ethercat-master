@@ -261,6 +261,7 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
         emaster_control_session_axis_result_t *axis;
         uint64_t age_ns = 0U;
         uint64_t error_code_age_ns = 0U;
+        uint64_t readback_age_ns = 0U;
 
         if (axis_index >= (size_t)EMASTER_OBSERVATION_MAX_AXES ||
             axis_index >= (size_t)state.axis_count)
@@ -318,6 +319,22 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
         {
             axis->runtime_error_code = state.axes[axis_index].error_code;
             axis->runtime_error_code_age_ns = error_code_age_ns;
+        }
+
+        /*
+         * P12.41: 0x607A 的读回，同样**在 slow_telemetry_read 之外**、同样用字段级年龄。
+         *
+         * 不能用轴级标志：温度读到、607A 这一轮超时是常事，那时轴级标志为真，快照里
+         * 残留的旧值就会被印成"驱动器现在持有的目标"，而那正是要下"目标没送到驱动器"
+         * 这个结论的那一列——把读失败印成结论，比印成空白危险得多。
+         */
+        axis->target_position_readback_read =
+            emaster_observation_slow_axis_target_position_age(&state, (uint32_t)axis_index,
+                                                              now_ns, &readback_age_ns);
+        if (axis->target_position_readback_read)
+        {
+            axis->target_position_readback = state.axes[axis_index].target_position_readback;
+            axis->target_position_readback_age_ns = readback_age_ns;
         }
     }
 }

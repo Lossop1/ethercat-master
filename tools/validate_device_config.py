@@ -171,6 +171,7 @@ SLOW_TELEMETRY_SEMANTICS = (
     "target_velocity",
     "extended_error_code",
     "servo_error_code",
+    "target_position_readback",
 )
 
 

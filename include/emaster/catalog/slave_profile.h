@@ -70,7 +70,21 @@ typedef enum
     EMASTER_TELEMETRY_ACTUAL_VELOCITY,
     EMASTER_TELEMETRY_TARGET_VELOCITY,
     EMASTER_TELEMETRY_EXTENDED_ERROR_CODE,
-    EMASTER_TELEMETRY_SERVO_ERROR_CODE
+    EMASTER_TELEMETRY_SERVO_ERROR_CODE,
+    /*
+     * 驱动器**自己持有的**目标位置（0x607A）。与 TxPDO 里那几个反馈不是一类东西：
+     * 反馈说的是"它现在在哪"，这一条说的是"它以为你要它去哪"。
+     *
+     * 两个值在报告里必须分得开。会话结果里的 target_position 是**主站写进过程映像**
+     * 的那个数，主站永远知道自己写了什么；它说明不了驱动器有没有把那一串字节收下并
+     * 用起来。排查"轴不动"时正是卡在这一步：主站写了一个扫过全行程的目标、WKC 24/24
+     * 说明所有从站都回了帧，而轴一步没跟——这时只有驱动器自报的目标能切开两种情形
+     * （P12.41）：
+     *   读到的跟着主站的指令一起扫 ⇒ 目标到了驱动器，是它不执行（功率级/使能/电机侧）；
+     *   读到的一直是旧值       ⇒ 值在"过程映像"到"驱动器应用"之间就断了，与电机无关。
+     * 因此名字里带 readback，不与 target_position 混用。
+     */
+    EMASTER_TELEMETRY_TARGET_POSITION_READBACK
 } emaster_telemetry_semantic_t;
 
 /* 一个供应商私有遥测对象：对象号来自设备配置，解释权归声明它的设备。 */

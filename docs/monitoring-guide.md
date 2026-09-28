@@ -224,9 +224,10 @@
 
 结构示例：
 
-报告顶层是 `schema_version: 7`（少了故障字段的报告是 4 或更早，见 2.2）。**版本 6 是没有的**——
-那号被一批游离提交占去了（它们发的报告带 `tracking_error` 遥测，当前 main 复现不出来），
-所以本仓库从 5 直接跳到 7，免得同一版本号下并存两种形状。
+报告顶层是 `schema_version: 8`（版本 7 没有 `target_position_readback`，见 2.4；少了故障字段的是
+4 或更早，见 2.2）。**版本 6 是没有的**——那号被一批游离提交占去了（它们发的报告带
+`tracking_error` 遥测，当前 main 复现不出来），所以本仓库从 5 直接跳到 7，再从 7 到 8，
+免得同一版本号下并存两种形状。
 
 ```json
 {
@@ -245,6 +246,8 @@
                                  "extended_servo_error_code": "0x00000000",
                                  "servo_error_code": "0x00000000"},
       "runtime": {
+        "actual_position": 207148,
+        "target_position": 207148,
         "actual_current": -29,
         "dc_link_voltage": 48261,
         "mosfet_temperature": 355,
@@ -265,7 +268,10 @@
         "slow_telemetry_age_ns": 182000000,
         "runtime_error_code_read": true,
         "runtime_error_code": "0x2310",
-        "runtime_error_code_age_ns": 182000000
+        "runtime_error_code_age_ns": 182000000,
+        "target_position_readback_read": true,
+        "target_position_readback": 207180,
+        "target_position_readback_age_ns": 120000000
       }
     }
   ]
@@ -357,7 +363,36 @@
 > `post_cycle_diagnostic`（`0x200E:*` 等）会**逐条 `succeeded=false`**——那是会话已经
 > 停了、诊断根本没跑起来，**不是"驱动器不应答"**。把它们读成驱动器故障会走错方向。
 
-#### 2.4 报告顶层的停机与归档字段
+#### 2.4 驱动器自报的目标位置（P12.41）
+
+`target_position_readback` 是**驱动器自己持有的**目标位置：会话运行期间从 0x607A 读回的
+那一份。它问的问题与报告里其他所有位置字段都不一样——
+
+| 字段 | 含义 |
+| --- | --- |
+| `target_position_readback_read` | **这一轴整场读到过 0x607A 没有**。`false` ⇒ 下一行的数字不是读数 |
+| `target_position_readback` | 驱动器报回来的目标位置（count） |
+| `target_position_readback_age_ns` | 最后一次读到的时刻距**报告回填**多久（ns） |
+
+**为什么要另开一列**：`runtime.target_position` 是**主站自己写进过程映像**的那一个，主站
+永远知道自己写了什么——所以某根轴不动时，它什么也证不了。`6091` 那套标定把"主站写了
+38 229 count"算得再准，也不能回答"这个数到没到驱动器"。要切开两种截然不同的故障：
+
+- **读回跟着主站的指令一起扫** ⇒ 目标到了驱动器，是它**不执行**（功率级 / 使能 / 电机侧）；
+- **读回一直是旧值** ⇒ 值在"过程映像"到"驱动器应用"之间就断了，**与电机无关**。
+
+版本 7 及更早的报告里这两种长得**一模一样**，因为那时只有主站自己那个数。
+
+读法与 2.2 的 603F 完全同一条约定：先看 `_read`，再看值，再看年龄。`scripts/analysis/
+extract_report.py` 把两列并排印成 `读回=… 主站写的=…`，就是为了**一眼比出它们是同步扫、
+还是读回停在原地**。
+
+> **开观测才有这一列**：0x607A 是慢速遥测的一项，观测线程关着时它一次都不会读
+> （`target_position_readback_read` 恒为 `false`，印出来是「—」）。而观测线程每轮会多出
+> 一批邮箱往返，邮箱流量本身会加重同步事件丢失（P8.1）——**要读它的时候再开观测**，
+> 别让它常开。
+
+#### 2.5 报告顶层的停机与归档字段
 
 | 字段 | 含义 |
 | --- | --- |
@@ -503,6 +538,9 @@ for i, axis in enumerate(report['axes']):
 | runtime_error_code | 603Fh | uint16 | — | SDO（运行期） |
 | runtime_error_code_read | —（主站侧标志） | bool | — | 报告 |
 | runtime_error_code_age_ns | —（主站侧计时） | uint64 | ns | 报告 |
+| target_position_readback | 607Ah | int32 | count | SDO（运行期） |
+| target_position_readback_read | —（主站侧标志） | bool | — | 报告 |
+| target_position_readback_age_ns | —（主站侧计时） | uint64 | ns | 报告 |
 | fault.* | —（主站侧判定） | — | — | 报告 |
 | fault_timeline.* | —（主站侧判定） | — | — | 报告 |
 | final_drive_diagnostic.cia402_error_code | 603Fh | uint16 | — | SDO（停机诊断） |

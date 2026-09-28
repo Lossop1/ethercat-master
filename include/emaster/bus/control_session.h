@@ -353,6 +353,20 @@ typedef struct
     uint16_t runtime_error_code;
     bool runtime_error_code_read;
     uint64_t runtime_error_code_age_ns;
+    /*
+     * P12.41: 驱动器**自己报的**目标位置（0x607A，慢速遥测周期性读回）。
+     *
+     * 与上面那个 target_position 必须分得开：target_position 是主站写进过程映像的值，
+     * 主站永远知道自己写了什么，它证不了驱动器把那串字节收下并用起来了。"八轴里有一根
+     * 纹丝不动、而主站明明把目标扫过了全行程"这种情况，两条一对比才切得开：
+     *   读回跟着指令一起扫 ⇒ 目标到了驱动器，是它不执行（功率级/使能/电机侧）；
+     *   读回一直是旧值     ⇒ 值在过程映像到驱动器应用之间断了，与电机无关。
+     * age_ns 沿用 P11.8 的"读到过没有 + 多久以前"约定，且是**字段级**的：这一条
+     * 读失败留下的旧值，与"驱动器一直保持着旧值"是同一个形状，没有年龄就分不开。
+     */
+    int32_t target_position_readback;
+    bool target_position_readback_read;
+    uint64_t target_position_readback_age_ns;
     emaster_dc_axis_result_t dc;
     /* 每个物理从站单独保存周期时序统计，传播延迟不能在多轴间混合。 */
     emaster_cyclic_timing_stats_t timing;

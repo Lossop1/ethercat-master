@@ -17,6 +17,11 @@
 温度读到而错误码那一轮 SDO 超时是常事，共用一个轴级标志会把"从没读到"印成
 `0x0000`，看着像"驱动器说没事"——而 P12.17 里五轴 AL 侧一律 state=8/code=0、
 总线全干净，603F 里有没有东西正是关键一问，印错就把线索改没了。
+
+第三列是驱动器自报的目标位置 0x607A（P12.41），同样是字段级标志、同样印「—」。
+它问的与前两列不是一回事：前两列问的是"驱动器对自己状态的看法"，这一列问的是
+**"主站写进过程映像的目标，到底有没有到驱动器手里"**。夹具里读回值与主站写入值
+被故意设成不同，就是为了让"印成主站那一个"这种错法无处可藏。
 """
 
 import os
@@ -33,6 +38,7 @@ EXTRACTOR = os.path.join(ROOT, "scripts", "analysis", "extract_report.py")
 # 判红，那说明这两组断言里有一组其实没在盯自己的那一列。
 MUTATE_TELEMETRY_FROM = 'if not field_flag(block, b"slow_telemetry_read"):'
 MUTATE_CODE_FROM = 'if not field_flag(block, b"runtime_error_code_read"):'
+MUTATE_READBACK_FROM = 'if not field_flag(block, b"target_position_readback_read"):'
 MUTATE_TO = 'if False:  # 变异：不认标志'
 
 PASSED = 0
@@ -60,7 +66,7 @@ def make_report(path):
     """
 
     def axis(mosfet, motor, voltage, current, read, age_ns, code, code_read,
-             code_age_ns):
+             code_age_ns, target, rb_read, rb_value, rb_age_ns):
         return (f'"runtime":{{"status_word":"0x1237","control_word":"0x000F",'
                 f'"actual_current":{current},"dc_link_voltage":{voltage},'
                 f'"mosfet_temperature":{mosfet},"motor_temperature":{motor},'
@@ -68,17 +74,29 @@ def make_report(path):
                 f'"slow_telemetry_age_ns":{age_ns},'
                 f'"runtime_error_code_read":{"true" if code_read else "false"},'
                 f'"runtime_error_code":"0x{code:04X}",'
-                f'"runtime_error_code_age_ns":{code_age_ns}}}')
+                f'"runtime_error_code_age_ns":{code_age_ns},'
+                f'"target_position":{target},'
+                f'"target_position_readback_read":{"true" if rb_read else "false"},'
+                f'"target_position_readback":{rb_value},'
+                f'"target_position_readback_age_ns":{rb_age_ns}}}')
 
+    '''
+    0x607A 那三列的合成值（P12.41）刻意让"驱动器报的"与"主站写的"**不相等**：
+    相等的话，"印成主站那一个"这种错法在这份夹具里看不出来。轴 2 用的就是现场那根
+    卡住轴的样子——主站扫了 38229（整段行程），驱动器报回来停在 1031。
+    '''
     body = (b'"cycle_count":60000,"op_reached":true,'
-            # 轴 1：读到 42.0°C，603F 读到 0x2310
-            + axis(420, 350, 48100, -30, True, 182000000, 0x2310, True, 182000000).encode()
+            # 轴 1：读到 42.0°C，603F 读到 0x2310，读回 207180（主站写的是 207148）
+            + axis(420, 350, 48100, -30, True, 182000000, 0x2310, True, 182000000,
+                   207148, True, 207180, 120000000).encode()
             + b","
-            # 轴 2：温度真读到 0，603F 真读到 0x0000
-            + axis(0, 0, 0, 0, True, 5000000, 0x0000, True, 5000000).encode()
+            # 轴 2：温度真读到 0，603F 真读到 0x0000，读回停在 1031（主站扫到 38229）
+            + axis(0, 0, 0, 0, True, 5000000, 0x0000, True, 5000000,
+                   38229, True, 1031, 88000000).encode()
             + b","
-            # 轴 3：两样都没读到
-            + axis(0, 0, 0, 0, False, 0, 0x0000, False, 0).encode())
+            # 轴 3：三样都没读到（读回那一列还留着一个诱饵 955）
+            + axis(0, 0, 0, 0, False, 0, 0x0000, False, 0,
+                   955, False, 955, 0).encode())
     with open(path, "wb") as handle:
         handle.write(body)
 
@@ -118,6 +136,12 @@ def error_code_lines(out):
             if line.strip().startswith("轴")]
 
 
+def readback_lines(out):
+    """抓出驱动器自报目标位置那一节里的轴行。"""
+    return [line for line in section(out, "驱动器自报的目标位置").splitlines()
+            if line.strip().startswith("轴")]
+
+
 def check(extractor):
     code, out = run(extractor)
     if code != 0:
@@ -127,6 +151,7 @@ def check(extractor):
 
     # 603F 那一列先判：慢速遥测那半在行数不对时会提前返回，放在后面会被它连累着跳过。
     check_error_codes(out)
+    check_readback(out)
 
     lines = telemetry_lines(out)
     if len(lines) == 3:
@@ -196,6 +221,47 @@ def check_error_codes(out):
         bad("603F：轴3 从没读到就印「—」", "含「—」且不含 0x", lines[2])
 
 
+def check_readback(out):
+    """驱动器自报的目标位置那一列（P12.41）。
+
+    这一列存在的唯一理由是：**主站写进过程映像的那个目标，证不了驱动器收到了目标**。
+    所以判据不是"印出一个数"，而是"印的是驱动器报的那一个"——夹具里两根轴的读回与
+    主站写的被故意设成不同的值，印错一个数就在这两根轴上同时露馅。
+    """
+    lines = readback_lines(out)
+    if len(lines) == 3:
+        ok("目标位置读回：三根轴各印一行")
+    else:
+        bad("目标位置读回：三根轴各印一行", "3 行", f"{len(lines)} 行：{lines}")
+        return
+
+    if "读回=207180" in lines[0]:
+        ok("目标位置读回：轴1 印的是驱动器报的 207180")
+    else:
+        bad("目标位置读回：轴1 印驱动器报的 207180", "读回=207180", lines[0])
+    if "主站写的=207148" in lines[0]:
+        ok("目标位置读回：轴1 的主站写入值 207148 仍单独印出，两列不互相顶替")
+    else:
+        bad("目标位置读回：轴1 并排印出主站写的 207148", "主站写的=207148", lines[0])
+    if "120.0 ms" in lines[0]:
+        ok("目标位置读回：轴1 给出读数年龄")
+    else:
+        bad("目标位置读回：轴1 给出读数年龄", "120.0 ms", lines[0])
+
+    if "读回=1031" in lines[1] and "主站写的=38229" in lines[1]:
+        ok("目标位置读回：轴2（卡住那根）读回停在 1031，而主站扫到 38229")
+    else:
+        bad("目标位置读回：轴2 读回 1031 / 主站写的 38229", "读回=1031 且 主站写的=38229",
+            lines[1])
+
+    # 轴号本身是数字，判"一个读数都没印"时得先把它摘掉；剩下的部分里再出现数字，
+    # 就是把"没读到"印成了诱饵 955。
+    if "读回=—" in lines[2] and not re.search(r"\d", lines[2].replace("轴3", "", 1)):
+        ok("目标位置读回：轴3 从没读到就印「—」，诱饵 955 一个数字都不印")
+    else:
+        bad("目标位置读回：轴3 从没读到就印「—」", "含「读回=—」且不含任何数字", lines[2])
+
+
 def main():
     argv = sys.argv[1:]
     if argv and argv[0] == "--mutate":
@@ -204,7 +270,7 @@ def main():
             return 2
         with open(EXTRACTOR, encoding="utf-8") as handle:
             source = handle.read()
-        for anchor in (MUTATE_TELEMETRY_FROM, MUTATE_CODE_FROM):
+        for anchor in (MUTATE_TELEMETRY_FROM, MUTATE_CODE_FROM, MUTATE_READBACK_FROM):
             if anchor not in source:
                 print("变异点找不到——抽取器里那句认标志的写法变了，这个检查得跟着改。",
                       file=sys.stderr)
@@ -213,6 +279,7 @@ def main():
         mutants = {
             "慢速遥测不认标志": source.replace(MUTATE_TELEMETRY_FROM, MUTATE_TO, 1),
             "603F 不认标志": source.replace(MUTATE_CODE_FROM, MUTATE_TO, 1),
+            "目标位置读回不认标志": source.replace(MUTATE_READBACK_FROM, MUTATE_TO, 1),
         }
         for name, text in mutants.items():
             PASSED = 0
@@ -228,7 +295,7 @@ def main():
             else:
                 print("      一项都没判红——变异混过去了")
                 return 1
-        print("\n两个变异都被抓住（这正是要证明的）")
+        print("\n三个变异都被抓住（这正是要证明的）")
         return 0
 
     extractor = os.path.abspath(argv[0]) if argv else EXTRACTOR

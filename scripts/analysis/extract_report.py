@@ -124,6 +124,21 @@ def main():
               f"   读到，读数年龄 {field_int(block, b'runtime_error_code_age_ns', 0) / 1e6:.1f} ms"
               f"（0 点 = 报告回填）")
 
+    # 驱动器自报的目标位置（0x607A，P12.41）。与上面两节问的不是同一类问题：
+    # target_position 是**主站自己写进过程映像**的那一个，主站永远知道自己写了什么，
+    # 所以"某根轴不动"时它什么也证不了。要切开"驱动器收到了目标却不执行"与"目标压根
+    # 没送到驱动器"，只能看驱动器自己报回来的这一个——所以这里两个值并排印，好让读者
+    # 一眼比出它们是同步扫、还是读回停在原地。标志与年龄同样是字段级的，理由同上：
+    # 读失败留下的旧值，与"驱动器一直保持着旧值"在数字上长得一模一样。
+    print("\n== 驱动器自报的目标位置（「—」= 从没读到过，不是 0）==")
+    for index, block in enumerate(re.findall(rb'"runtime":\{[^}]*\}', data)):
+        if not field_flag(block, b"target_position_readback_read"):
+            print(f"  轴{index + 1} 读回=—    （没读到）")
+            continue
+        print(f"  轴{index + 1} 读回={field_int(block, b'target_position_readback', 0)}"
+              f"   主站写的={field_int(block, b'target_position', 0)}"
+              f"   读到，读数年龄 {field_int(block, b'target_position_readback_age_ns', 0) / 1e6:.1f} ms")
+
 
 if __name__ == "__main__":
     main()

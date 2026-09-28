@@ -255,6 +255,7 @@ static bool observer_telemetry_is_observed(emaster_telemetry_semantic_t semantic
         case EMASTER_TELEMETRY_MOTOR_TEMPERATURE:
         case EMASTER_TELEMETRY_ACTUAL_VELOCITY:
         case EMASTER_TELEMETRY_TARGET_VELOCITY:
+        case EMASTER_TELEMETRY_TARGET_POSITION_READBACK:
             return true;
         case EMASTER_TELEMETRY_NONE:
         case EMASTER_TELEMETRY_EXTENDED_ERROR_CODE:
@@ -334,6 +335,18 @@ static void observer_store_telemetry(emaster_observation_slow_axis_t *slot,
             if (succeeded)
             {
                 slot->speed_command = (int32_t)value;
+            }
+            break;
+        case EMASTER_TELEMETRY_TARGET_POSITION_READBACK:
+            if (succeeded)
+            {
+                slot->target_position_readback = (int32_t)value;
+                /*
+                 * 与 603F 同理打**字段级**戳（P12.41）。这一条的值本身在运动中是连续变的，
+                 * 但读失败留下的旧值是静止的——"静止"正是我们要判成"目标没送到"的那个形状。
+                 * 光靠值分不开，所以判据落在时间戳上。
+                 */
+                slot->target_position_readback_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_NONE:

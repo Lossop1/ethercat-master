@@ -51,6 +51,15 @@ typedef struct
      * 报的错"，年龄偏新等于把故障时刻往后挪。0 = 从没读到过。
      */
     uint64_t error_code_last_read_ns;
+    /*
+     * 0x607A（驱动器自报的目标位置）自己的"最后一次读到"时刻，理由与上一行同源：
+     * 这一条的全部信息量就在"它有没有跟着主站的指令变"，而读失败留下的**上一轮的旧值**
+     * 与"驱动器一直保持着这个旧值"在数值上长得一模一样——共用轴级时间戳，就会把一次
+     * 邮箱超时读成"目标根本没送到驱动器"，正好是排查轴不动时要下结论的那一步。
+     * 0 = 从没读到过。
+     */
+    uint64_t target_position_readback_last_read_ns;
+    int32_t  target_position_readback;
     int32_t  actual_current;
     int32_t  dc_link_voltage;
     int32_t  mosfet_temperature;
@@ -122,6 +131,15 @@ bool emaster_observation_slow_axis_age(const emaster_observation_slow_state_t *s
  * 答案不同，而报告里那一个是"驱动器什么时候开始报错"。
  */
 bool emaster_observation_slow_axis_error_code_age(
+    const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
+    uint64_t *out_age_ns);
+
+/*
+ * 同上，但问的是 0x607A 这一条。与 603F 那一个分开的理由不是对称，是因为它们的
+ * 失败后果不同：603F 读失败会把故障时刻挪后，607A 读失败会把"没读到"下成
+ * "驱动器收到的目标一直是旧值"——一个错结论，而不是一个偏差。
+ */
+bool emaster_observation_slow_axis_target_position_age(
     const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
     uint64_t *out_age_ns);
 

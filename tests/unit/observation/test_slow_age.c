@@ -77,6 +77,14 @@ static void set_error_code(emaster_observation_slow_state_t *state, uint32_t ind
     state->axes[index].error_code_last_read_ns = last_read_ns;
 }
 
+/* 0x607A 同理：值与时间戳独立给，好把"值还在、这一轮没读到"造出来。 */
+static void set_target_position(emaster_observation_slow_state_t *state, uint32_t index,
+                                int32_t value, uint64_t last_read_ns)
+{
+    state->axes[index].target_position_readback = value;
+    state->axes[index].target_position_readback_last_read_ns = last_read_ns;
+}
+
 int main(void)
 {
     emaster_observation_slow_state_t state;
@@ -148,6 +156,38 @@ int main(void)
           "但 603F 从没读到过——字段级必须答'没有'，不许拿轴级时间戳顶替");
     check(age == AGE_SENTINEL, "答'没有'时不得写输出参数");
 
+    /* ── 3b. 0x607A（驱动器自报的目标位置）的字段级年龄 ───────────────── */
+    /*
+     * 它与 603F 都走字段级，但**失败后果不是一回事**，所以两条都要问：603F 读失败把
+     * 故障时刻挪后，是个偏差；0x607A 读失败会把"没读到"下成"驱动器收到的目标一直是
+     * 旧值"——排查轴不动时最想下、也最容易下错的那个结论（P12.41）。
+     */
+    printf("0x607A 的字段级年龄（P12.41）\n");
+    set_target_position(&state, 0U, INT32_C(207180), now - UINT64_C(60000000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_target_position_age(&state, 0U, now, &age),
+          "读到过 0x607A 的轴应当有读回年龄");
+    check(age == UINT64_C(60000000), "读回年龄 = now - 读到它的时刻");
+    /*
+     * 读到 0 也算读到了。"值是旧值"这件事要由**值本身**说明，不由标志说明——
+     * 标志答的永远是"这条 SDO 这一轮回来了没有"。
+     */
+    set_target_position(&state, 1U, INT32_C(0), now - UINT64_C(7000000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_target_position_age(&state, 1U, now, &age),
+          "读到 0 也算读到了——判据是读到没读到，不是值好不好看");
+    check(age == UINT64_C(7000000), "读到 0 时年龄照给");
+
+    /* 与 603F 那条同形：轴级时间戳有值，这一条没有。 */
+    set_axis(&state, 3U, false, now - UINT64_C(520000000));
+    set_target_position(&state, 3U, INT32_C(1031), UINT64_C(0));
+    check(emaster_observation_slow_axis_age(&state, 3U, now, NULL),
+          "轴 3 的温度读到过（轴级时间戳有值）");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_target_position_age(&state, 3U, now, &age),
+          "但 0x607A 从没读到过——字段级必须答'没有'，不许拿轴级时间戳顶替");
+    check(age == AGE_SENTINEL, "答'没有'时不得写输出参数");
+
     /* ── 4. 越界与没发布过 ─────────────────────────────────────────────── */
     printf("越界与没发布过\n");
     age = AGE_SENTINEL;
@@ -167,6 +207,14 @@ int main(void)
                   &state, EMASTER_OBSERVATION_MAX_AXES, now, &age),
           "603F：轴号越界（含 >= 容量上限）应当没有年龄，且不得越界读数组");
     check(age == AGE_SENTINEL, "603F 越界时不得写输出参数");
+    check(!emaster_observation_slow_axis_target_position_age(&empty, 0U, now, &age),
+          "0x607A：axis_count=0 时同样没有年龄");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_target_position_age(&state, 5U, now, &age) &&
+              !emaster_observation_slow_axis_target_position_age(
+                  &state, EMASTER_OBSERVATION_MAX_AXES, now, &age),
+          "0x607A：轴号越界（含 >= 容量上限）应当没有年龄，且不得越界读数组");
+    check(age == AGE_SENTINEL, "0x607A 越界时不得写输出参数");
 
     /* ── 5. 时钟异常不给负数 ───────────────────────────────────────────── */
     printf("时钟异常\n");
@@ -180,6 +228,11 @@ int main(void)
     check(emaster_observation_slow_axis_error_code_age(&state, 1U, now, &age) &&
               age == UINT64_C(0),
           "603F：时钟异常时同样取 0，不给负数");
+    set_target_position(&state, 1U, INT32_C(207180), now + UINT64_C(5000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_target_position_age(&state, 1U, now, &age) &&
+              age == UINT64_C(0),
+          "0x607A：时钟异常时同样取 0，不给负数");
 
     /* ── 6. 只要答案不要年龄 ───────────────────────────────────────────── */
     printf("输出参数可以为空\n");
@@ -187,6 +240,8 @@ int main(void)
           "不关心年龄时也应当能问'有没有'");
     check(emaster_observation_slow_axis_error_code_age(&state, 0U, now, NULL),
           "603F：不关心年龄时也应当能问'有没有'");
+    check(emaster_observation_slow_axis_target_position_age(&state, 0U, now, NULL),
+          "0x607A：不关心年龄时也应当能问'有没有'");
 
     /* ── 7. 时间戳要真的穿过发布/读取 ─────────────────────────────────── */
     printf("时间戳穿过 seqlock\n");
@@ -207,6 +262,22 @@ int main(void)
           "603F 的时间戳也必须原样穿过发布/读取（它是新字段，最容易被漏掉）");
     check(readback.axes[2].error_code_last_read_ns == UINT64_C(0),
           "从没读到过的 603F 时间戳穿过发布之后必须仍然是 0（不是被别的轴顶替）");
+    check(readback.axes[0].target_position_readback_last_read_ns ==
+              state.axes[0].target_position_readback_last_read_ns,
+          "0x607A 的时间戳也必须原样穿过发布/读取");
+    check(readback.axes[3].target_position_readback_last_read_ns == UINT64_C(0),
+          "0x607A 从没读到过的时间戳穿过发布之后必须仍然是 0");
+    /*
+     * 值也要搬。标志与值是两列，只搬一列在"读到过"的轴上分不出来，在没读到的轴上
+     * 才露馅：这时值必须仍是快照里那个旧值，而不是被清成 0——清成 0 就把"上一轮
+     * 驱动器报的还是那个数"改写成"驱动器报 0"了。
+     */
+    check(readback.axes[3].target_position_readback == INT32_C(1031),
+          "0x607A 的值也要穿过发布，没读到的轴不得被清成 0");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_target_position_age(&readback, 3U, now, &age) &&
+              age == AGE_SENTINEL,
+          "从发布回来的快照里，0x607A 没读到的轴仍然答'没有'");
     age = AGE_SENTINEL;
     check(emaster_observation_slow_axis_age(&readback, 0U, now, &age) &&
               age == UINT64_C(182000000),

@@ -10,7 +10,8 @@
  * 603F 里有没有东西"，报告里当时一样都没有。
  *
  * 本测试钉住的就是那一轮补上的那几列（schema_version 5），外加 P12.46 补的
- * 第四个 AL 坐标 shutdown_al_exit（schema_version 7，跳过 6 的理由见 report_sections.c）：
+ * 第四个 AL 坐标 shutdown_al_exit（schema_version 7，跳过 6 的理由见 report_sections.c），
+ * 以及 P12.41 补的驱动器自报目标位置 target_position_readback（schema_version 8）：
  *
  *   1. 逐轴判故障的坐标：recorded / exchange / status_word / reason / isolated
  *      全部出现在该轴对象里，值是记下的那一个；
@@ -242,12 +243,58 @@ int main(int argc, char **argv)
         }
     }
 
+    /* ── 6. 驱动器自报的目标位置（P12.41，schema_version 8）───────────── */
+    /*
+     * 这一列存在的唯一理由是：**主站写的目标证不了驱动器收到了目标**。所以断言的重点
+     * 不是"字段印出来了"，而是"印的是驱动器那一个、不是主站那一个"——两根轴的
+     * target_position 与 target_position_readback 被故意设成不同的值。
+     */
+    printf("驱动器自报的目标位置：与主站写的那个不是一回事\n");
+    if (!axis_section(text, 1U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 1 的对象分界（目标位置读回）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"target_position_readback_read\":true,"
+                     "\"target_position_readback\":207180,"
+                     "\"target_position_readback_age_ns\":120000000") != NULL,
+              "轴 1 的目标位置读回是驱动器报的 207180（不是主站写的 207148）");
+        check(strstr(section, "\"target_position\":207148,") != NULL,
+              "同一根轴上主站写的 target_position 仍单独印成 207148——两列不许互相顶替");
+    }
+    if (!axis_section(text, 2U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 2 的对象分界（目标位置读回）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"target_position_readback_read\":true,"
+                     "\"target_position_readback\":1031,") != NULL,
+              "轴 2（卡住那根）：主站扫到 38229，驱动器报回来的是 1031");
+        check(strstr(section, "\"target_position\":38229,") != NULL,
+              "而主站自己写的那个 38229 也照印——'扫了全行程'与'一步没跟'在同一条记录里对得上");
+    }
+    if (!axis_section(text, 3U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 3 的对象分界（目标位置读回）");
+    }
+    else
+    {
+        check(strstr(section, "\"target_position_readback_read\":false,") != NULL,
+              "轴 3 从没读到过：read 必须是 false（诱饵值 955 不算数）");
+        check(strstr(section, "\"target_position_readback\":955,") != NULL,
+              "轴 3 的那个 955 仍原样印出——判据是 read，不是值看起来像不像真的");
+    }
+
     /* ── 停机来源与归档保留份数 ────────────────────────────────────────── */
     printf("结果级字段\n");
-    /* 是 7 而不是 6：6 早被那批游离提交占用（带 tracking_error 的那种形状），
+    /* 是 8 而不是 6：6 早被那批游离提交占用（带 tracking_error 的那种形状），
      * 同一版本号下并存两种形状正是这次要避开的。见 report_sections.c 里那段注释。 */
-    check(strstr(text, "\"schema_version\":7") != NULL,
-          "schema_version 是 7（加了字段就要升版本；6 被游离提交占着）");
+    check(strstr(text, "\"schema_version\":8") != NULL,
+          "schema_version 是 8（加了字段就要升版本；6 被游离提交占着）");
     check(strstr(text, "\"stop_requested\":true") != NULL,
           "result 里有 stop_requested");
     check(strstr(text, "\"stop_source\":2") != NULL,

@@ -565,6 +565,20 @@ static bool write_axis(FILE *stream,
          */
         ",\"runtime_error_code_read\":%s,\"runtime_error_code\":\"0x%04X\""
         ",\"runtime_error_code_age_ns\":%" PRIu64
+        /*
+         * P12.41: 驱动器自己报的目标位置（0x607A 慢速读回），与上面那个 target_position
+         * 不是一回事：那个是主站写进过程映像的值，这个是驱动器收下并用起来的那个。
+         * "有一根轴纹丝不动而主站明明扫过了全行程"靠这两个的对比才切得开。同样的
+         * read/age 约定，且是字段级——读失败留下的旧值本身就是"目标没送到"的形状，
+         * 没有年龄就分不开"读失败"与"驱动器一直保持着旧值"。
+         *
+         * 三列平铺，不嵌成对象：报告里凡是嵌一层 {} 的地方，按 "runtime":{...} 抠块的
+         * 现成工具（extract_report.py 等用 [^}]* 的）都会被内层那个 } 提前截断，把后面
+         * 的字段整段吃掉——603F 那三列当初就是这么平铺的，照它办。
+         */
+        ",\"target_position_readback_read\":%s"
+        ",\"target_position_readback\":%" PRId32
+        ",\"target_position_readback_age_ns\":%" PRIu64
         ",\"gain_parameters_read\":%s"
         ",\"velocity_loop_kp\":%u,\"velocity_loop_ki\":%u,\"velocity_loop_kd\":%u"
         ",\"position_loop_kp\":%u,\"position_loop_ki\":%u,\"position_loop_kd\":%u"
@@ -620,6 +634,9 @@ static bool write_axis(FILE *stream,
         axis->runtime_error_code_read ? "true" : "false",
         (unsigned int)axis->runtime_error_code,
         axis->runtime_error_code_age_ns,
+        axis->target_position_readback_read ? "true" : "false",
+        axis->target_position_readback,
+        axis->target_position_readback_age_ns,
         axis->gain_parameters_read ? "true" : "false",
         (unsigned int)axis->velocity_loop_kp,
         (unsigned int)axis->velocity_loop_ki,
@@ -1117,8 +1134,18 @@ bool emaster_run_report_write(FILE *stream,
      * 报告就是 6，形状是"带 tracking_error 遥测"，当前 main 复现不出来，docs/requirements/
      * capability-baseline.md §4.6 也是这么记的。要是这次也发 6，读者拿到一份 6 就得先猜
      * 它是哪一种——这正是紧邻上文刚说过要避免的事。所以这里迈过 6 直接发 7。
+     *
+     * 版本 8：每轴 runtime 下新增 target_position_readback{read,value,age_ns}——
+     * 驱动器自己报的目标位置（0x607A 慢速读回）。带上它是因为版本 7 的报告回答不了
+     * 一个问了好几轮的问题：2026-09-28 的八轴 30° 往返里，主站把目标扫过了整个 30°
+     * （38229 counts），第 8 轴的实际位置一动没动、跟随误差正好等于全行程、电流约
+     * 0 mA，而它其余每一项读数（6061=8、增益、限位、DC、SM2/SM3、603F、ESC 计数器）
+     * 都与走得好的七根逐字段相同。**"目标到了驱动器但它不执行"与"目标压根没送到
+     * 驱动器"在版本 7 的报告里长得一模一样**，因为那个 target_position 是主站写进
+     * 过程映像的值，主站永远知道自己写了什么。这一列是切开这两种情形唯一的读数
+     * （layering-plan P12.41）。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":7,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":8,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));

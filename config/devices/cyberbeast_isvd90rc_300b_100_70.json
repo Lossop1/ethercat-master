@@ -203,7 +203,8 @@
     {"name": "actual_motor_speed", "index": "0x200B", "subindex": 8, "type": "i32", "semantic": "actual_velocity", "unit": "rpm"},
     {"name": "speed_command", "index": "0x200B", "subindex": 9, "type": "i32", "semantic": "target_velocity", "unit": "rpm"},
     {"name": "extended_servo_error_code", "index": "0x203E", "subindex": 0, "type": "u32", "semantic": "extended_error_code", "unit": ""},
-    {"name": "servo_error_code", "index": "0x203F", "subindex": 0, "type": "u32", "semantic": "servo_error_code", "unit": ""}
+    {"name": "servo_error_code", "index": "0x203F", "subindex": 0, "type": "u32", "semantic": "servo_error_code", "unit": ""},
+    {"name": "target_position_readback", "index": "0x607A", "subindex": 0, "type": "i32", "semantic": "target_position_readback", "unit": "count"}
   ],
   "source": {
     "esi": "docs/lz-joint/ECAT_CIA402.xml"

@@ -178,6 +178,31 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->axis_results[2].shutdown_exit_al_state = UINT16_C(8);
     fixture->axis_results[2].shutdown_exit_al_status_code = UINT16_C(0);
 
+    /*
+     * 驱动器自报的目标位置（schema_version 8，P12.41）。
+     *
+     * 三根轴给成三种形状，好把"照抄主站自己的 target_position"和"真的读了驱动器"分开：
+     *
+     *   轴 1 = read=true、207180 —— 与主站写的 target_position 207148 **不同**。两个值
+     *                               各有各的意义，谁照抄谁都会在这两个断言上露馅；
+     *   轴 2 = read=true、1031   —— 卡住那一根的形状：主站把目标扫到 38229，驱动器报回来
+     *                               的还是起点附近那个数，一步没跟；
+     *   轴 3 = read=false、955   —— 这条 SDO 整场没读回来。**值故意留一个非零诱饵**，
+     *                               与上面 warning.exchange=7 同一个用意：判据是 read，
+     *                               不是"值看起来像不像真的"。
+     */
+    fixture->axis_results[0].target_position = INT32_C(207148);
+    fixture->axis_results[0].target_position_readback = INT32_C(207180);
+    fixture->axis_results[0].target_position_readback_read = true;
+    fixture->axis_results[0].target_position_readback_age_ns = UINT64_C(120000000);
+    fixture->axis_results[1].target_position = INT32_C(38229);
+    fixture->axis_results[1].target_position_readback = INT32_C(1031);
+    fixture->axis_results[1].target_position_readback_read = true;
+    fixture->axis_results[1].target_position_readback_age_ns = UINT64_C(88000000);
+    fixture->axis_results[2].target_position = INT32_C(955);
+    fixture->axis_results[2].target_position_readback = INT32_C(955);
+    /* 轴 3 的 read 保持 memset 的 false：这一条从没读回来过。 */
+
     fixture->report.axis_count = FIXTURE_AXIS_COUNT;
     fixture->report.axes = fixture->axis_results;
     fixture->report.status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;
