@@ -1,0 +1,50 @@
+# 台架证据 2026-09-29：12 轴 30° 往返连跑 5 轮（duodec25），第 12 轴减速比改为 25:1 之后
+# 由 scripts/bench_series.sh 产生；本文件是该系列的入库记录，每轮原始证据在 reports/_duodec25/rNN_*/
+# 命令 sudo env DEPLOYMENT=orangepi-bench-duodec-30deg SERIES=duodec25 ROUNDS=5 GAP=20 MODE=reciprocate
+#      DURATION=40 TRAVERSE=5 DEGREES=30 RATE=100 ONLY_AXIS=0 REPORT_INTERVAL=10 OBSERVATION=1 \
+#      bash scripts/bench_series.sh
+# 部署 orangepi-bench-duodec-30deg（12 台；第 8、第 12 台减速比 25:1，其余 28:1），1 ms DC／CSP
+# 改之前的同参数系列见 reports/_duodec30/evidence_5rounds.txt
+
+结论一：4/5 跑满（r02–r05，各约 57.8 s、WKC 36/36、WKC 不符 0、收尾 12/12 在 OP、截止期错失 0）。
+结论二：**第 12 根轴从"一步没动"变成跟得上**。改造前后同一列 following_error_max 对比：
+        duodec30（驱动器 6091=28、运动方案写 28）：轴 12 = 38229／38236／38236／38260 counts，
+        正好等于整条位移（28:1 下 30° = 38229 counts）——一步没动；
+        duodec25（驱动器 6091=25、运动方案写 25）：轴 12 = 894／872／887／952 counts，
+        与其余 11 根的 771–1441 counts 同量级。
+        两次唯一的差别是**驱动器的 0x6091 与运动方案里的 expected_position_scale 同时从 28 改成 25**；
+        单独一次改动改不掉因果关系（期间可能还换过驱动器），但方向明确：这一轴的 6091 必须与
+        实际减速箱一致，否则它不执行。
+结论三：r01 退出码 1，周期数 1557 —— 轴 6、7 掉出 OP(state=20, code=0x001A)，
+        仍是连跑第一轮最容易出的那一族（与 11 轴系列的 r01、12 轴 duodec30 的 r05 同源）。
+== 运行与结局 ==
+round	round_at	gap_s	exit_code	cycles	op_reached	all_enabled	motion_completed	shutdown_in_op	not_in_op
+duodec25r01	2026-09-29 18:18:30	20	1	1557	1	1	0	10/12	6(s=20),7(s=20)
+duodec25r02	2026-09-29 18:19:59	20	0	57824	1	1	0	12/12	-
+duodec25r03	2026-09-29 18:21:39	20	0	57786	1	1	0	12/12	-
+duodec25r04	2026-09-29 18:23:19	20	0	57825	1	1	0	12/12	-
+duodec25r05	2026-09-29 18:24:58	20	0	57774	1	1	0	12/12	-
+
+== WKC 与周期 ==
+wkc_expected	wkc_actual	wkc_mismatch	wkc_error	wkc_no_frame	first_mismatch_ex	deadline_missed	over_budget
+36	32	5	5	0	1553	0	0
+36	36	0	0	0	0	0	0
+36	36	0	0	0	0	0	0
+36	36	0	0	0	0	0	0
+36	36	0	0	0	0	0	0
+
+== 时序 ==
+frame_gap	frame_interval_max	receive_max	receive_ok_max	errctr_max	errctr_fail
+0	1090834	146406	146406	138486	0
+0	1019885	268773	268773	118587	77
+0	1078344	228255	228255	123217	80
+0	1098743	227915	227915	120387	120
+0	1105773	218724	218724	245964	134
+
+== 各轴最大跟随误差 counts（顺序=轴 1..12） ==
+following_error_max
+0,0,0,0,0,0,0,0,0,0,0,0
+1385,1436,1115,1064,856,947,835,995,902,822,812,894
+1243,1441,1323,1345,839,892,830,961,887,775,854,872
+1371,1436,1324,1210,838,900,835,921,894,771,790,887
+1305,1320,1303,1198,857,940,832,934,891,814,815,952
