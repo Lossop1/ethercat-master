@@ -308,7 +308,140 @@ LISTEN 192.168.124.81:5001   ← 上一次留下的桥
 
 见 §7.2 第 1 条。12 轮实测里 11 轮这两个数相等（丢的是整帧），唯一的例外那一轮同时掉了一根轴。
 
-## 13 速查
+## 13 调试手册
+
+这一节回答的是"手里的工具怎么用来回答一个具体问题"。全部只读或只用配置，不改主逻辑。
+
+### 13.1 读一台驱动器的全部运行期读数（最快）
+
+```bash
+cd /home/orangepi/ethercat-master
+sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVER_VERBOSE=1 EMASTER_OBSERVATION=1 \
+  ./build/tools/master/emaster-master --deployment <部署ID>'
+```
+
+观测线程每约 1 秒在 stderr 打一条，含**全部 12 项**慢速遥测（当前值 + 单位）：
+
+```
+[P4.3] 轴0: actual_current=9 0.001 A, cia402_error_code=0, bus_voltage=48104 mV,
+       mosfet_temperature=391 0.1 degC, motor_temperature=344 0.1 degC,
+       actual_motor_speed=0 rpm, speed_command=0 rpm,
+       target_position_readback=3895 count, max_torque=1000, max_motor_speed=841045  (读取次数=221)
+```
+
+- **这些是 OP（CSP）运行期间的 SDO 读数**，不是停机快照
+- 清单在设备配置的 `slow_telemetry`（`config/devices/cyberbeast_*.json`）
+- 加了这个开关还会打出每条读数的对象地址与 wkc，用来确认"到底读到没有"
+
+### 13.2 按阶段读指定对象（键值对）
+
+```bash
+sudo python3 scripts/analysis/extract_report.py runtime/reports/<部署>-latest.json \
+  | grep -E '^axis[0-9]+\.(status_word|mode_display|target_position|max_torque|max_motor_speed)\.'
+```
+
+```
+axis1.status_word.cyclic_operation=4663
+axis1.status_word.cyclic_operation.hex=0x1237
+axis1.mode_display.cyclic_operation=8
+axis1.target_position.cyclic_operation=462644
+axis1.max_torque.safeop_initialization=1000
+```
+
+键的形状：`axis<N>.<对象名>.<阶段>=<十进制>`，另有 `.hex=<原始十六进制>`。
+
+**为什么必须按阶段看**：`0x6041` 在停机后 bit2／bit10 会掉。运行期是 `0x1237`、停机后是
+`0x1233`——只看最后一条会把停机态当成运行态。
+
+**读法边界**：某个对象没有 `cyclic_operation` 这一项，说明**这份二进制在 OP 期间没有读它**
+（审计段记录的是主站真的读过的对象），**不是"值没变"**。OP 期间读哪些由 `slow_telemetry` 决定。
+
+### 13.3 状态字 0x6041 怎么读
+
+| 位 | 含义 | 运行期典型 |
+| --- | --- | --- |
+| bit2 | 运行使能 | 1 |
+| bit3 | 故障 | 0 |
+| bit10 | 目标到达 | 1 |
+| bit11 | **内部限幅生效** | 0 |
+
+`0x1237` = 使能、无故障、目标到达、限幅未生效。
+`0x1233` = 同上但 bit2／bit10 为 0（SAFE-OP 或停机后）。
+
+### 13.4 单轴档的护栏比多轴档紧得多——先拿它验可疑的驱动器
+
+| 档 | `max_following_error_millidegrees` |
+| --- | --- |
+| 单轴 `orangepi-current-bench` | **2000（2°）** |
+| 五轴～九轴各档 | **50000（50°）** |
+
+**后果**：同一根"收到目标却不执行"的轴——
+
+- 在多轴档上：一步不走也够不到 50°，**报告显示成功**（P12.40 那个坑）
+- 在单轴档上：**0.4 秒就按 `FOLLOWING_ERROR` 中止**，不用人眼从几个跟随误差里挑
+
+```bash
+sudo env DEPLOYMENT=orangepi-current-bench DURATION=40 TRAVERSE=5 DEGREES=30 \
+  RATE=100 ONLY_AXIS=0 OBSERVATION=1 TAG=single30 \
+  bash scripts/bench_reciprocate_30deg.sh
+```
+
+### 13.5 freerun（不用 DC）档：用来把同步从嫌疑里划掉
+
+配置已备好，**不需要改代码**：
+
+```bash
+sudo env DEPLOYMENT=orangepi-bench-single-freerun DURATION=40 TRAVERSE=5 DEGREES=30 \
+  RATE=100 ONLY_AXIS=0 OBSERVATION=1 TAG=fr30 \
+  bash scripts/bench_reciprocate_30deg.sh
+```
+
+- `config/operation_profiles/cyberbeast_freerun_csp_1ms.json` —— `strategy: "sm"`（SyncManager
+  同步即 FreeRun）、`assign_activate: 0x00000000`、`sm2/sm3_sync_type: 0x0000`
+- `config/deployments/orangepi_bench_single_freerun.json` —— 单轴 + 上面那份
+
+主站里 SM 分支本来就有（`session_setup.c` 只在 DC 时置 `dc_required`，SM 时整段 DC 配置跳过），
+校验器也认（`strategy in ("sm", "dc")`）。**SM 只要求四个参数**：`assign_activate`、`cycle_ns`、
+`sm2_sync_type`、`sm3_sync_type`；`sync0_shift_ns` 那几个在 SM 下不要求。
+
+**用途**：同一个现象在 DC 与 freerun 下**逐项一致**，就把 DC／SYNC0 同步从嫌疑里划掉了。
+
+### 13.6 "轴不动"的排除表
+
+| 假设 | 拿什么排除 |
+| --- | --- |
+| 主站没发目标 | 命令被拒 0 条、单步 < `max_step`、`0x607A` 读回 == 主站写的值 |
+| 状态机没使能 | `0x6041` 运行期 bit2=1、bit3=0；控制字 `0x000F` |
+| 限幅卡住 | OP 期间 `0x6072`／`0x6080` 的值、`0x6041` bit11=0 |
+| 驱动器报故障 | `0x6041` bit3=0、`603F=0x0000`、`fault_timeline` 四项全 false |
+| 过热／母线 | `slow_telemetry` 的温度与母线电压 |
+| 链路／CRC | `rx_error_counter` 全 0、期望 WKC == 实际 WKC |
+| DC／SYNC0 同步 | 同一现象在 freerun 档下复现（§13.5） |
+
+**`target_position_readback` 是那个关键判别器**（P12.41）：它是**驱动器自己持有的**目标位置。
+
+- 读回跟着主站一起扫 ⇒ 目标到了驱动器，是它不执行（功率级／使能／电机侧）
+- 读回一直停在旧值 ⇒ 值在"过程映像"到"驱动器应用"之间就断了，与电机无关
+
+主站写进过程映像的 `target_position` 证不了这件事——主站永远知道自己写了什么。
+
+### 13.7 那些只能由厂商上位机设的东西
+
+`docs/lz-joint/特别注意.txt` 第 1 条：
+
+> 使用 ethercat 控制时需要在上位机上将 `enable_ecat` 赋为 1，`enable_can_a` 赋为 0
+
+**它不是 EtherCAT 对象**——审计段那 65 个已读对象里没有它，主站读不到也写不了，只能通过厂商
+上位机设。同文件第 2 条记着 STO 暂不支持。
+
+### 13.8 观测/审计这两条通路的边界
+
+- **观测通道**（`-obs.sock`，256 槽）在**内存**里，不落盘；没人读就被覆盖
+- **审计段**（报告里的 `accesses`）只记**配置期与停机诊断**的 SDO，**不含运行期遥测**——
+  运行期遥测（`slow_telemetry` 那一份）不进审计段，要读它得走 §13.1 或加报告字段
+- 报告写盘是**停机时一次**，且是覆盖式的；旧的在 `archive/`
+
+## 14 速查
 
 ```bash
 # 台架干净吗
@@ -325,7 +458,7 @@ sudo timeout 3 nc -U /tmp/emaster-<部署>.sock <<< topology
 **主站未启动／连不上**：`pgrep -x emaster-master || echo '主站未运行'`、`ls -l /tmp/emaster-<部署>.sock`。
 日志位置取决于你怎么起的：`bench_idle.sh` → `/tmp/<TAG>_master.log`；`bench_series.sh` → `reports/_<SERIES>/rNN_*/`；直接起则在你重定向的地方。
 
-## 14 编译构建
+## 15 编译构建
 
 ```bash
 cd ~/ethercat-master
@@ -338,14 +471,14 @@ make -j8
 
 **配置是构建期编进二进制的**（`config/` 下的 JSON 由 CMake 生成 C 代码），所以改了配置**必须在 Pi 上重编**。
 
-## 15 技术栈
+## 16 技术栈
 
 - **SOEM** — Simple Open EtherCAT Master
 - **CiA 402** — CANopen 驱动器和运动控制设备规范
 - **DC (Distributed Clocks)** — 亚微秒级时钟同步
 - **PDO (Process Data Objects)** — 实时周期数据交换
 
-## 16 文档索引
+## 17 文档索引
 
 | 文档 | 内容 |
 | --- | --- |
