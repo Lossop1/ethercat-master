@@ -1111,7 +1111,9 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    ",shift_req_ns=%d,shift_soem_ns=%d"
                                                    ",samples=%llu,margin_ns=%s"
                                                    ",margin_min_ns=%s,phase_err_ns=%s"
-                                                   ",late=%llu,late_run=%llu",
+                                                   ",late=%llu,late_run=%llu"
+                                                   ",late_first=%llu,late_last=%llu"
+                                                   ",late_run_first=%llu",
                                                    (unsigned int)(axis_index + 1U),
                                                    (unsigned)axis->dc.requested_assign_activate,
                                                    observed_text,
@@ -1126,7 +1128,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    margin_text, margin_min_text, phase_text,
                                                    (unsigned long long)timing->sync0_late_count,
                                                    (unsigned long long)
-                                                       timing->sync0_late_max_consecutive);
+                                                       timing->sync0_late_max_consecutive,
+                                                   /* 坐标不能省：实测里 25 次迟到全落在
+                                                    * 交换号 1–25（开局 DC 环路还没收敛），
+                                                    * 只看计数会当成"运动中途迟到"，
+                                                    * 而这两个结论的处置完全相反。 */
+                                                   (unsigned long long)
+                                                       timing->first_sync0_late_exchange,
+                                                   (unsigned long long)
+                                                       timing->last_sync0_late_exchange,
+                                                   (unsigned long long)
+                                                       timing->first_sync0_late_run_exchange);
                                 if (written < 0) {
                                     break;
                                 }
