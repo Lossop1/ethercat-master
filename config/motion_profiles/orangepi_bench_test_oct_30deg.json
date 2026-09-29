@@ -132,7 +132,7 @@
       "expected_position_scale": {
         "encoder_increments": 16384,
         "encoder_motor_revolutions": 1,
-        "gear_motor_revolutions": 28,
+        "gear_motor_revolutions": 25,
         "gear_shaft_revolutions": 1
       }
     }

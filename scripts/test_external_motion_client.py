@@ -215,7 +215,7 @@ DC_SESSION_FIELDS = (
 DC_AXIS_FIELDS = (
     "aa_req", "aa_obs", "sync0_req", "sync0", "cycle_req_ns", "cycle_obs_ns",
     "shift_req_ns", "shift_soem_ns", "samples", "margin_ns", "margin_min_ns",
-    "phase_err_ns", "late", "late_run",
+    "phase_err_ns", "late", "late_run", "late_first", "late_last", "late_run_first",
 )
 
 
@@ -226,7 +226,9 @@ def format_dc(response):
     驱动器写回后**实际生效**的那一份。两个不一致说明配置没落进驱动器。
     margin_ns 是 SYNC0 裕量，为负就说明本周期输出对驱动器已经迟到；late_run 是
     连续迟到的最长一段——驱动器那边攒到 6 次就置 0x001A 掉出 OP，这个数就是
-    "离那个阈值还有多远"。
+    "离那个阈值还有多远"。late_first／late_last／late_run_first 是这三个数的**交换号
+    坐标**，不能省：实测里 25 次迟到全落在交换号 1–25（开局 DC 环路还没收敛），
+    而没有坐标时它与"运动中途迟到"在终端上长得一模一样，两者的处置完全相反。
     """
     if not response.startswith("OK|"):
         return []
@@ -273,24 +275,40 @@ def format_run_report(response):
     return format_session_counters(response) + format_axis_objects(response)
 
 
-def counts_per_degree(topology):
-    """按拓扑返回的编码器分辨率和减速比换算 counts/度（输出轴）。
+def axis_counts_per_degree(topology):
+    """每轴各自的 counts/度（输出轴），按总线位置排序返回**列表**。
 
-    减速比字段是 "电机转数/输出轴转数"（如 gear=28/1），大角度按输出轴度量。
+    topology 的轴段里本来就有每轴的 enc 与 gear（`a1:bus=1,enc=E,gear=G1/G2`），
+    原先却只取第一根、再套用到全部轴。台架可以混装不同减速比的电机——2026-09-29 的
+    八轴档第 8 根就是 25:1、其余 28:1——拿第一根的换算去驱动全部轴，那一根的角度就
+    悄悄偏了 12%：命令说 30°、它实际走 33.6°，而终端上打印的"位移"还是 30° 的那个数。
+    角度是主站侧的护栏与限幅的度量基准，这种偏差既看不出来也不会报错。
+
+    减速比字段是 "电机转数/输出轴转数"（如 gear=28/1）。
     """
-    enc = parse_field(topology, "enc") or 16384
-    gear = 28.0
-    if topology.startswith("OK|"):
-        for token in topology.replace(",", " ").split():
-            if token.startswith("gear=") and "/" in token:
-                numerator, _, denominator = token[len("gear="):].partition("/")
-                try:
-                    if float(denominator) != 0.0:
-                        gear = float(numerator) / float(denominator)
-                except ValueError:
-                    pass
-                break
-    return enc * gear / 360.0
+    per_axis = []
+    for segment in topology.split("|"):
+        if not segment.startswith("a") or ":" not in segment:
+            continue
+        fields = dict(
+            item.split("=", 1)
+            for item in segment.split(":", 1)[1].split(",")
+            if "=" in item
+        )
+        try:
+            enc = float(int(fields.get("enc", "16384"), 0))
+        except ValueError:
+            enc = 16384.0
+        gear = 1.0
+        if "/" in fields.get("gear", ""):
+            numerator, _, denominator = fields["gear"].partition("/")
+            try:
+                if float(denominator) != 0.0:
+                    gear = float(numerator) / float(denominator)
+            except ValueError:
+                gear = 1.0
+        per_axis.append(enc * gear / 360.0)
+    return per_axis
 
 
 def triangle_phase(t, traverse):
@@ -307,20 +325,23 @@ def sine_phase(t, traverse):
     return 0.5 * (1.0 - math.cos(math.pi * t / traverse))
 
 
-def axis_deltas(axis_count, delta, only):
+def axis_deltas(axis_count, deltas, only):
     """每轴各自的位移：only=0 全部轴都走，only=N（1 起）只有第 N 轴走。
 
+    deltas 是**每轴各自的**位移（混装减速比时各轴不同），不是单个标量。
     主站按 count == axis_count 精确核对（session_control.c 的 SET_EXTERNAL_TARGET
     分支），少发几个数会被整条拒掉，所以"只动一根轴"只能靠把其余轴的目标钉在起点
     上来实现——它们照常收到目标，只是那条目标等于原地保持。
     """
+    if len(deltas) != axis_count:
+        raise SystemExit(f"位移有 {len(deltas)} 项，轴数是 {axis_count}")
     if only <= 0:
-        return [delta] * axis_count
+        return list(deltas)
     if only > axis_count:
         raise SystemExit(f"--only {only} 超出轴数 {axis_count}")
-    deltas = [0] * axis_count
-    deltas[only - 1] = delta
-    return deltas
+    result = [0] * axis_count
+    result[only - 1] = deltas[only - 1]
+    return result
 
 
 def check_step_limit(delta, traverse, rate, max_step):
@@ -498,9 +519,10 @@ def main():
         # 本地核对用：按台架的编码器折算（16384 counts/rev × 28:1 减速比），
         # 起点取 0，不连主站、不碰硬件。轴数可指定，用来离线核对"只动一根轴"
         # 时其余轴的目标确实钉在起点上。
-        per_degree = counts_per_degree("OK|axes=1,enc=16384|a1:bus=1,enc=16384,gear=28/1")
+        per_degree = axis_counts_per_degree(
+            "OK|axes=1,enc=16384|a1:bus=1,enc=16384,gear=28/1")[0]
         delta = int(round(args.degrees * per_degree))
-        deltas = axis_deltas(args.dry_run_axes, delta, args.only)
+        deltas = axis_deltas(args.dry_run_axes, [delta] * args.dry_run_axes, args.only)
         which = "全部轴" if args.only <= 0 else f"只有第 {args.only} 轴"
         print(f"[dry-run] counts/度={per_degree:.2f} 位移={delta} counts "
               f"轴数={args.dry_run_axes} {which}", flush=True)
@@ -519,12 +541,19 @@ def main():
     if not start:
         raise SystemExit(f"无法从 status 解析轴位置: {status}")
 
-    per_degree = counts_per_degree(topology)
-    delta = int(round(args.degrees * per_degree))
-    deltas = axis_deltas(len(start), delta, args.only)
+    per_degree = axis_counts_per_degree(topology)
+    if len(per_degree) != len(start):
+        raise SystemExit(f"拓扑返回 {len(per_degree)} 轴的换算，status 返回 {len(start)} "
+                         f"轴位置，两者必须一致")
+    deltas = axis_deltas(len(start),
+                         [int(round(args.degrees * value)) for value in per_degree],
+                         args.only)
     moving = [index + 1 for index, value in enumerate(deltas) if value != 0]
     max_step = parse_field(topology, "max_step") or 0
-    print(f"[client] counts/度={per_degree:.2f} 位移={delta} counts max_step={max_step} "
+    # counts/度 与 位移 都按轴逐个打印：混装减速比时它们本来就不同，
+    # 印一个数就等于把偏差藏起来。
+    print(f"[client] counts/度={[round(value, 2) for value in per_degree]} "
+          f"位移={deltas} counts max_step={max_step} "
           f"轴数={len(start)} 会动的是第 {moving} 轴", flush=True)
     print(f"[client] 起点={start}", flush=True)
 
@@ -550,13 +579,15 @@ def main():
     # 单步限幅：主站在周期线程里按相邻两条目标之差判定，超限会判 MOTION_INVALID
     # 并中止整个会话（协议 7.2 节）。步长按每次更新的增量折算，超过 max_step 时
     # 拉长位移时间而不是拒绝。
-    if max_step > 0 and abs(delta) > 0:
-        per_update = (abs(delta) + steps - 1) // steps
+    # 限幅按**最大**的那一轴算：各轴位移不同（混装减速比），取最大的才不会被漏掉。
+    span = max((abs(value) for value in deltas), default=0)
+    if max_step > 0 and span > 0:
+        per_update = (span + steps - 1) // steps
         if per_update > max_step:
-            steps = (abs(delta) + max_step - 1) // max_step
+            steps = (span + max_step - 1) // max_step
             period = max(period, args.duration / steps) if steps else period
             print(f"[client] 单步 {per_update} counts 超过 max_step={max_step}，"
-                  f"改为 {steps} 步（每步约 {abs(delta) // steps} counts）", flush=True)
+                  f"改为 {steps} 步（每步约 {span // steps} counts）", flush=True)
     sent = 0
     errors = 0
     try:
