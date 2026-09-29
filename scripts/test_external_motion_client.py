@@ -136,7 +136,9 @@ def parse_axis_positions(response):
     """取每轴实际位置，返回按总线位置排序的列表。"""
     positions = []
     for segment in response.split("|"):
-        if not segment.startswith("a"):
+        # ":" 是轴段的标志，不能只看首字母：topology 的头一段是 "axes=1,max_step=..."
+        # 也以 a 开头，只看首字母会在 split(":", 1)[1] 上抛 IndexError。
+        if not segment.startswith("a") or ":" not in segment:
             continue
         fields = dict(
             item.split("=", 1) for item in segment.split(":", 1)[1].split(",") if "=" in item
@@ -193,7 +195,7 @@ def parse_axis_objects(response):
     """
     axes = []
     for segment in response.split("|"):
-        if not segment.startswith("a"):
+        if not segment.startswith("a") or ":" not in segment:
             continue
         fields = dict(
             item.split("=", 1) for item in segment.split(":", 1)[1].split(",") if "=" in item
@@ -201,6 +203,47 @@ def parse_axis_objects(response):
         if fields:
             axes.append(fields)
     return axes
+
+
+# DC/SYNC0 查询的键。这一段回答的是"同步到底怎么样"，与过程数据分两条命令取，
+# 因为 DC 的量比过程数据还多，混在一起九轴就会把响应缓冲顶到截断。
+DC_SESSION_FIELDS = (
+    "required", "configured", "ref", "stable", "startup_done", "startup_req",
+    "startup_exchanges", "startup_phase_err_ns", "late_threshold",
+    "late_exceeded", "late_axis",
+)
+DC_AXIS_FIELDS = (
+    "aa_req", "aa_obs", "sync0_req", "sync0", "cycle_req_ns", "cycle_obs_ns",
+    "shift_req_ns", "shift_soem_ns", "samples", "margin_ns", "margin_min_ns",
+    "phase_err_ns", "late", "late_run",
+)
+
+
+def format_dc(response):
+    """DC/SYNC0：会话一行 + 一行一轴。
+
+    aa_req／aa_obs 是 0x1C32:01：前者是主站请求写进去的 assign_activate，后者是
+    驱动器写回后**实际生效**的那一份。两个不一致说明配置没落进驱动器。
+    margin_ns 是 SYNC0 裕量，为负就说明本周期输出对驱动器已经迟到；late_run 是
+    连续迟到的最长一段——驱动器那边攒到 6 次就置 0x001A 掉出 OP，这个数就是
+    "离那个阈值还有多远"。
+    """
+    if not response.startswith("OK|"):
+        return []
+    lines = []
+    header = dict(
+        item.split("=", 1)
+        for item in response[3:].split("|", 1)[0].replace(",", " ").split()
+        if "=" in item
+    )
+    parts = [f"{key}={header[key]}" for key in DC_SESSION_FIELDS if key in header]
+    if parts:
+        lines.append("[client]   dc " + " ".join(parts))
+    for index, fields in enumerate(parse_axis_objects(response), start=1):
+        parts = [f"{key}={fields[key]}" for key in DC_AXIS_FIELDS if key in fields]
+        if parts:
+            lines.append("[client]   a%d dc " % index + " ".join(parts))
+    return lines
 
 
 def format_session_counters(response):
@@ -382,6 +425,9 @@ def run_reciprocate(client, start, delta, args, max_step):
                       f"已发={sent} 被拒={rejected} 最大间隔={max_gap * 1000:.1f}ms", flush=True)
                 for object_line in format_run_report(feedback):
                     print(object_line, flush=True)
+                dc = client.command("dc")
+                for dc_line in format_dc(dc):
+                    print(dc_line, flush=True)
                 next_report = now + args.report_interval
 
             t_next += period
@@ -536,6 +582,8 @@ def main():
             print(f"[client] 保持中实际位置={parse_axis_positions(feedback)}", flush=True)
             for object_line in format_run_report(feedback):
                 print(object_line, flush=True)
+            for dc_line in format_dc(client.command("dc")):
+                print(dc_line, flush=True)
         next_report = time.monotonic() + 5.0
         while time.monotonic() < hold_until:
             client.command("set_external_target " + " ".join(str(v) for v in targets))
@@ -548,6 +596,8 @@ def main():
                           f"实际位置={parse_axis_positions(feedback)}", flush=True)
                     for object_line in format_run_report(feedback):
                         print(object_line, flush=True)
+                    for dc_line in format_dc(client.command("dc")):
+                        print(dc_line, flush=True)
                 next_report += 5.0
     except (OSError, ConnectionError) as error:
         print(f"[client] 发送中断: {error}", flush=True)

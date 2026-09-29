@@ -1024,6 +1024,122 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             break;
                         }
 
+                        /*
+                         * DC/SYNC0 查询（P12.53）。
+                         *
+                         * 分开成一条命令而不是塞进 status：DC 的量比过程数据还多（每轴 14 项），
+                         * 九轴叠进状态回读会把响应缓冲顶到截断，而且终端上那一行就没法读了。
+                         *
+                         * 三类量在这里合流，缺一类都答不了"同步到底怎么样"：
+                         *   配置期 —— 主站请求的 assign_activate／cycle／shift，以及驱动器读完
+                         *             写回后**实际生效**的 assign_activate。后者是 P12.47 那条
+                         *             空缺：驱动器自己的同步配置此前主站一条读数都没有，
+                         *             而 0x001A 正是驱动器自己报出来的。
+                         *   运行期 —— 每拍记的 DC 相位、sync0 裕量、迟到次数。
+                         *             sync0_late_max_consecutive 是直接对着驱动器那个
+                         *             "连续 6 次就掉出 OP"的阈值看的数。
+                         *   会话级 —— 参考从站、启动相位误差、迟到阈值。
+                         */
+                        case EMASTER_COMMAND_QUERY_DC: {
+                            int offset = snprintf(response.message, sizeof(response.message),
+                                "required=%d,configured=%d,ref=%u,stable=%d"
+                                ",startup_done=%u,startup_req=%u,startup_exchanges=%llu"
+                                ",startup_phase_err_ns=%lld,late_threshold=%u"
+                                ",late_exceeded=%d,late_axis=%d",
+                                session->report->dc_required ? 1 : 0,
+                                session->report->dc_configured ? 1 : 0,
+                                (unsigned)session->report->dc_reference_slave,
+                                session->report->dc_startup_stable ? 1 : 0,
+                                (unsigned)session->report->dc_startup_cycles_completed,
+                                (unsigned)session->report->dc_startup_cycles_requested,
+                                (unsigned long long)session->report->dc_startup_exchanges,
+                                (long long)session->report->dc_startup_phase_error_ns,
+                                (unsigned)session->report->dc_late_consecutive_threshold,
+                                session->report->dc_late_threshold_exceeded ? 1 : 0,
+                                session->report->dc_late_threshold_exceeded
+                                    ? (int)session->report->dc_late_threshold_axis
+                                    : -1);
+
+                            for (axis_index = 0U;
+                                 axis_index < session->plan->axis_count; ++axis_index) {
+                                const emaster_control_session_axis_result_t *axis =
+                                    &session->axes[axis_index];
+                                const emaster_cyclic_timing_stats_t *timing = &axis->timing;
+                                char observed_text[16];
+                                char margin_text[24];
+                                char margin_min_text[24];
+                                char phase_text[24];
+                                int written;
+
+                                /*
+                                 * 读失败时 observed 里是没意义的数，印出来会被当成
+                                 * "驱动器回的配置就是这个"——而这一栏的全部价值就在于
+                                 * 它是驱动器真正生效的那一份。
+                                 */
+                                if (axis->dc.register_read_succeeded)
+                                {
+                                    (void)snprintf(observed_text, sizeof(observed_text),
+                                                   "0x%04X",
+                                                   (unsigned)axis->dc.observed_assign_activate);
+                                }
+                                else
+                                {
+                                    (void)snprintf(observed_text, sizeof(observed_text), "na");
+                                }
+                                /*
+                                 * 没有 DC 样本时裕量是 0，而 0 ns 裕量看起来像"刚好卡在边界
+                                 * 上"——比"没测到"严重得多。所以按 has_*／last_dc_sample_valid 判。
+                                 */
+                                format_optional_int(margin_text, sizeof(margin_text),
+                                                    timing->last_dc_sample_valid,
+                                                    (int32_t)timing->last_sync0_margin_ns);
+                                format_optional_int(margin_min_text, sizeof(margin_min_text),
+                                                    timing->has_sync0_margin,
+                                                    (int32_t)timing->min_sync0_margin_ns);
+                                format_optional_int(phase_text, sizeof(phase_text),
+                                                    timing->has_phase_error,
+                                                    (int32_t)timing->last_phase_error_ns);
+
+                                if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
+                                    break;
+                                }
+                                written = snprintf(response.message + offset,
+                                                   sizeof(response.message) - (size_t)offset,
+                                                   "|a%u:aa_req=0x%04X,aa_obs=%s"
+                                                   ",sync0_req=%d,sync0=%d"
+                                                   ",cycle_req_ns=%u,cycle_obs_ns=%u"
+                                                   ",shift_req_ns=%d,shift_soem_ns=%d"
+                                                   ",samples=%llu,margin_ns=%s"
+                                                   ",margin_min_ns=%s,phase_err_ns=%s"
+                                                   ",late=%llu,late_run=%llu",
+                                                   (unsigned int)(axis_index + 1U),
+                                                   (unsigned)axis->dc.requested_assign_activate,
+                                                   observed_text,
+                                                   axis->dc.sync0_requested ? 1 : 0,
+                                                   axis->dc.sync0_active ? 1 : 0,
+                                                   (unsigned)axis->dc.requested_cycle_ns,
+                                                   (unsigned)axis->dc.observed_cycle_ns,
+                                                   (int)axis->dc.requested_shift_ns,
+                                                   (int)axis->dc.soem_shift_ns,
+                                                   (unsigned long long)
+                                                       timing->dc_time_sample_count,
+                                                   margin_text, margin_min_text, phase_text,
+                                                   (unsigned long long)timing->sync0_late_count,
+                                                   (unsigned long long)
+                                                       timing->sync0_late_max_consecutive);
+                                if (written < 0) {
+                                    break;
+                                }
+                                offset += written;
+                            }
+                            if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
+                                (void)snprintf(response.message + sizeof(response.message) - 8U, 8U,
+                                              "|TRUNC");
+                            }
+                            response.success = true;
+                            break;
+                        }
+
                         case EMASTER_COMMAND_QUERY_TOPOLOGY: {
                             /*
                              * 拓扑查询：返回实际轴数、总线位置和关键参数
