@@ -146,13 +146,15 @@ def parse_axis_positions(response):
     return positions
 
 
-# 用户要在终端直接看到的五个对象。"607A下发"是主站写进过程映像的目标，
-# "607A回读"是驱动器自己报的 0x607A —— 两者不一致说明目标没进到驱动器的应用里，
-# 一致而电机不动才是驱动器侧的事。这个区分是整个排查的分水岭，所以印在同一行。
+# 要在终端直接看到的五个对象。键就是对象号本身，不做中文化改写。
+#
+# 607A 这一个是**驱动器自己报的**那个值（走 SDO 读回）：主站写进过程映像的目标在
+# 上一行的 目标= 里——主站自己写了什么它永远知道，只有驱动器自报的值需要读回来，
+# 而"目标到了驱动器、驱动器却不执行"这件事正是由这两个数并排看出来的。
 OBJECT_FIELDS = (
     ("6041", "status"),
     ("6061", "mode"),
-    ("607A下发", "target_pos"),
+    ("607A", "tgt_rb"),
     ("6072", "maxT"),
     ("6080", "maxV"),
 )
@@ -177,16 +179,11 @@ def parse_axis_objects(response):
 
 
 def format_axis_objects(response):
-    """一行一轴，把五个对象印全。主站没给这个字段（旧版本）就印 '-'。"""
+    """一行一轴，把五个对象印全。轴号用协议自己的 a1／a2，主站没给的字段印 '-'。"""
     lines = []
     for index, fields in enumerate(parse_axis_objects(response), start=1):
         parts = [f"{label}={fields.get(key, '-')}" for label, key in OBJECT_FIELDS]
-        readback = fields.get("tgt_rb", "-")
-        age = fields.get("rb_age_ms", "-")
-        # 回读值必须连年龄一起印：607A 在运动中连续变，读失败留下的旧值是静止的，
-        # 而"静止"正是要判成"目标没送到"的那个形状——光看值分不开，只能看年龄。
-        parts.append(f"607A回读={readback}" if age in ("-", "na") else f"607A回读={readback}(+{age}ms)")
-        lines.append("[client]   轴%d " % index + " ".join(parts))
+        lines.append("[client]   a%d " % index + " ".join(parts))
     return lines
 
 
