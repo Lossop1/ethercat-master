@@ -1,0 +1,46 @@
+# 台架证据 2026-09-29：12 轴 30° 往返连跑 5 轮（duodec30）
+# 由 scripts/bench_series.sh 产生；本文件是该系列的入库记录，每轮原始证据在 reports/_duodec30/rNN_*/
+# 命令 sudo env DEPLOYMENT=orangepi-bench-duodec-30deg SERIES=duodec30 ROUNDS=5 GAP=20 MODE=reciprocate
+#      DURATION=40 TRAVERSE=5 DEGREES=30 RATE=100 ONLY_AXIS=0 REPORT_INTERVAL=10 OBSERVATION=1 \
+#      bash scripts/bench_series.sh
+# 部署 orangepi-bench-duodec-30deg（12 台；第 8 台减速比 25:1，其余 28:1），1 ms DC／CSP
+
+结论一：4/5 跑满（r01–r04 退出码 0，各约 57.8 s、WKC 36/36、收尾 12/12 在 OP）。
+结论二：**这 4 轮里第 12 根轴一步没动** —— 它的最大跟随误差是 38229／38236／38236／38260
+        counts，正好等于下发的整个位移（28:1 下 30° = 38229 counts），其余 11 根是
+        767–1453 counts（约 0.6–1.1°）。**多轴档的护栏是 50°，30° 的跟随误差不会触发它**，
+        所以这 4 轮全部以退出码 0 结束，报告里只有 motion_completed 为假。
+        （单轴档的护栏是 2°，同一根轴接上去会在 0.4 s 内被 FOLLOWING_ERROR 拦下。）
+结论三：r05 退出码 1，周期数只有 325 —— 轴 1–9 停在 SAFE-OP(state=4)、轴 10–12 整站不应答
+        (state=0)，主站在交换号 321 中止。与 11 轴系列里 r05 那种「连跑几轮之后起不来」同形。
+== 运行与结局 ==
+round	round_at	gap_s	exit_code	cycles	op_reached	all_enabled	motion_completed	shutdown_in_op	not_in_op
+duodec30r01	2026-09-29 18:04:48	20	0	57833	1	1	0	12/12	-
+duodec30r02	2026-09-29 18:06:27	20	0	57785	1	1	0	12/12	-
+duodec30r03	2026-09-29 18:08:05	20	0	57836	1	1	0	12/12	-
+duodec30r04	2026-09-29 18:09:43	20	0	57843	1	1	0	12/12	-
+duodec30r05	2026-09-29 18:11:23	20	1	325	0	0	0	0/12	1(s=4),2(s=4),3(s=4),4(s=4),5(s=4),6(s=4),7(s=4),8(s=4),9(s=4),10(s=0),11(s=0),12(s=0)
+
+== WKC 与周期 ==
+wkc_expected	wkc_actual	wkc_mismatch	wkc_error	wkc_no_frame	first_mismatch_ex	deadline_missed	over_budget
+36	36	1	1	1	32015	0	0
+36	36	1	1	1	37974	0	0
+36	36	0	0	0	0	0	0
+36	36	0	0	0	0	0	0
+36	27	5	5	1	321	1	0
+
+== 时序 ==
+frame_gap	frame_interval_max	receive_max	receive_ok_max	errctr_max	errctr_fail
+0	1086873	268534	255734	202855	114
+0	1081513	271423	212545	122557	127
+0	1080293	224034	224034	123327	95
+0	1026335	217774	217774	119297	142
+1	2999227	269173	121368	112617	0
+
+== 各轴最大跟随误差 counts（顺序=轴 1..12） ==
+following_error_max
+1203,1444,1332,1210,811,929,851,908,855,767,777,38229
+1197,1453,1244,1075,842,908,842,945,868,782,824,38236
+1275,1440,1326,1338,816,924,827,905,923,837,814,38236
+1249,1433,1053,1204,838,970,847,952,887,799,789,38260
+0,0,0,0,0,0,0,0,0,0,0,0
