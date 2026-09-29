@@ -571,9 +571,21 @@ slave=1 name=Robot_Joint_Actuator vendor=0x000C0B00 product=0x00080117 revision=
 "身份或 PDO 映射与部署配置不一致"，而"环上到底有几台、不一致的是哪一台"它不说。
 **没扫到的那几台，主站那边的报错不会告诉你是哪一根线**，所以先跑这个。
 
-**它不读部署档、不发过程数据、不进 OP**，扫完立刻 `ecx_close`，对台架是只读的。
-`state` 是这一拍读回的 AL 状态（1=INIT、2=PRE-OP、4=SAFE-OP、8=OP）；
-`vendor`／`product`／`revision` 三件套与部署档 `identity` 对得上才说明"装的是它"。
+**它不读部署档、不发过程数据、不进 OP**，扫完把全体请求回 INIT 再 `ecx_close`，对台架只读。
+
+它同时把换算参数读出来——运动方案里的 `expected_position_scale` **就该照这两个数写**，
+不要凭记忆或按别的台架推断：
+
+```
+slave=1 gear=28/1 enc=16384/1
+slave=8 gear=25/1 enc=16384/1      ← 混装时一眼看得出来是哪一台
+```
+
+- `gear=` 是 `0x6091:01/:02`（电机转数/输出轴转数）→ `gear_motor_revolutions`／`gear_shaft_revolutions`
+- `enc=` 是 `0x608F:01/:02` → `encoder_increments`／`encoder_motor_revolutions`
+- 读不到印 `na`（不是 0）：减速比／分辨率里 0 是非法值，印 0 会被当成"驱动器报的就是 0"
+- `state` 是这一拍读回的 AL 状态（1=INIT、2=PRE-OP、4=SAFE-OP、8=OP）；
+  `vendor`／`product`／`revision` 三件套与部署档 `identity` 对得上才说明"装的是它"
 
 ## 14 速查
 
