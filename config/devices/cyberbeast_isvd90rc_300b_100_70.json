@@ -204,7 +204,9 @@
     {"name": "speed_command", "index": "0x200B", "subindex": 9, "type": "i32", "semantic": "target_velocity", "unit": "rpm"},
     {"name": "extended_servo_error_code", "index": "0x203E", "subindex": 0, "type": "u32", "semantic": "extended_error_code", "unit": ""},
     {"name": "servo_error_code", "index": "0x203F", "subindex": 0, "type": "u32", "semantic": "servo_error_code", "unit": ""},
-    {"name": "target_position_readback", "index": "0x607A", "subindex": 0, "type": "i32", "semantic": "target_position_readback", "unit": "count"}
+    {"name": "target_position_readback", "index": "0x607A", "subindex": 0, "type": "i32", "semantic": "target_position_readback", "unit": "count"},
+    {"name": "max_torque", "index": "0x6072", "subindex": 0, "type": "u16", "semantic": "max_torque", "unit": ""},
+    {"name": "max_motor_speed", "index": "0x6080", "subindex": 0, "type": "u32", "semantic": "max_motor_speed", "unit": ""}
   ],
   "source": {
     "esi": "docs/lz-joint/ECAT_CIA402.xml"

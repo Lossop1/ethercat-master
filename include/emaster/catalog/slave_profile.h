@@ -84,7 +84,22 @@ typedef enum
      *   读到的一直是旧值       ⇒ 值在"过程映像"到"驱动器应用"之间就断了，与电机无关。
      * 因此名字里带 readback，不与 target_position 混用。
      */
-    EMASTER_TELEMETRY_TARGET_POSITION_READBACK
+    EMASTER_TELEMETRY_TARGET_POSITION_READBACK,
+    /*
+     * 两个**配置型**对象的运行期读数：最大力矩 0x6072、最大电机转速 0x6080。
+     *
+     * 为什么必须能在 OP 期间读。它们在停机后也读得到（post_cycle_diagnostic），但那是
+     * 停用之后的值；而 0x6072 恰恰是主站在 SAFE-OP 进 OP 时**写**进去的（运行方案的
+     * safeop_to_op_sdo_writes），所以"写进去没有、运行时到底是多少"只有 OP 期间的读数
+     * 能回答。
+     *
+     * 这两个语义**不进报告**：慢速遥测的槽位与报告字段是给"会随时间变"的量准备的，
+     * 而这两个是静态配置值，停机后那一次读已经覆盖了报告侧的需要。本语义只让观测线程
+     * 在 OP 期间把它们读一遍，读数落在审计段（带 phase=cyclic_operation）——与
+     * extended／servo error code 同一个形状，见下面 observer_store_telemetry 的说明。
+     */
+    EMASTER_TELEMETRY_MAX_TORQUE,
+    EMASTER_TELEMETRY_MAX_MOTOR_SPEED
 } emaster_telemetry_semantic_t;
 
 /* 一个供应商私有遥测对象：对象号来自设备配置，解释权归声明它的设备。 */

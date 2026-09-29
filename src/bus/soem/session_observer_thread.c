@@ -256,6 +256,10 @@ static bool observer_telemetry_is_observed(emaster_telemetry_semantic_t semantic
         case EMASTER_TELEMETRY_ACTUAL_VELOCITY:
         case EMASTER_TELEMETRY_TARGET_VELOCITY:
         case EMASTER_TELEMETRY_TARGET_POSITION_READBACK:
+        /* 配置型对象也在这里读一遍：0x6072 是主站进 OP 时写进去的，运行时是多少
+         * 只有 OP 期间的读数答得了。 */
+        case EMASTER_TELEMETRY_MAX_TORQUE:
+        case EMASTER_TELEMETRY_MAX_MOTOR_SPEED:
             return true;
         case EMASTER_TELEMETRY_NONE:
         case EMASTER_TELEMETRY_EXTENDED_ERROR_CODE:
@@ -347,6 +351,26 @@ static void observer_store_telemetry(emaster_observation_slow_axis_t *slot,
                  * 光靠值分不开，所以判据落在时间戳上。
                  */
                 slot->target_position_readback_last_read_ns = observer_now_ns();
+            }
+            break;
+        /*
+         * 0x6072/0x6080 进快照（P12.50）。原先它们只落审计段，理由是"静态配置值，
+         * 停机后那次读已经覆盖报告侧"——那个理由对**报告**成立，对**运行中判因**不成立：
+         * "轴被限幅卡住不动"这个假设只能在 OP 运行期间当场排掉，事后再读到的值分不清
+         * 是运行时如此还是停机时被谁改过。两条共用一个时间戳，理由见 slow.h。
+         */
+        case EMASTER_TELEMETRY_MAX_TORQUE:
+            if (succeeded)
+            {
+                slot->max_torque = (int32_t)value;
+                slot->max_limits_last_read_ns = observer_now_ns();
+            }
+            break;
+        case EMASTER_TELEMETRY_MAX_MOTOR_SPEED:
+            if (succeeded)
+            {
+                slot->max_motor_speed = (int32_t)value;
+                slot->max_limits_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_NONE:

@@ -124,6 +124,8 @@ TELEMETRY_SEMANTIC_VALUES = {
     "extended_error_code": "EMASTER_TELEMETRY_EXTENDED_ERROR_CODE",
     "servo_error_code": "EMASTER_TELEMETRY_SERVO_ERROR_CODE",
     "target_position_readback": "EMASTER_TELEMETRY_TARGET_POSITION_READBACK",
+    "max_torque": "EMASTER_TELEMETRY_MAX_TORQUE",
+    "max_motor_speed": "EMASTER_TELEMETRY_MAX_MOTOR_SPEED",
 }
 
 

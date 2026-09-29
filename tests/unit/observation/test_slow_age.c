@@ -85,6 +85,18 @@ static void set_target_position(emaster_observation_slow_state_t *state, uint32_
     state->axes[index].target_position_readback_last_read_ns = last_read_ns;
 }
 
+/*
+ * 0x6072/0x6080 这一对极限值共用同一个时间戳，所以一个 setter 给两个值：
+ * 分开给会让测试造出"力矩读到了、转速没读到"这种快照里根本不可能出现的状态。
+ */
+static void set_max_limits(emaster_observation_slow_state_t *state, uint32_t index,
+                           int32_t torque, int32_t speed, uint64_t last_read_ns)
+{
+    state->axes[index].max_torque = torque;
+    state->axes[index].max_motor_speed = speed;
+    state->axes[index].max_limits_last_read_ns = last_read_ns;
+}
+
 int main(void)
 {
     emaster_observation_slow_state_t state;
@@ -188,6 +200,28 @@ int main(void)
           "但 0x607A 从没读到过——字段级必须答'没有'，不许拿轴级时间戳顶替");
     check(age == AGE_SENTINEL, "答'没有'时不得写输出参数");
 
+    /* ── 3c. 0x6072/0x6080（极限值）的字段级年龄（P12.50）───────────────── */
+    /*
+     * 这一对进快照是为了让终端上"轴是不是被限幅卡住"当场可判。与 607A 同形：
+     * 值是静态的，读失败留下的旧值与真值在数值上完全一样，判据只能落在时间戳上。
+     */
+    printf("0x6072/0x6080 的字段级年龄（P12.50）\n");
+    set_max_limits(&state, 0U, INT32_C(1000), INT32_C(841045), now - UINT64_C(40000000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_max_limits_age(&state, 0U, now, &age),
+          "读到过极限值的轴应当有年龄");
+    check(age == UINT64_C(40000000), "极限值年龄 = now - 读到它的时刻");
+
+    /* 同 603F/607A：轴级时间戳有值，这一条没有。 */
+    set_axis(&state, 4U, false, now - UINT64_C(530000000));
+    set_max_limits(&state, 4U, INT32_C(1000), INT32_C(841045), UINT64_C(0));
+    check(emaster_observation_slow_axis_age(&state, 4U, now, NULL),
+          "轴 4 的温度读到过（轴级时间戳有值）");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_max_limits_age(&state, 4U, now, &age),
+          "但极限值从没读到过——字段级必须答'没有'，不许拿轴级时间戳顶替");
+    check(age == AGE_SENTINEL, "答'没有'时不得写输出参数");
+
     /* ── 4. 越界与没发布过 ─────────────────────────────────────────────── */
     printf("越界与没发布过\n");
     age = AGE_SENTINEL;
@@ -215,6 +249,14 @@ int main(void)
                   &state, EMASTER_OBSERVATION_MAX_AXES, now, &age),
           "0x607A：轴号越界（含 >= 容量上限）应当没有年龄，且不得越界读数组");
     check(age == AGE_SENTINEL, "0x607A 越界时不得写输出参数");
+    check(!emaster_observation_slow_axis_max_limits_age(&empty, 0U, now, &age),
+          "0x6072/0x6080：axis_count=0 时同样没有年龄");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_max_limits_age(&state, 5U, now, &age) &&
+              !emaster_observation_slow_axis_max_limits_age(
+                  &state, EMASTER_OBSERVATION_MAX_AXES, now, &age),
+          "0x6072/0x6080：轴号越界（含 >= 容量上限）应当没有年龄，且不得越界读数组");
+    check(age == AGE_SENTINEL, "0x6072/0x6080 越界时不得写输出参数");
 
     /* ── 5. 时钟异常不给负数 ───────────────────────────────────────────── */
     printf("时钟异常\n");
@@ -233,6 +275,11 @@ int main(void)
     check(emaster_observation_slow_axis_target_position_age(&state, 1U, now, &age) &&
               age == UINT64_C(0),
           "0x607A：时钟异常时同样取 0，不给负数");
+    set_max_limits(&state, 1U, INT32_C(1000), INT32_C(841045), now + UINT64_C(5000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_max_limits_age(&state, 1U, now, &age) &&
+              age == UINT64_C(0),
+          "0x6072/0x6080：时钟异常时同样取 0，不给负数");
 
     /* ── 6. 只要答案不要年龄 ───────────────────────────────────────────── */
     printf("输出参数可以为空\n");
@@ -242,6 +289,8 @@ int main(void)
           "603F：不关心年龄时也应当能问'有没有'");
     check(emaster_observation_slow_axis_target_position_age(&state, 0U, now, NULL),
           "0x607A：不关心年龄时也应当能问'有没有'");
+    check(emaster_observation_slow_axis_max_limits_age(&state, 0U, now, NULL),
+          "0x6072/0x6080：不关心年龄时也应当能问'有没有'");
 
     /* ── 7. 时间戳要真的穿过发布/读取 ─────────────────────────────────── */
     printf("时间戳穿过 seqlock\n");

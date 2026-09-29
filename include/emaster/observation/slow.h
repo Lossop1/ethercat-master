@@ -60,6 +60,17 @@ typedef struct
      */
     uint64_t target_position_readback_last_read_ns;
     int32_t  target_position_readback;
+    /*
+     * 0x6072（最大力矩）/0x6080（最大电机转速）这一对极限值的"最后一次读到"时刻。
+     *
+     * 两条共用一个戳而不是各打一个：它们同属设备配置里的一组极限值，由同一轮 SDO
+     * 一起读出来，两个永远相同的时刻分开存，只会让人以为它们是两个独立的事实。
+     * 粒度仍是字段级 —— 与 607A、603F 同理：这两个值是静态的，"读失败留下的旧值"
+     * 与"驱动器本来就报这个值"在数值上分不开，判据只能落在时间戳上。0 = 从没读到过。
+     */
+    uint64_t max_limits_last_read_ns;
+    int32_t  max_torque;
+    int32_t  max_motor_speed;
     int32_t  actual_current;
     int32_t  dc_link_voltage;
     int32_t  mosfet_temperature;
@@ -140,6 +151,17 @@ bool emaster_observation_slow_axis_error_code_age(
  * "驱动器收到的目标一直是旧值"——一个错结论，而不是一个偏差。
  */
 bool emaster_observation_slow_axis_target_position_age(
+    const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
+    uint64_t *out_age_ns);
+
+/*
+ * 同上，但问的是 0x6072/0x6080 这一对极限值。
+ *
+ * 它回答的与前两个又不同：极限值不是"驱动器现在的状态"，而是"主站进 OP 时写下去、
+ * 之后有没有被改掉"。终端上把这三个数并排印出来，是为了让"到底是被限幅卡住不动"
+ * 这个假设当场可判 —— 而限幅值本身读失败留下的旧值看起来和真值一模一样。
+ */
+bool emaster_observation_slow_axis_max_limits_age(
     const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
     uint64_t *out_age_ns);
 

@@ -172,6 +172,8 @@ SLOW_TELEMETRY_SEMANTICS = (
     "extended_error_code",
     "servo_error_code",
     "target_position_readback",
+    "max_torque",
+    "max_motor_speed",
 )
 
 
