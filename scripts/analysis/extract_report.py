@@ -140,5 +140,42 @@ def main():
               f"   读到，读数年龄 {field_int(block, b'target_position_readback_age_ns', 0) / 1e6:.1f} ms")
 
 
+    # 指定对象在各阶段的取值（默认就是下面这五个）。
+    #
+    # 为什么按**阶段**印。同一个对象在 SAFE-OP、OP 期间、停机后可以不同，而"哪一段的值"
+    # 决定了它能回答什么问题：只看最后一条会把停机后的状态当成运行态（0x6041 在停机后
+    # bit2/bit10 会掉，0x1233 与运行期的 0x1237 差在"运行使能"与"目标到达"两位上）。
+    # 另外 0x6072 是主站在 SAFE-OP 进 OP 时**写**进去的（运行方案的 safeop_to_op_sdo_writes），
+    # 所以它在写前写后是否一致本身就是一条判据。
+    #
+    # 读法边界：审计段记录的是主站**真的读过**的对象。某个对象只在 safeop_initialization
+    # 与 post_cycle_diagnostic 出现，就说明这份二进制在 OP 期间没有读它——不是"值没变"，
+    # 是"没有 OP 期间的读数"。
+    wanted = ("status_word", "mode_display", "target_position", "max_torque", "max_motor_speed")
+    print("\n== 指定对象在各阶段的取值 ==")
+    pattern = (rb'"phase":"([a-z_]+)","transport":"[^"]*","direction":"[^"]*",'
+               rb'"slave_position":(\d+),"object":"[^"]*","bit_length":\d+,"bit_offset":\d+,'
+               rb'"name":"([a-z_0-9]+)","value_type":"[^"]*","value_dec":(-?\d+)')
+    seen = {}
+    for phase, axis, name, value in re.findall(pattern, data):
+        name = name.decode()
+        if name in wanted:
+            seen[(int(axis), name, phase.decode())] = int(value)
+    if not seen:
+        print("  （这份报告的审计段里没有这几个对象）")
+    else:
+        axes = sorted({a for a, _, _ in seen})
+        for axis in axes:
+            print(f"  轴{axis}:")
+            for name in wanted:
+                by_phase = {ph: v for (a, n, ph), v in seen.items() if a == axis and n == name}
+                if not by_phase:
+                    print(f"    {name:<18} （报告里没有）")
+                    continue
+                text = "  ".join(f"{ph}={v}" for ph, v in sorted(by_phase.items(),
+                                                                key=lambda kv: kv[0]))
+                print(f"    {name:<18} {text}")
+
+
 if __name__ == "__main__":
     main()
