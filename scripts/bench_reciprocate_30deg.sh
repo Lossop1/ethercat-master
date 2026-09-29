@@ -49,6 +49,12 @@ WAVE=${WAVE:-triangle}
 TAG=${TAG:-recip30}
 REPORT_INTERVAL=${REPORT_INTERVAL:-10}
 SETTLE_TICKS=${SETTLE_TICKS:-10}
+# OBSERVATION 是否让主站开观测通道（1=开，默认 1）。
+# 默认开着，是因为排查"轴掉出去"这件事**必须**有逐轴母线电压/温度/电流：慢速遥测
+# 只在观测通道开着时才轮询，关着的话报告里那几栏恒为「—」，事后无法回答"掉的那一刻
+# 电压是多少"（2026-09-29 的 nonall1 就是这么白跑一轮的）。
+# 设 0 可对照"观测线程本身有没有干扰"，那是 P12.8 的 A/B 用法，不是默认用法。
+OBSERVATION=${OBSERVATION:-1}
 ONLY_AXIS=${ONLY_AXIS:-0}
 
 SOCK=/tmp/emaster-${DEPLOYMENT}.sock
@@ -104,7 +110,14 @@ pkill -9 -f emaster-master 2>/dev/null
 sleep 2
 rm -f /tmp/emaster-*.sock
 
-./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+# OBS_PREFIX 为空时下面那行就是原样的命令行；为 "env EMASTER_OBSERVATION=1" 时
+# 由 env 把开关递进主站的环境。不写成 "$OBS_PREFIX ./build/..." 是因为空字符串会
+# 展开成一个空参数，主站会把它当成可执行文件名（P12.11 在 gui_e2e 上踩过这个）。
+if [ "$OBSERVATION" = "1" ]; then
+    env EMASTER_OBSERVATION=1 ./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+else
+    ./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+fi
 MASTER_PID=$!
 echo "主站 pid=$MASTER_PID"
 
