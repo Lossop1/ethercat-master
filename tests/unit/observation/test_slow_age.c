@@ -97,6 +97,15 @@ static void set_max_limits(emaster_observation_slow_state_t *state, uint32_t ind
     state->axes[index].max_limits_last_read_ns = last_read_ns;
 }
 
+/* 0x203E/0x203F 同理：两条共用时间戳，一个 setter 给两个值。 */
+static void set_vendor_error(emaster_observation_slow_state_t *state, uint32_t index,
+                             uint32_t extended, uint32_t servo, uint64_t last_read_ns)
+{
+    state->axes[index].extended_error_code = extended;
+    state->axes[index].servo_error_code = servo;
+    state->axes[index].vendor_error_last_read_ns = last_read_ns;
+}
+
 int main(void)
 {
     emaster_observation_slow_state_t state;
@@ -222,6 +231,26 @@ int main(void)
           "但极限值从没读到过——字段级必须答'没有'，不许拿轴级时间戳顶替");
     check(age == AGE_SENTINEL, "答'没有'时不得写输出参数");
 
+    /* ── 3d. 0x203E/0x203F（厂商错误码）的字段级年龄（P12.52）───────────── */
+    /*
+     * 这一对最需要时间戳：0x00000000 就是"驱动器没报错"，而那正是最容易拿去当结论
+     * 的一个值 —— 与"这一条压根没读回来"在数值上完全一样。
+     */
+    printf("0x203E/0x203F 的字段级年龄（P12.52）\n");
+    set_vendor_error(&state, 0U, UINT32_C(0x00010002), UINT32_C(0x00000007),
+                     now - UINT64_C(110000000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_vendor_error_age(&state, 0U, now, &age),
+          "读到过厂商错误码的轴应当有年龄");
+    check(age == UINT64_C(110000000), "厂商错误码年龄 = now - 读到它的时刻");
+    /* 读到 0 也是读到了：驱动器不报错就是报 0。 */
+    set_vendor_error(&state, 2U, UINT32_C(0x00000000), UINT32_C(0x00000000),
+                     now - UINT64_C(20000000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_vendor_error_age(&state, 2U, now, &age),
+          "**读到 0 也算读到了**——驱动器不报错就是报 0，不许当成'没读到'");
+    check(age == UINT64_C(20000000), "读到 0x00000000 时年龄照给");
+
     /* ── 4. 越界与没发布过 ─────────────────────────────────────────────── */
     printf("越界与没发布过\n");
     age = AGE_SENTINEL;
@@ -257,6 +286,14 @@ int main(void)
                   &state, EMASTER_OBSERVATION_MAX_AXES, now, &age),
           "0x6072/0x6080：轴号越界（含 >= 容量上限）应当没有年龄，且不得越界读数组");
     check(age == AGE_SENTINEL, "0x6072/0x6080 越界时不得写输出参数");
+    check(!emaster_observation_slow_axis_vendor_error_age(&empty, 0U, now, &age),
+          "0x203E/0x203F：axis_count=0 时同样没有年龄");
+    age = AGE_SENTINEL;
+    check(!emaster_observation_slow_axis_vendor_error_age(&state, 5U, now, &age) &&
+              !emaster_observation_slow_axis_vendor_error_age(
+                  &state, EMASTER_OBSERVATION_MAX_AXES, now, &age),
+          "0x203E/0x203F：轴号越界（含 >= 容量上限）应当没有年龄，且不得越界读数组");
+    check(age == AGE_SENTINEL, "0x203E/0x203F 越界时不得写输出参数");
 
     /* ── 5. 时钟异常不给负数 ───────────────────────────────────────────── */
     printf("时钟异常\n");
@@ -280,6 +317,12 @@ int main(void)
     check(emaster_observation_slow_axis_max_limits_age(&state, 1U, now, &age) &&
               age == UINT64_C(0),
           "0x6072/0x6080：时钟异常时同样取 0，不给负数");
+    set_vendor_error(&state, 1U, UINT32_C(0x00000000), UINT32_C(0x00000000),
+                     now + UINT64_C(5000));
+    age = AGE_SENTINEL;
+    check(emaster_observation_slow_axis_vendor_error_age(&state, 1U, now, &age) &&
+              age == UINT64_C(0),
+          "0x203E/0x203F：时钟异常时同样取 0，不给负数");
 
     /* ── 6. 只要答案不要年龄 ───────────────────────────────────────────── */
     printf("输出参数可以为空\n");
@@ -291,6 +334,8 @@ int main(void)
           "0x607A：不关心年龄时也应当能问'有没有'");
     check(emaster_observation_slow_axis_max_limits_age(&state, 0U, now, NULL),
           "0x6072/0x6080：不关心年龄时也应当能问'有没有'");
+    check(emaster_observation_slow_axis_vendor_error_age(&state, 0U, now, NULL),
+          "0x203E/0x203F：不关心年龄时也应当能问'有没有'");
 
     /* ── 7. 时间戳要真的穿过发布/读取 ─────────────────────────────────── */
     printf("时间戳穿过 seqlock\n");

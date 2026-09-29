@@ -15,6 +15,37 @@ static uint64_t absolute_position_difference(int32_t left, int32_t right) {
 }
 
 /*
+ * 慢速通道取不到时的印法（P12.50/P12.52）。
+ *
+ * 这些量的 0 全都是合法读数——0 A、0 rpm、0x00000000 就是"没有错误"——所以印 0
+ * 会把一次邮箱超时伪装成一个读数。而排查"轴不动"时最容易下错的那几个结论，正好
+ * 都落在这几个数上。取不到就印 na，客户端把它当"没有"而不是当 0。
+ */
+static void format_optional_int(char *out, size_t size, bool read, int32_t value)
+{
+    if (read)
+    {
+        (void)snprintf(out, size, "%d", (int)value);
+    }
+    else
+    {
+        (void)snprintf(out, size, "na");
+    }
+}
+
+static void format_optional_hex32(char *out, size_t size, bool read, uint32_t value)
+{
+    if (read)
+    {
+        (void)snprintf(out, size, "0x%08X", (unsigned)value);
+    }
+    else
+    {
+        (void)snprintf(out, size, "na");
+    }
+}
+
+/*
  * P12.17: 记下"这一轴第一次被判故障"。
  *
  * 这几个字段原先只有 AXIS_ISOLATION 分支才写，而默认策略是全局停机，于是报告里
@@ -773,13 +804,26 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             emaster_observation_slow_state_t slow;
                             bool slow_ok = emaster_observation_slow_read(
                                 &session->observation_slow, &slow);
+                            /*
+                             * 会话级计数一并给出去（P12.52）：此前它们只在报告里，
+                             * 也就是只有跑完才看得到，而"这一轮现在健康吗"是运行中
+                             * 就要回答的问题。全是累加计数，读它们不改任何状态。
+                             */
                             int offset = snprintf(response.message, sizeof(response.message),
-                                "state=%d cycle=%lu axes=%zu enabled=%d completed=%d",
+                                "state=%d cycle=%lu axes=%zu enabled=%d completed=%d"
+                                ",wkc=%d,wkc_expect=%u,wkc_err=%llu,no_frame=%llu"
+                                ",over_budget=%llu,deadline_missed=%d",
                                 (int)session->report->state,
                                 (unsigned long)session->report->cycle_count,
                                 session->plan->axis_count,
                                 session->report->all_axes_enabled_reached ? 1 : 0,
-                                session->report->motion_completed ? 1 : 0);
+                                session->report->motion_completed ? 1 : 0,
+                                (int)session->report->actual_wkc,
+                                (unsigned)session->report->expected_wkc,
+                                (unsigned long long)session->report->wkc_error_count,
+                                (unsigned long long)session->report->wkc_no_frame_count,
+                                (unsigned long long)session->report->over_budget_cycle_count,
+                                session->report->cycle_deadline_missed ? 1 : 0);
 
                             for (axis_index = 0U;
                                  axis_index < session->plan->axis_count; ++axis_index) {
@@ -813,65 +857,121 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                         ? slow.axes[axis_index].motor_speed
                                         : axis->actual_velocity;
                                 /*
-                                 * 三条只有慢速通道拿得到的读数（P12.50）：0x607A 的驱动器自报值、
-                                 * 0x6072、0x6080。它们进状态回读，是为了让"轴为什么不动"当场可判，
-                                 * 而不是跑完再去翻报告。
+                                 * 慢速通道能取到的全部读数（P12.50/P12.52）：0x6078 电流、
+                                 * 0x6079 母线电压、0x200B 的温度与转速、0x607A 的驱动器自报值、
+                                 * 0x6072／0x6080 极限值、0x203E／0x203F 厂商错误码。
                                  *
-                                 * 读到过没有用字段级时间戳判，取不到就印 na 而不是 0：这三个数的 0
-                                 * 都是合法读数，印 0 会把一次邮箱超时伪装成"驱动器报的就是 0"，
-                                 * 而结论正好落在这几个数上。607A 回读连年龄一起报——它的值在运动中
-                                 * 连续变，读失败留下的旧值是静止的，而"静止"正是要判成"目标没送到"
-                                 * 的那个形状，光看值分不开，只能看年龄。
+                                 * 它们进状态回读，是为了让"轴为什么不动"当场可判，而不是跑完
+                                 * 再去翻报告或翻详细日志。取不到一律印 na，理由见 format_optional_*。
+                                 *
+                                 * 判据分两类：极限值与厂商错误码问**字段级**时间戳——它们是静态量，
+                                 * 要回答的只是"读到过没有"；其余问轴级。
+                                 * 607A 回读额外连年龄一起报：它的值在运动中连续变，读失败留下的
+                                 * 旧值是静止的，而"静止"正是要判成"目标没送到"的那个形状，
+                                 * 光看值分不开，只能看年龄。
                                  * 年龄用快照自己的发布时刻算，周期线程里不额外取时钟。
                                  */
-                                uint64_t readback_age_ns = UINT64_C(0);
-                                uint64_t max_limits_age_ns = UINT64_C(0);
+                                const emaster_observation_slow_axis_t *slow_axis =
+                                    slow_has_axis ? &slow.axes[axis_index] : NULL;
+                                uint64_t slow_age_ns = UINT64_C(0);
+                                const bool axis_read =
+                                    slow_axis != NULL &&
+                                    emaster_observation_slow_axis_age(
+                                        &slow, (uint32_t)axis_index, slow.monotonic_ns,
+                                        &slow_age_ns);
                                 const bool readback_read =
-                                    slow_has_axis &&
+                                    slow_axis != NULL &&
                                     emaster_observation_slow_axis_target_position_age(
                                         &slow, (uint32_t)axis_index, slow.monotonic_ns,
-                                        &readback_age_ns);
+                                        &slow_age_ns);
                                 const bool max_limits_read =
-                                    slow_has_axis &&
+                                    slow_axis != NULL &&
                                     emaster_observation_slow_axis_max_limits_age(
                                         &slow, (uint32_t)axis_index, slow.monotonic_ns,
-                                        &max_limits_age_ns);
+                                        &slow_age_ns);
+                                const bool vendor_error_read =
+                                    slow_axis != NULL &&
+                                    emaster_observation_slow_axis_vendor_error_age(
+                                        &slow, (uint32_t)axis_index, slow.monotonic_ns,
+                                        &slow_age_ns);
                                 char readback_text[24];
                                 char readback_age_text[24];
                                 char max_torque_text[24];
                                 char max_motor_speed_text[24];
+                                char current_text[24];
+                                char bus_voltage_text[24];
+                                char mosfet_text[24];
+                                char motor_temperature_text[24];
+                                char motor_rpm_text[24];
+                                char command_rpm_text[24];
+                                char extended_error_text[32];
+                                char servo_error_text[32];
 
+                                format_optional_int(readback_text, sizeof(readback_text),
+                                                    readback_read,
+                                                    slow_axis != NULL
+                                                        ? slow_axis->target_position_readback
+                                                        : 0);
                                 if (readback_read)
                                 {
-                                    (void)snprintf(
-                                        readback_text, sizeof(readback_text), "%d",
-                                        (int)slow.axes[axis_index].target_position_readback);
-                                    (void)snprintf(
-                                        readback_age_text, sizeof(readback_age_text), "%llu",
-                                        (unsigned long long)(readback_age_ns /
-                                                             UINT64_C(1000000)));
+                                    (void)snprintf(readback_age_text,
+                                                   sizeof(readback_age_text), "%llu",
+                                                   (unsigned long long)(slow_age_ns /
+                                                                        UINT64_C(1000000)));
                                 }
                                 else
                                 {
-                                    (void)snprintf(readback_text, sizeof(readback_text), "na");
-                                    (void)snprintf(readback_age_text, sizeof(readback_age_text),
-                                                   "na");
+                                    (void)snprintf(readback_age_text,
+                                                   sizeof(readback_age_text), "na");
                                 }
-                                if (max_limits_read)
-                                {
-                                    (void)snprintf(max_torque_text, sizeof(max_torque_text), "%d",
-                                                   (int)slow.axes[axis_index].max_torque);
-                                    (void)snprintf(max_motor_speed_text,
-                                                   sizeof(max_motor_speed_text), "%d",
-                                                   (int)slow.axes[axis_index].max_motor_speed);
-                                }
-                                else
-                                {
-                                    (void)snprintf(max_torque_text, sizeof(max_torque_text), "na");
-                                    (void)snprintf(max_motor_speed_text,
-                                                   sizeof(max_motor_speed_text), "na");
-                                }
-                                (void)max_limits_age_ns;
+                                format_optional_int(max_torque_text, sizeof(max_torque_text),
+                                                    max_limits_read,
+                                                    slow_axis != NULL ? slow_axis->max_torque
+                                                                      : 0);
+                                format_optional_int(max_motor_speed_text,
+                                                    sizeof(max_motor_speed_text),
+                                                    max_limits_read,
+                                                    slow_axis != NULL
+                                                        ? slow_axis->max_motor_speed
+                                                        : 0);
+                                format_optional_int(current_text, sizeof(current_text),
+                                                    axis_read,
+                                                    slow_axis != NULL ? slow_axis->actual_current
+                                                                      : 0);
+                                format_optional_int(bus_voltage_text, sizeof(bus_voltage_text),
+                                                    axis_read,
+                                                    slow_axis != NULL
+                                                        ? slow_axis->dc_link_voltage
+                                                        : 0);
+                                format_optional_int(mosfet_text, sizeof(mosfet_text), axis_read,
+                                                    slow_axis != NULL
+                                                        ? slow_axis->mosfet_temperature
+                                                        : 0);
+                                format_optional_int(motor_temperature_text,
+                                                    sizeof(motor_temperature_text), axis_read,
+                                                    slow_axis != NULL
+                                                        ? slow_axis->motor_temperature
+                                                        : 0);
+                                format_optional_int(motor_rpm_text, sizeof(motor_rpm_text),
+                                                    axis_read,
+                                                    slow_axis != NULL ? slow_axis->motor_speed
+                                                                      : 0);
+                                format_optional_int(command_rpm_text, sizeof(command_rpm_text),
+                                                    axis_read,
+                                                    slow_axis != NULL ? slow_axis->speed_command
+                                                                      : 0);
+                                format_optional_hex32(extended_error_text,
+                                                      sizeof(extended_error_text),
+                                                      vendor_error_read,
+                                                      slow_axis != NULL
+                                                          ? slow_axis->extended_error_code
+                                                          : 0U);
+                                format_optional_hex32(servo_error_text,
+                                                      sizeof(servo_error_text),
+                                                      vendor_error_read,
+                                                      slow_axis != NULL
+                                                          ? slow_axis->servo_error_code
+                                                          : 0U);
                                 int written;
 
                                 if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
@@ -881,7 +981,10 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    sizeof(response.message) - (size_t)offset,
                                                    "|a%u:pos=%d,vel=%d,torque=%d,status=0x%04x,"
                                                    "target_pos=%d,planned=%d,err=0x%04x,state=%d,"
-                                                   "mode=%d,tgt_rb=%s,rb_age_ms=%s,maxT=%s,maxV=%s",
+                                                   "mode=%d,tgt_rb=%s,rb_age_ms=%s,maxT=%s,maxV=%s,"
+                                                   "control=0x%04x,current=%s,bus_v=%s,mosfet_t=%s,"
+                                                   "motor_t=%s,motor_rpm=%s,cmd_rpm=%s,"
+                                                   "ext_err=%s,servo_err=%s",
                                                    (unsigned int)(axis_index + 1U),
                                                    axis->actual_position,
                                                    reported_velocity,
@@ -896,7 +999,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                     * 模式没切过去，那样 6071 会被驱动器忽略。 */
                                                    (int)axis->mode_display,
                                                    readback_text, readback_age_text,
-                                                   max_torque_text, max_motor_speed_text);
+                                                   max_torque_text, max_motor_speed_text,
+                                                   /* 0x6040：主站这一拍实际写下去的控制字。
+                                                    * 与状态字并排看，才分得清"没使能"和
+                                                    * "使能了但驱动器不执行"。 */
+                                                   (unsigned int)
+                                                       session->controller_outputs[axis_index]
+                                                           .control_word,
+                                                   current_text, bus_voltage_text, mosfet_text,
+                                                   motor_temperature_text, motor_rpm_text,
+                                                   command_rpm_text, extended_error_text,
+                                                   servo_error_text);
                                 if (written < 0) {
                                     break;
                                 }

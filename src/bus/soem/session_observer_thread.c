@@ -260,10 +260,19 @@ static bool observer_telemetry_is_observed(emaster_telemetry_semantic_t semantic
          * 只有 OP 期间的读数答得了。 */
         case EMASTER_TELEMETRY_MAX_TORQUE:
         case EMASTER_TELEMETRY_MAX_MOTOR_SPEED:
-            return true;
-        case EMASTER_TELEMETRY_NONE:
+        /*
+         * 0x203E/0x203F 也进运行期读取（P12.52）。它们此前被排除，理由是"停机诊断
+         * 已经按同一份清单读过，这里再读一遍只会多出邮箱往返"。代价是：**运行中
+         * 厂商在报什么错，终端上一条都看不到**——而排查"轴不动"时那正是最该看的
+         * 两个数（CiA402 的 603F 只是标准错误码，厂商的具体原因在 0x203E/0x203F）。
+         * 邮箱流量的顾虑成立，所以代价要写在这里：这一改让每轴每轮的 SDO 条数
+         * 从 12 条增到 14 条，若 A/B 显示它本身加重了 SM2 事件丢失，应当把语义
+         * 从设备配置的 slow_telemetry 里删掉，而不是改这个开关。
+         */
         case EMASTER_TELEMETRY_EXTENDED_ERROR_CODE:
         case EMASTER_TELEMETRY_SERVO_ERROR_CODE:
+            return true;
+        case EMASTER_TELEMETRY_NONE:
             return false;
     }
     return false;
@@ -373,10 +382,22 @@ static void observer_store_telemetry(emaster_observation_slow_axis_t *slot,
                 slot->max_limits_last_read_ns = observer_now_ns();
             }
             break;
-        case EMASTER_TELEMETRY_NONE:
         case EMASTER_TELEMETRY_EXTENDED_ERROR_CODE:
+            if (succeeded)
+            {
+                slot->extended_error_code = (uint32_t)value;
+                slot->vendor_error_last_read_ns = observer_now_ns();
+            }
+            break;
         case EMASTER_TELEMETRY_SERVO_ERROR_CODE:
-            /* 没有对应槽位，或由停机诊断读取；本函数不写任何字段。 */
+            if (succeeded)
+            {
+                slot->servo_error_code = (uint32_t)value;
+                slot->vendor_error_last_read_ns = observer_now_ns();
+            }
+            break;
+        case EMASTER_TELEMETRY_NONE:
+            /* 没有对应槽位；本函数不写任何字段。 */
             break;
     }
 }

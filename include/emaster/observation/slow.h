@@ -71,6 +71,19 @@ typedef struct
     uint64_t max_limits_last_read_ns;
     int32_t  max_torque;
     int32_t  max_motor_speed;
+    /*
+     * 0x203E（扩展伺服错误码）/0x203F（伺服错误码）共用的"最后一次读到"时刻。
+     *
+     * 这两条此前**只在停机诊断里读**，理由是"观测线程再读一遍会多出邮箱往返，而邮箱
+     * 流量本身会加重驱动器的 SM2 事件丢失"。那个理由在"记录一轮的健康状况"上成立，
+     * 在"查明一根轴为什么不动"上不成立：厂商自己的错误码正是最可能写着原因的地方，
+     * 而停机后再读到的值分不清是运行时就在报、还是停机过程里才置起来的。
+     * 两条共用时间戳，理由与上面那一对相同：同一轮 SDO 一起读出来。
+     * 0 = 从没读到过。
+     */
+    uint64_t vendor_error_last_read_ns;
+    uint32_t extended_error_code;
+    uint32_t servo_error_code;
     int32_t  actual_current;
     int32_t  dc_link_voltage;
     int32_t  mosfet_temperature;
@@ -162,6 +175,16 @@ bool emaster_observation_slow_axis_target_position_age(
  * 这个假设当场可判 —— 而限幅值本身读失败留下的旧值看起来和真值一模一样。
  */
 bool emaster_observation_slow_axis_max_limits_age(
+    const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
+    uint64_t *out_age_ns);
+
+/*
+ * 同上，但问的是 0x203E/0x203F 这一对厂商错误码。
+ *
+ * 判据落在时间戳上的理由最硬：这两条的"没读到"与"驱动器报 0"在数值上完全一样，
+ * 而 0 恰恰是"没有错误"这个最容易被当成结论的读数。
+ */
+bool emaster_observation_slow_axis_vendor_error_age(
     const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
     uint64_t *out_age_ns);
 

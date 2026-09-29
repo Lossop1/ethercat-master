@@ -190,3 +190,16 @@ bool emaster_observation_slow_axis_max_limits_age(
     return age_from_timestamp(state->axes[axis_index].max_limits_last_read_ns, now_ns,
                               out_age_ns);
 }
+
+bool emaster_observation_slow_axis_vendor_error_age(
+    const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
+    uint64_t *out_age_ns)
+{
+    if (state == NULL || axis_index >= state->axis_count ||
+        axis_index >= (uint32_t)EMASTER_OBSERVATION_MAX_AXES)
+    {
+        return false;
+    }
+    return age_from_timestamp(state->axes[axis_index].vendor_error_last_read_ns, now_ns,
+                              out_age_ns);
+}

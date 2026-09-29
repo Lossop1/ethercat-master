@@ -146,17 +146,42 @@ def parse_axis_positions(response):
     return positions
 
 
-# 要在终端直接看到的五个对象。键就是对象号本身，不做中文化改写。
+# 终端上一行一轴印出来的对象。键就是对象号本身（含子索引用 200B:01 的写法），
+# 不做任何中文化改写；右边是主站状态回读里的字段名。
 #
-# 607A 这一个是**驱动器自己报的**那个值（走 SDO 读回）：主站写进过程映像的目标在
+# 分三类来源，看的时候要分得清：
+#   快帧（每拍）    6040 6041 6061 6064 606C 6077 —— 与总线同拍，最"实时"
+#   慢速通道（50ms）6078 6079 200B:* 607A 6072 6080 203E 203F —— SDO 轮询
+#   主站自己       —— 状态的 pos/vel/torque 取自快帧，其余慢量取自慢速通道
+#
+# 607A 这一个是**驱动器自己报的**那个值（SDO 读回）：主站写进过程映像的目标在
 # 上一行的 目标= 里——主站自己写了什么它永远知道，只有驱动器自报的值需要读回来，
 # 而"目标到了驱动器、驱动器却不执行"这件事正是由这两个数并排看出来的。
+# 慢速通道没读到的字段，主站印 na，这里照原样印出来（不当成 0）。
 OBJECT_FIELDS = (
+    ("6040", "control"),
     ("6041", "status"),
     ("6061", "mode"),
+    ("6064", "pos"),
+    ("606C", "vel"),
+    ("6077", "torque"),
+    ("6078", "current"),
+    ("6079", "bus_v"),
     ("607A", "tgt_rb"),
     ("6072", "maxT"),
     ("6080", "maxV"),
+    ("200B:01", "mosfet_t"),
+    ("200B:02", "motor_t"),
+    ("200B:08", "motor_rpm"),
+    ("200B:09", "cmd_rpm"),
+    ("203E", "ext_err"),
+    ("203F", "servo_err"),
+)
+
+# 会话级计数。这些键就是命令协议自己的键名，原样印，不改名也不翻译。
+SESSION_FIELDS = (
+    "state", "cycle", "axes", "enabled", "completed",
+    "wkc", "wkc_expect", "wkc_err", "no_frame", "over_budget", "deadline_missed",
 )
 
 
@@ -178,13 +203,31 @@ def parse_axis_objects(response):
     return axes
 
 
+def format_session_counters(response):
+    """会话级计数，键就是协议自己的键名。"""
+    if not response.startswith("OK|"):
+        return []
+    fields = dict(
+        item.split("=", 1)
+        for item in response[3:].split("|", 1)[0].replace(",", " ").split()
+        if "=" in item
+    )
+    parts = [f"{key}={fields[key]}" for key in SESSION_FIELDS if key in fields]
+    return ["[client]   " + " ".join(parts)] if parts else []
+
+
 def format_axis_objects(response):
-    """一行一轴，把五个对象印全。轴号用协议自己的 a1／a2，主站没给的字段印 '-'。"""
+    """一行一轴，把全部对象印全。轴号用协议自己的 a1／a2，主站没给的字段印 '-'。"""
     lines = []
     for index, fields in enumerate(parse_axis_objects(response), start=1):
         parts = [f"{label}={fields.get(key, '-')}" for label, key in OBJECT_FIELDS]
         lines.append("[client]   a%d " % index + " ".join(parts))
     return lines
+
+
+def format_run_report(response):
+    """一次例行报告：先会话级计数，再一行一轴。"""
+    return format_session_counters(response) + format_axis_objects(response)
 
 
 def counts_per_degree(topology):
@@ -337,7 +380,7 @@ def run_reciprocate(client, start, delta, args, max_step):
                 print(f"[client] t+{elapsed:.0f}s 往返 {elapsed / (2.0 * args.traverse):.2f} 次 "
                       f"phase={f:.3f} 目标={frame} 实际={positions} "
                       f"已发={sent} 被拒={rejected} 最大间隔={max_gap * 1000:.1f}ms", flush=True)
-                for object_line in format_axis_objects(feedback):
+                for object_line in format_run_report(feedback):
                     print(object_line, flush=True)
                 next_report = now + args.report_interval
 
@@ -491,7 +534,7 @@ def main():
         feedback = client.command("status")
         if feedback.startswith("OK|"):
             print(f"[client] 保持中实际位置={parse_axis_positions(feedback)}", flush=True)
-            for object_line in format_axis_objects(feedback):
+            for object_line in format_run_report(feedback):
                 print(object_line, flush=True)
         next_report = time.monotonic() + 5.0
         while time.monotonic() < hold_until:
@@ -503,7 +546,7 @@ def main():
                 if feedback.startswith("OK|"):
                     print(f"[client] t+{args.hold - (hold_until - time.monotonic()):.0f}s "
                           f"实际位置={parse_axis_positions(feedback)}", flush=True)
-                    for object_line in format_axis_objects(feedback):
+                    for object_line in format_run_report(feedback):
                         print(object_line, flush=True)
                 next_report += 5.0
     except (OSError, ConnectionError) as error:
