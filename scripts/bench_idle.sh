@@ -34,6 +34,10 @@ REPO=${REPO:-/home/orangepi/ethercat-master}
 DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 TAG=${TAG:-idle1}
 IDLE=${IDLE:-45}
+# OBSERVATION 是否让主站开观测通道（1=开，默认 1），与 bench_reciprocate_30deg.sh 同一个
+# 开关、同一个理由：慢速遥测（温度／母线电压／电流、驱动器自报的 0x607A）只在观测通道
+# 开着时才轮询，关着的话报告里那几栏恒为「—」，事后无法回答「那一刻电压是多少」。
+OBSERVATION=${OBSERVATION:-1}
 
 SOCK=/tmp/emaster-${DEPLOYMENT}.sock
 LOG=/tmp/${TAG}_master.log
@@ -58,7 +62,13 @@ pkill -9 -f emaster-master 2>/dev/null
 sleep 2
 rm -f /tmp/emaster-*.sock
 
-./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+# 不写成 "$OBS_PREFIX ./build/..."：OBS_PREFIX 为空时会展开成一个空参数，主站会把
+# 它当成可执行文件名（P12.11 在 gui_e2e 上踩过这个）。
+if [ "$OBSERVATION" = "1" ]; then
+    env EMASTER_OBSERVATION=1 ./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+else
+    ./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+fi
 MASTER_PID=$!
 echo "主站 pid=$MASTER_PID"
 
