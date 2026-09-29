@@ -53,7 +53,8 @@ sudo ~/ethercat-master/build/bench/tools/emaster_move/emaster-move --deployment 
 
 ## 文档
 
-- **[使用指南](docs/USAGE_GUIDE.md)** - 完整的启动、监控、控制说明
+- **[工具使用说明](scripts/README.md)** - **从一台机器操作台架的全部命令**：起主站、单轮/多轮测试、读报告、跨机界面、远程操作，以及踩过的坑
+- **[使用指南](docs/USAGE_GUIDE.md)** - ⚠️ **已过时**（里面的 `build/bench/` 路径与 `orangepi-bench-dual` 部署名都是旧的），看上面那份
 - **[电机参数](docs/MOTOR_PARAMETERS.md)** - 编码器、齿轮比、单位换算
 - **[拓扑重构](docs/TOPOLOGY_REFACTOR.md)** - 架构设计和实现细节
 
