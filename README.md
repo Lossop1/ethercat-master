@@ -553,9 +553,34 @@ DC 的量比过程数据还多，所以单独一条命令，与 `status` 分开�
 **没有 DC 样本时裕量印 `na` 而不是 0**：0 ns 裕量看起来像"刚好卡在边界上"，比"没测到"
 严重得多。判据是 `has_sync0_margin`／`last_dc_sample_valid`。
 
+### 13.11 总线上到底有几台（接线之后第一步）
+
+```bash
+sudo ./build/tools/diagnose_slave/emaster-scan enp49s0
+```
+
+不带参数则只列出可用的网络适配器。输出 k=v，一行一台：
+
+```
+slaves=8
+slave=1 name=Robot_Joint_Actuator vendor=0x000C0B00 product=0x00080117 revision=0x00000001 state=1 al_status=0x0000 dc=1 coe=1 mbx_rl=128
+```
+
+**为什么需要它**：主站那些工具都要求"先有一份声明了轴数与身份的部署档"，于是最前面的
+那个问题——线接好了没有、到底扫到几台——反而没有工具能回答。接错一根线时主站报的是
+"身份或 PDO 映射与部署配置不一致"，而"环上到底有几台、不一致的是哪一台"它不说。
+**没扫到的那几台，主站那边的报错不会告诉你是哪一根线**，所以先跑这个。
+
+**它不读部署档、不发过程数据、不进 OP**，扫完立刻 `ecx_close`，对台架是只读的。
+`state` 是这一拍读回的 AL 状态（1=INIT、2=PRE-OP、4=SAFE-OP、8=OP）；
+`vendor`／`product`／`revision` 三件套与部署档 `identity` 对得上才说明"装的是它"。
+
 ## 14 速查
 
 ```bash
+# 总线上有几台（接线之后第一步；不读部署档、不进 OP）
+cd ~/ethercat-master && sudo ./build/tools/diagnose_slave/emaster-scan enp49s0
+
 # 台架干净吗
 sudo pkill -9 -f emaster-master; sudo pkill -9 -f socket_bridge; rm -f /tmp/emaster-*.sock
 
