@@ -7,9 +7,9 @@
 # 台架每次改线、扩轴、换驱动器之后的第一道关（P12.36/P12.39/P12.43/P12.47/P12.48
 # 的读数都出自这份脚本跑出来的轮次）。
 #
-# 必须在 root 下运行（mlockall + SCHED_FIFO），且要先 ulimit -r unlimited：
-#   sudo bash -c 'ulimit -r unlimited; IDLE=45 TAG=idle1 DEPLOYMENT=orangepi-bench-non-30deg \
-#                 bash /home/orangepi/ethercat-master/scripts/bench_idle.sh'
+# 必须在 root 下运行（mlockall + SCHED_FIFO）。ulimit -r 由脚本自己提，调用式不带引号：
+#   sudo IDLE=45 TAG=idle1 DEPLOYMENT=orangepi-bench-non-30deg \
+#        bash /home/orangepi/ethercat-master/scripts/bench_idle.sh
 # 台架当前是九轴，所以 DEPLOYMENT 一般显式给 orangepi-bench-non-30deg；不给则用下面的默认值。
 #
 # 慢轮次要留意两件事（都踩过）：
@@ -31,6 +31,17 @@
 set -u
 
 REPO=${REPO:-/home/orangepi/ethercat-master}
+# 非交互的 bash 不读 .bashrc/.profile，ulimit -r 默认是 0，主站拿不到 SCHED_FIFO——
+# 而部署声明了 realtime.required=true，它会**拒绝进入 OP**，整轮白跑，且失败信息要到
+# 报告里才看得出来。sudo 也救不了，因为这是 rlimit 不是权限（硬上限本来就是 unlimited，
+# 自己提就行）。调用方按头部注释写成 bash -c 'ulimit -r unlimited; ...' 时这段是空操作；
+# 只写 sudo bash <脚本> 时由它自己补上，省得"忘了加前缀"变成一次白跑。
+ulimit -r unlimited 2>/dev/null
+if [ "$(ulimit -r)" != "unlimited" ]; then
+    echo "错误：ulimit -r 仍是 $(ulimit -r)，主站会因为拿不到 SCHED_FIFO 拒绝进入 OP" >&2
+    exit 64
+fi
+
 DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 TAG=${TAG:-idle1}
 IDLE=${IDLE:-45}

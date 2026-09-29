@@ -5,8 +5,11 @@
 # 外部目标缓冲区 -> position_target_source -> CSP 目标。不启用部署里的内部
 # 运动曲线，也不直接改过程映像。
 #
-# 必须在 root 下运行（主站需要 mlockall + SCHED_FIFO，套接字由 root 创建）：
-#   sudo bash -c 'nohup bash /home/orangepi/ethercat-master/scripts/bench_reciprocate_30deg.sh &'
+# 必须在 root 下运行（主站需要 mlockall + SCHED_FIFO，套接字由 root 创建）。
+# ulimit -r 由脚本自己提（见下方 set -u 之后），所以调用式可以就是一行、不带引号：
+#   sudo DEPLOYMENT=orangepi-bench-non-30deg DURATION=60 TAG=r1 \
+#        bash /home/orangepi/ethercat-master/scripts/bench_reciprocate_30deg.sh
+# 要放后台就套 nohup：sudo nohup bash <脚本> >/dev/null 2>&1 &
 #
 # 运行时长可达数分钟，被 nohup 拉起时 ssh 会话断开不影响；全程输出追加到
 # /tmp/<TAG>_outcome.txt，结束时写 /tmp/<TAG>_done 记录退出码，用 tail 观察。
@@ -40,6 +43,17 @@
 set -u
 
 REPO=/home/orangepi/ethercat-master
+# 非交互的 bash 不读 .bashrc/.profile，ulimit -r 默认是 0，主站拿不到 SCHED_FIFO——
+# 而部署声明了 realtime.required=true，它会**拒绝进入 OP**，整轮白跑，且失败信息要到
+# 报告里才看得出来。sudo 也救不了，因为这是 rlimit 不是权限（硬上限本来就是 unlimited，
+# 自己提就行）。调用方按头部注释写成 bash -c 'ulimit -r unlimited; ...' 时这段是空操作；
+# 只写 sudo bash <脚本> 时由它自己补上，省得"忘了加前缀"变成一次白跑。
+ulimit -r unlimited 2>/dev/null
+if [ "$(ulimit -r)" != "unlimited" ]; then
+    echo "错误：ulimit -r 仍是 $(ulimit -r)，主站会因为拿不到 SCHED_FIFO 拒绝进入 OP" >&2
+    exit 64
+fi
+
 DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 DURATION=${DURATION:-600}
 TRAVERSE=${TRAVERSE:-3}
@@ -248,12 +262,19 @@ else
 fi
 
 echo ""
-echo "=== 命令流是否全程有效（出现即说明中途转 HOLD）==="
-if [ -f "$LOG" ] && grep -q "External target timeout" "$LOG"; then
-    grep -n "External target timeout" "$LOG" | head -5
-    echo "结论：命令流出现过空档，主站中途转为 HOLD"
+echo "=== 命令流是否全程有效 ==="
+# 判据是"转 HOLD 之后又切回 EXTERNAL"的次数，不是"日志里有没有 timeout"。
+# 客户端退出后主站**必然**超时转 HOLD —— 保持窗口就是这么来的 —— 所以拿 timeout
+# 当判据，只要 SETTLE_TICKS > 0 就每一轮都报"出现过空档"，与客户端退出码（0=连续）
+# 直接打架，读的人只能靠自己判断该信哪一句。
+# 切回 EXTERNAL 只在客户端重新发来目标时发生，所以 >1 次才是真的中断过。
+RESUME_COUNT=$(grep -c "Switched to EXTERNAL" "$LOG" 2>/dev/null || true)
+TIMEOUT_COUNT=$(grep -c "External target timeout" "$LOG" 2>/dev/null || true)
+echo "切回 EXTERNAL ${RESUME_COUNT:-0} 次（1 = 只有开局那一次）｜转 HOLD ${TIMEOUT_COUNT:-0} 次（收尾窗口占 1 次属正常）"
+if [ "${RESUME_COUNT:-0}" -gt 1 ]; then
+    echo "结论：命令流中途中断过（转 HOLD 后又切回 EXTERNAL），以客户端退出码为准核对"
 else
-    echo "结论：无 External target timeout，命令流全程有效"
+    echo "结论：无中途中断，命令流全程有效"
 fi
 echo "模式切换："
 grep -n "\[MODE\]" "$LOG" | head -10
