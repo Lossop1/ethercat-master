@@ -300,7 +300,9 @@ def run_reciprocate(client, start, delta, args, max_step):
     sent = 0
     rejected = 0
     prev_frame = list(start)
-    next_report = base + 10.0
+    # 首块按 report_interval 出，不要硬编码 10s：轮次短于 10s 时一块采样都没有，
+    # 而"轴从哪一刻起不再跟目标"要的正是**运行初期**的采样（--report-interval 1 的用法）。
+    next_report = base + args.report_interval
     stop_reason = "循环结束"
     elapsed = 0.0
 
