@@ -1,0 +1,35 @@
+# 台架证据 2026-09-29：11 轴 30° 往返连跑 5 轮（undec30）
+# 由 scripts/bench_series.sh 产生；本文件是该系列的入库记录，每轮原始证据在 reports/_undec30/rNN_*/
+# 命令 sudo env DEPLOYMENT=orangepi-bench-undec-30deg SERIES=undec30 ROUNDS=5 GAP=20 MODE=reciprocate
+#      DURATION=40 TRAVERSE=5 DEGREES=30 RATE=100 ONLY_AXIS=0 REPORT_INTERVAL=10 OBSERVATION=1 \
+#      bash scripts/bench_series.sh
+# 部署 orangepi-bench-undec-30deg（11 台；第 8 台减速比 25:1，其余 28:1），1 ms DC／CSP
+
+结论：3/5 跑满 —— r02／r03／r04 各跑约 57.8 s、WKC 33/33、收尾 11/11 在 OP，跟随误差
+      773–1429 counts（28:1 下约 0.6–1.1°）；
+      r01 在交换号 2264 断：轴 5／6 掉出 OP（code=0x001A），轴 10／11 整站不应答（state=0）；
+      r05 根本没进 OP —— 11 台全停在 PRE-OP(state=2)，主站报「身份或 PDO 映射与部署配置
+      不一致，拒绝发布指纹」（P12.44 那条已知歧义的报错），出现在连跑 4 轮之后。
+== 运行与结局 ==
+round	round_at	gap_s	exit_code	cycles	op_reached	all_enabled	motion_completed	shutdown_in_op	not_in_op
+undec30r01	2026-09-29 17:48:47	20	1	2268	1	1	0	7/11	5(s=20),6(s=20),10(s=0),11(s=0)
+undec30r02	2026-09-29 17:50:16	20	0	57806	1	1	0	11/11	-
+undec30r03	2026-09-29 17:51:54	20	0	57872	1	1	0	11/11	-
+undec30r04	2026-09-29 17:53:33	20	0	57859	1	1	0	11/11	-
+undec30r05	2026-09-29 17:55:11	20	1	0	0	0	0	0/11	1(s=2),2(s=2),3(s=2),4(s=2),5(s=2),6(s=2),7(s=2),8(s=2),9(s=2),10(s=2),11(s=2)
+
+== WKC 与周期 ==
+wkc_expected	wkc_actual	wkc_mismatch	wkc_error	wkc_no_frame	first_mismatch_ex	deadline_missed	over_budget
+33	23	5	5	1	2264	1	0
+33	33	2	2	2	34379	0	0
+33	33	0	0	0	0	0	0
+33	33	0	0	0	0	0	0
+0	0	0	0	0	0	0	0
+
+== 时序与跟随 ==
+frame_gap	frame_interval_max	receive_max	receive_ok_max	errctr_max	errctr_fail	following_error_max
+1	2999977	268113	186426	116267	3	0,0,0,0,0,0,0,0,0,0,0
+0	1034915	280183	225005	120417	90	1176,1360,1146,1354,833,931,843,950,876,773,842
+0	1015335	228044	228044	118637	115	1208,1429,1287,1303,855,890,839,954,818,797,810
+0	1089993	264124	264124	206735	96	1193,1339,1237,1217,822,928,853,904,879,803,829
+0	0	0	0	0	0	0,0,0,0,0,0,0,0,0,0,0
