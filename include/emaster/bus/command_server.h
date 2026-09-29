@@ -36,10 +36,17 @@ typedef struct {
     char payload[256];  /* 命令参数（JSON字符串或纯文本） */
 } emaster_command_t;
 
-/* 命令响应结构。message 需容纳多轴状态回读，按轴数与字段数留足余量。 */
+/*
+ * 命令响应结构。message 需容纳多轴状态回读，按轴数与字段数留足余量。
+ *
+ * 1024 已经不够：状态回读每条轴约 110 字符，再加 0x607A 回读、0x6072/0x6080
+ * 三项约 50 字符，九轴就是约 1500 字符，旧尺寸下客户端会拿到 "|TRUNC" ——
+ * 也就是**轴数一多，恰好最需要看的那几轴被截掉**。4096 覆盖到约 25 轴；
+ * 再多仍由 handler 里的 "|TRUNC" 显式标注，不会把截断当完整。
+ */
 typedef struct {
     bool success;
-    char message[1024];
+    char message[4096];
 } emaster_command_response_t;
 
 /*

@@ -146,6 +146,50 @@ def parse_axis_positions(response):
     return positions
 
 
+# 用户要在终端直接看到的五个对象。"607A下发"是主站写进过程映像的目标，
+# "607A回读"是驱动器自己报的 0x607A —— 两者不一致说明目标没进到驱动器的应用里，
+# 一致而电机不动才是驱动器侧的事。这个区分是整个排查的分水岭，所以印在同一行。
+OBJECT_FIELDS = (
+    ("6041", "status"),
+    ("6061", "mode"),
+    ("607A下发", "target_pos"),
+    ("6072", "maxT"),
+    ("6080", "maxV"),
+)
+
+
+def parse_axis_objects(response):
+    """取每轴的整段字段，返回按总线位置排序的列表。
+
+    与 parse_axis_positions 分开：那个只取 pos 用来算位移，这个把轴段整段留下，
+    因为"轴为什么不动"的判据落在 status/mode/target_pos/maxT/maxV 上。
+    """
+    axes = []
+    for segment in response.split("|"):
+        if not segment.startswith("a"):
+            continue
+        fields = dict(
+            item.split("=", 1) for item in segment.split(":", 1)[1].split(",") if "=" in item
+        )
+        if fields:
+            axes.append(fields)
+    return axes
+
+
+def format_axis_objects(response):
+    """一行一轴，把五个对象印全。主站没给这个字段（旧版本）就印 '-'。"""
+    lines = []
+    for index, fields in enumerate(parse_axis_objects(response), start=1):
+        parts = [f"{label}={fields.get(key, '-')}" for label, key in OBJECT_FIELDS]
+        readback = fields.get("tgt_rb", "-")
+        age = fields.get("rb_age_ms", "-")
+        # 回读值必须连年龄一起印：607A 在运动中连续变，读失败留下的旧值是静止的，
+        # 而"静止"正是要判成"目标没送到"的那个形状——光看值分不开，只能看年龄。
+        parts.append(f"607A回读={readback}" if age in ("-", "na") else f"607A回读={readback}(+{age}ms)")
+        lines.append("[client]   轴%d " % index + " ".join(parts))
+    return lines
+
+
 def counts_per_degree(topology):
     """按拓扑返回的编码器分辨率和减速比换算 counts/度（输出轴）。
 
@@ -294,6 +338,8 @@ def run_reciprocate(client, start, delta, args, max_step):
                 print(f"[client] t+{elapsed:.0f}s 往返 {elapsed / (2.0 * args.traverse):.2f} 次 "
                       f"phase={f:.3f} 目标={frame} 实际={positions} "
                       f"已发={sent} 被拒={rejected} 最大间隔={max_gap * 1000:.1f}ms", flush=True)
+                for object_line in format_axis_objects(feedback):
+                    print(object_line, flush=True)
                 next_report = now + args.report_interval
 
             t_next += period
@@ -446,6 +492,8 @@ def main():
         feedback = client.command("status")
         if feedback.startswith("OK|"):
             print(f"[client] 保持中实际位置={parse_axis_positions(feedback)}", flush=True)
+            for object_line in format_axis_objects(feedback):
+                print(object_line, flush=True)
         next_report = time.monotonic() + 5.0
         while time.monotonic() < hold_until:
             client.command("set_external_target " + " ".join(str(v) for v in targets))
@@ -456,6 +504,8 @@ def main():
                 if feedback.startswith("OK|"):
                     print(f"[client] t+{args.hold - (hold_until - time.monotonic()):.0f}s "
                           f"实际位置={parse_axis_positions(feedback)}", flush=True)
+                    for object_line in format_axis_objects(feedback):
+                        print(object_line, flush=True)
                 next_report += 5.0
     except (OSError, ConnectionError) as error:
         print(f"[client] 发送中断: {error}", flush=True)

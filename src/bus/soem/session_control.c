@@ -812,6 +812,66 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                     (velocity_from_slow && slow_has_axis)
                                         ? slow.axes[axis_index].motor_speed
                                         : axis->actual_velocity;
+                                /*
+                                 * 三条只有慢速通道拿得到的读数（P12.50）：0x607A 的驱动器自报值、
+                                 * 0x6072、0x6080。它们进状态回读，是为了让"轴为什么不动"当场可判，
+                                 * 而不是跑完再去翻报告。
+                                 *
+                                 * 读到过没有用字段级时间戳判，取不到就印 na 而不是 0：这三个数的 0
+                                 * 都是合法读数，印 0 会把一次邮箱超时伪装成"驱动器报的就是 0"，
+                                 * 而结论正好落在这几个数上。607A 回读连年龄一起报——它的值在运动中
+                                 * 连续变，读失败留下的旧值是静止的，而"静止"正是要判成"目标没送到"
+                                 * 的那个形状，光看值分不开，只能看年龄。
+                                 * 年龄用快照自己的发布时刻算，周期线程里不额外取时钟。
+                                 */
+                                uint64_t readback_age_ns = UINT64_C(0);
+                                uint64_t max_limits_age_ns = UINT64_C(0);
+                                const bool readback_read =
+                                    slow_has_axis &&
+                                    emaster_observation_slow_axis_target_position_age(
+                                        &slow, (uint32_t)axis_index, slow.monotonic_ns,
+                                        &readback_age_ns);
+                                const bool max_limits_read =
+                                    slow_has_axis &&
+                                    emaster_observation_slow_axis_max_limits_age(
+                                        &slow, (uint32_t)axis_index, slow.monotonic_ns,
+                                        &max_limits_age_ns);
+                                char readback_text[24];
+                                char readback_age_text[24];
+                                char max_torque_text[24];
+                                char max_motor_speed_text[24];
+
+                                if (readback_read)
+                                {
+                                    (void)snprintf(
+                                        readback_text, sizeof(readback_text), "%d",
+                                        (int)slow.axes[axis_index].target_position_readback);
+                                    (void)snprintf(
+                                        readback_age_text, sizeof(readback_age_text), "%llu",
+                                        (unsigned long long)(readback_age_ns /
+                                                             UINT64_C(1000000)));
+                                }
+                                else
+                                {
+                                    (void)snprintf(readback_text, sizeof(readback_text), "na");
+                                    (void)snprintf(readback_age_text, sizeof(readback_age_text),
+                                                   "na");
+                                }
+                                if (max_limits_read)
+                                {
+                                    (void)snprintf(max_torque_text, sizeof(max_torque_text), "%d",
+                                                   (int)slow.axes[axis_index].max_torque);
+                                    (void)snprintf(max_motor_speed_text,
+                                                   sizeof(max_motor_speed_text), "%d",
+                                                   (int)slow.axes[axis_index].max_motor_speed);
+                                }
+                                else
+                                {
+                                    (void)snprintf(max_torque_text, sizeof(max_torque_text), "na");
+                                    (void)snprintf(max_motor_speed_text,
+                                                   sizeof(max_motor_speed_text), "na");
+                                }
+                                (void)max_limits_age_ns;
                                 int written;
 
                                 if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
@@ -821,7 +881,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    sizeof(response.message) - (size_t)offset,
                                                    "|a%u:pos=%d,vel=%d,torque=%d,status=0x%04x,"
                                                    "target_pos=%d,planned=%d,err=0x%04x,state=%d,"
-                                                   "mode=%d",
+                                                   "mode=%d,tgt_rb=%s,rb_age_ms=%s,maxT=%s,maxV=%s",
                                                    (unsigned int)(axis_index + 1U),
                                                    axis->actual_position,
                                                    reported_velocity,
@@ -834,7 +894,9 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    /* 驱动器自报的 6061。力矩模式下"到底进没进
                                                     * 模式 10"只能从这里看：状态字使能了也可能是
                                                     * 模式没切过去，那样 6071 会被驱动器忽略。 */
-                                                   (int)axis->mode_display);
+                                                   (int)axis->mode_display,
+                                                   readback_text, readback_age_text,
+                                                   max_torque_text, max_motor_speed_text);
                                 if (written < 0) {
                                     break;
                                 }
