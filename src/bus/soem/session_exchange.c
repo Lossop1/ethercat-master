@@ -483,7 +483,11 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
 
     /* P4.4: 周期内读取错误计数器（0x0300-0x030F）。
      * FPRD 使用从站配置地址（configadr），不是位置序号。
-     * 0x0300 起始 16 字节覆盖全部计数器。每个从站独立读取。
+     * 0x0300 起始 16 字节覆盖全部计数器。
+     *
+     * **每拍只读一根轴，轮着来**（2026-09-29 改）。原先是一拍把全部轴读完，
+     * 九轴时九次 FPRD 挤在同一拍里，实测该拍尾部最坏 930–1010 µs，越过整个
+     * 1 ms 周期；改成每拍一根之后单拍只剩一次的量。见下面采样分支里的说明。
      *
      * 抽样 + 承压跳过（见文件顶部两个宏）：不是每个周期都读，本周期已经出问题
      * （WKC 不符或收包段超常）时也不读。跳过与"读失败"分开记账，避免把跳过的
@@ -553,14 +557,27 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         }
         else
         {
-            /* 到了采样点、且本周期没出问题：这一次才是真正要付 FPRD 代价的周期。
-             * 记在循环外，单位是"采样周期"（与 skip_count 同单位），不是 FPRD 次数。 */
+            /* 到了采样点、且本周期没出问题：本拍付一次 FPRD 的代价。
+             * 记在读取之前，单位是"采样周期"（与 skip_count 同单位），不是 FPRD 次数。
+             *
+             * 为什么只读一根：emaster_soem_session_fprd_budget_us 给的是**每轴**额度，
+             * 文档写明调用者拿它当**单次**超时用——session_start.c 的开局看门狗读就是
+             * 每拍一根（那里的注释：一片只花一片的钱，把整个交接段塞进一个周期才是要
+             * 避免的那件事）。这里原先把它当"全部轴加起来的总预算"用，与本文件的额度
+             * 算法一起构成"总耗时不会超过一个周期"的错觉：额度按轴数除，除出来的却是
+             * 单次超时，总耗时因而随轴数线性增长。九轴实测 930–1010 µs 就是这么来的。
+             *
+             * 代价：每根轴的刷新周期从 50 拍变成 50×轴数拍（九轴 450 ms）。这是链路
+             * 诊断量而非控制量，报告里存的也只是最后一次的值，值得。 */
             if (session->report->error_counter_read_attempt_count != UINT64_MAX)
             {
                 ++session->report->error_counter_read_attempt_count;
             }
-            for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
             {
+                /* 轮转：第 k 个采样点读第 k % 轴数 根。不新增会话状态，由交换号算出来。 */
+                size_t axis =
+                    (size_t)((session->exchange / EMASTER_ERROR_COUNTER_READ_INTERVAL) %
+                             session->plan->axis_count);
                 uint16_t configadr =
                     session->context.slavelist[emaster_soem_session_axis_slave(session, axis)].configadr;
                 uint8_t error_block[16];
@@ -590,9 +607,10 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                     session->axes[axis].error_counters_read = false;
                     error_counter_read_failed = true;
                     /*
-                     * 每个 FPRD 各自带 fprd_timeout_us 超时（P8.2 起是从剩余预算里除
-                     * 出来的额度，不再是收包超时），全轴读失败正好用掉剩余预算——不会
-                     * 超过一个周期，这是由构造保证的，见上面额度的算法。
+                     * 本拍这一次 FPRD 带 fprd_timeout_us 超时（P8.2 起是从剩余预算里
+                     * 除出来的每轴额度，不再是收包超时）。注意额度是**单次**超时：
+                     * 改成一拍一根之后，它不再需要承担"全部轴加起来不越界"那件事，
+                     * 那个保证本来就是错的——额度按轴数除、总耗时却按次数乘。
                      * 此前只记录"本周期没读到"，不记录发生过多少次、从哪个周期开始。
                      */
                     if (session->report->error_counter_read_fail_count != UINT64_MAX)
