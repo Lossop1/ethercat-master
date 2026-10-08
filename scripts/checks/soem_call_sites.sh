@@ -22,6 +22,9 @@ cd "$(dirname "$0")/../.."
 #                       dc_prepare.c / preop_probe.c / session_observer.c
 #   多线程共用          soem_common.c（薄封装，调用方决定线程）
 #   类型与说明          session_internal.h（只有 ecx_contextt 字段声明）
+#   独立进程（不在会话里）tools/diagnose_slave/main.c
+#                       —— 自己 init 自己的 context，扫完就退出，与周期线程不共存；
+#                       安全靠的是进程隔离而不是锁，所以要登记、要被看见。
 ALLOWED="
 src/bus/soem/dc_prepare.c
 src/bus/soem/preop_probe.c
@@ -33,6 +36,7 @@ src/bus/soem/session_setup.c
 src/bus/soem/session_shutdown.c
 src/bus/soem/session_start.c
 src/bus/soem/soem_common.c
+tools/diagnose_slave/main.c
 "
 
 # 只认真正的调用写法（标识符后跟左括号），不认注释里提一句函数名。
