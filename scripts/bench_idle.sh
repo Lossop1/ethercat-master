@@ -117,8 +117,33 @@ echo "起点：$(timeout 3 nc -U "$SOCK" <<< "status" 2>/dev/null | tr '|' '\n' 
 
 echo ""
 echo "=== 空转 $IDLE 秒，全程不发任何命令 ==="
-sleep "$IDLE"
-echo "空转结束 $(date '+%H:%M:%S')"
+#
+# **空转窗口里必须盯着主站。** 原来这里是一句 sleep "$IDLE" —— 主站若在窗口内自己退出，
+# 脚本仍然睡满整段时间：不报错、不落盘、不记录实际跑了多久，从外面看就是卡死。
+# 2026-10-08 实测：t3idle900b 第 1 轮，主站在第 227 秒因 WKC 由 36 掉到 10 而自行退出
+# （过程数据交换的工作计数器不符合预期），脚本又白等了 11 分钟才被我人工停掉。
+#
+# 改成逐秒检查，并**记录实际持续了多少秒** —— "计划 900、实到 227" 这个差值本身就是
+# 这一轮最有用的读数之一。
+IDLE_START=$(date +%s)
+MASTER_DIED=0
+ELAPSED=0
+while [ "$ELAPSED" -lt "$IDLE" ]; do
+    if ! kill -0 "$MASTER_PID" 2>/dev/null; then
+        MASTER_DIED=1
+        break
+    fi
+    sleep 1
+    ELAPSED=$(( $(date +%s) - IDLE_START ))
+done
+echo "空转结束 $(date '+%H:%M:%S')，实际持续 ${ELAPSED}s / 计划 ${IDLE}s"
+if [ "$MASTER_DIED" = "1" ]; then
+    echo "FAIL：主站在空转窗口内自行退出（第 ${ELAPSED}s / 计划 ${IDLE}s）"
+    echo "--- 主站日志最后 30 行 ---"
+    tail -30 "$LOG"
+    finish 2
+    exit 2
+fi
 echo "终点：$(timeout 3 nc -U "$SOCK" <<< "status" 2>/dev/null | tr '|' '\n' | grep '^a' | tr '\n' ' ')"
 
 STOP_RC=0
