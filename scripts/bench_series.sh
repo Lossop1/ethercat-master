@@ -30,6 +30,10 @@
 #         r<NN>_<TAG>/summary.txt     report_summary.py 对该轮报告的输出
 #         r<NN>_<TAG>/row.tsv         该轮在 index.tsv 里那一行
 #         r<NN>_<TAG>/report-name.txt 该轮在归档目录里的完整报告文件名
+#         r<NN>_<TAG>/condition.txt     这一轮施加的条件（轴数/时长/节拍/间隔/观测…）
+#         r<NN>_<TAG>/device-identity.txt 这一轮跑的是什么代码、什么配置、总线上是哪几台
+#         r<NN>_<TAG>/anomalies.tsv     该轮主站日志里的异常，按探索任务书 3.4 节的列
+#         r<NN>_<TAG>/notes.md          现场观察记录；"没看懂的"也写在这里
 #       **完整报告不入库**（几十到几百 MB），它留在部署配置 run_report_path 所指
 #       目录的 archive/ 下，上面那个文件名就是指向它的坐标。
 #
@@ -101,6 +105,45 @@ for round_index in $(seq 1 "$ROUNDS"); do
     ROUND_DIR="$EVIDENCE/$(printf 'r%02d' "$round_index")_$TAG"
     mkdir -p "$ROUND_DIR"
 
+    # 条件记录。事后比较两轮时，第一步就是确定它们的差别在哪；而轮次是脚本循环出来的，
+    # 命令行历史里只有一条命令，看不出每一轮各自的条件。
+    {
+        echo "series=$SERIES"
+        echo "round=$round_index"
+        echo "tag=$TAG"
+        echo "started_at=$ROUND_AT"
+        echo "deployment=$DEPLOYMENT"
+        echo "mode=$MODE"
+        echo "gap_s=$GAP"
+        echo "rounds=$ROUNDS"
+        echo "round_script=$ROUND_SCRIPT"
+        # 其余条件由单轮脚本继承，这里照样记一份：它们是"运动形态"的全部参数。
+        for name in DURATION IDLE TRAVERSE DEGREES RATE WAVE ONLY_AXIS \
+                    REPORT_INTERVAL OBSERVATION SETTLE_TICKS; do
+            value="${!name:-}"
+            [ -n "$value" ] && echo "$(printf '%s' "$name" | tr 'A-Z' 'a-z')=$value"
+        done
+    } > "$ROUND_DIR/condition.txt"
+
+    # 装置身份：这一轮跑的是什么代码、什么配置、总线上插的是哪几台。
+    # 没有它，跨轮次与跨天的比较不成立。采集失败只写一行说明，不让整轮停下 ——
+    # 一个派生文件不该拖垮一轮探查。
+    python3 "$REPO/scripts/capture_identity.py" "$ROUND_DIR/device-identity.txt" \
+        --deployment "$DEPLOYMENT" >/dev/null 2>&1 ||
+        echo "capture_error=采集失败（此时 device-identity.txt 不可用，该轮的跨轮比较不成立）" \
+            > "$ROUND_DIR/device-identity.txt"
+
+    # 现场记录模板。探查的结论经常来自"没看懂的"那几条，给它一个固定的地方，
+    # 免得它们只留在终端滚动里。
+    [ -f "$ROUND_DIR/notes.md" ] || cat > "$ROUND_DIR/notes.md" <<'NOTES'
+# 观察记录
+
+## 现场
+
+## 没看懂的
+
+NOTES
+
     echo "===== 第 $round_index/$ROUNDS 轮 $TAG 开始 $ROUND_AT ====="
 
     # 删掉本轮的旧产物，避免"读到了上一轮的 done"这种假通过。
@@ -126,6 +169,13 @@ for round_index in $(seq 1 "$ROUNDS"); do
         [ -f "/tmp/${TAG}_$artifact" ] && cp -f "/tmp/${TAG}_$artifact" "$ROUND_DIR/"
     done
     [ -f "/tmp/${TAG}_done" ] && cp -f "/tmp/${TAG}_done" "$ROUND_DIR/exit-code.txt"
+
+    # 异常表：把主站日志里已经有的坐标固定成一张可跨轮归并的表。只读日志，因此快且
+    # 必然可用（报告可能因磁盘或崩溃而缺失）。日志不在就跳过，不让派生文件拖垮一轮。
+    if [ -f "/tmp/${TAG}_master.log" ]; then
+        python3 "$REPO/scripts/analysis/anomalies.py" "/tmp/${TAG}_master.log" \
+            -o "$ROUND_DIR/anomalies.tsv" --quiet 2>>"$ROUND_DIR/notes.md" || true
+    fi
 
     # 完整报告是覆盖式的：先把这一轮对应的归档文件名记下来（那是完整证据的坐标），
     # 再对**当前**那份报告出摘要——两者都小，能入库。
