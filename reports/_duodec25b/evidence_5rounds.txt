@@ -1,0 +1,57 @@
+# 台架证据 2026-10-08：12 轴 30° 往返连跑 5 轮（duodec25b），断线 8 天后重接
+# 由 scripts/bench_series.sh 产生；每轮原始证据在 reports/_duodec25b/rNN_*/
+# 命令 sudo env DEPLOYMENT=orangepi-bench-duodec-30deg SERIES=duodec25b ROUNDS=5 GAP=20 MODE=reciprocate
+#      DURATION=40 TRAVERSE=5 DEGREES=30 RATE=100 ONLY_AXIS=0 REPORT_INTERVAL=10 OBSERVATION=1 \
+#      bash scripts/bench_series.sh
+# 部署 orangepi-bench-duodec-30deg（12 台；第 8、第 12 台减速比 25:1，其余 28:1），1 ms DC／CSP
+
+结论一：**5/5 退出码 0，但真实结果是 4/5** —— 第 5 轮的单轮脚本判的是 2（被主站中断）。
+        r01–r04 各 57788／57781／57777／57771 拍（约 57.8 s）、WKC 36/36、WKC 不符 0、
+        截止期错失 0、收尾 12/12 在 OP、12 根轴跟随误差 794–1439 counts。
+        r05 在交换号 49601 断：**轴 2／3／5／9 掉出 OP(state=20, code=0x001A)、
+        轴 10／11／12 整站不应答(state=0)**，收尾只有 5/12 在 OP，周期性诊断报
+        "过程数据交换的工作计数器不符合预期 WKC=19"。
+结论二：第 12 根轴在这次断线重接前后都跟得住（r01–r05 分别是 936／836／898／892／898
+        counts），与 duodec25 那组一致；"6091=25 之后它才动"这条读法在跨天后仍然成立。
+结论三：发现并修掉了测具自己的一个 bug（已提交）：bench_reciprocate_30deg.sh 的
+        finish() 只 echo 不 exit，于是"跑满(0)／有空档(1)／被主站中断(2)／shutdown 没停住(3)"
+        四种结局在进程退出码上全是 0，而 index.tsv 的 exit_code 列取的就是那个 $? ——
+        r05 这种"收尾掉轴"于是显示成干干净净的一轮。真码另有落点（finish 写进 _done，
+        系列驱动拷成每轮 exit-code.txt），上表下方那份就是从这里取的。
+        修法：finish() 补 exit；bench_series.sh 改为以 _done 为准、$? 兜底；bench_idle.sh 同一处同修。
+        验证：DEGREES=0 跑一轮并在中途 pkill 主站，修后 SCRIPT_RC=2 且 _done=2（修前会是 0）。
+== 运行与结局（exit_code 列是系列驱动记的 $?，见下方更正） ==
+round	round_at	gap_s	exit_code	cycles	op_reached	all_enabled	motion_completed	shutdown_in_op	not_in_op
+duodec25br01	2026-10-08 10:01:18	20	0	57788	1	1	0	12/12	-
+duodec25br02	2026-10-08 10:02:57	20	0	57781	1	1	0	12/12	-
+duodec25br03	2026-10-08 10:04:37	20	0	57777	1	1	0	12/12	-
+duodec25br04	2026-10-08 10:06:16	20	0	57771	1	1	0	12/12	-
+duodec25br05	2026-10-08 10:07:56	20	0	49605	1	1	0	5/12	2(s=20),3(s=20),5(s=20),9(s=20),10(s=0),11(s=0),12(s=0)
+
+== WKC 与周期 ==
+wkc_expected	wkc_actual	wkc_mismatch	wkc_error	wkc_no_frame	first_mismatch_ex	deadline_missed	over_budget
+36	36	0	0	0	0	0	0
+36	36	0	0	0	0	0	0
+36	36	0	0	0	0	0	0
+36	36	0	0	0	0	0	0
+36	19	5	5	1	49601	1	0
+
+== 时序 ==
+frame_gap	frame_interval_max	receive_max	receive_ok_max	errctr_max	errctr_fail
+0	1015135	179576	179576	118327	80
+0	1084883	209105	209105	203046	92
+0	1088063	220705	220705	118187	109
+0	1103783	261593	261593	209834	123
+1	3000337	268343	223535	122117	77
+
+== 各轴最大跟随误差 counts（顺序=轴 1..12） ==
+following_error_max
+1305,1431,1202,1232,911,993,812,917,970,863,794,936
+1243,1433,1104,1113,870,916,806,906,931,847,839,836
+1283,1435,1319,1294,852,930,872,883,894,788,835,898
+1329,1439,1224,1217,805,899,860,869,974,833,905,892
+1412,1439,1373,1124,842,947,854,916,933,825,795,898
+
+== 各轮真退出码（单轮脚本自己写的 exit-code.txt）==
+r01=0  r02=0  r03=0  r04=0  r05=2
+（index.tsv 的 exit_code 列把 r05 记成了 0 —— 那是被测工具的一个 bug，见下）

@@ -109,6 +109,17 @@ for round_index in $(seq 1 "$ROUNDS"); do
 
     TAG="$TAG" bash "$ROUND_SCRIPT" >/dev/null 2>&1
     EXIT_CODE=$?
+    #
+    # 以单轮脚本自己写下的 _done 为准，$? 只作兜底。
+    # 理由：单轮脚本的 finish() 一度只 echo 不 exit，于是"跑满／有空档／被主站中断／
+    # shutdown 没停住"四种结局在 $? 里全是 0，而 index.tsv 的 exit_code 列取的就是 $?
+    # ——收尾掉轴那种轮次会显示成干干净净的一轮（2026-10-08 实测到一次）。
+    # finish() 已经补上 exit；这里再以 _done 为准，是因为那个文件是**判定发生的当场**
+    # 写下的，比调用方读到的 $? 更接近事实，也能挡住将来再有人漏写 exit。
+    # 本轮开始时 _done 已被删掉，所以文件不存在就说明这一轮没走到判定，此时用 $?。
+    if [ -f "/tmp/${TAG}_done" ]; then
+        EXIT_CODE="$(cat "/tmp/${TAG}_done")"
+    fi
     echo "  单轮脚本退出码=$EXIT_CODE（见脚本头部的含义表）"
 
     for artifact in master.log outcome.txt client.log; do

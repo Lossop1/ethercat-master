@@ -62,6 +62,10 @@ exec >>"$OUT" 2>&1
 finish() {
     echo "$1" > "$DONE"
     echo "退出码=$1"
+    # 必须真的用这个码退出：调用方取的是 $?，只 echo 不 exit 的话进程返回 0，
+    # 于是"空转跑满"与"主站中途掉了"在调用方眼里是同一个结局。理由与修法同
+    # bench_reciprocate_30deg.sh 里的 finish()。
+    exit "$1"
 }
 
 echo "=== 空转 $IDLE 秒（$TAG）==="
