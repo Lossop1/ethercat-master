@@ -161,6 +161,9 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             &sdo, UINT16_C(0x6041), UINT8_C(0), &session->axes[axis_index].startup_statusword);
         session->axes[axis_index].startup_disable_written = emaster_soem_write_u16(
             &sdo, UINT16_C(0x6040), UINT8_C(0), UINT16_C(0x0000));
+        session->axes[axis_index].startup_statusword_after_read = emaster_soem_read_u16(
+            &sdo, UINT16_C(0x6041), UINT8_C(0),
+            &session->axes[axis_index].startup_statusword_after);
         emaster_cyclic_timing_stats_init(&session->axes[axis_index].timing);
         session->axes[axis_index].requested_mode = axis->operation_mode->value;
         session->axes[axis_index].actual_vendor_id = slave->eep_man;

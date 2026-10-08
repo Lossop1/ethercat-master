@@ -984,6 +984,37 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
             emaster_soem_sdo_context_init(&sdo, &session->context, (uint16_t)(axis_index + 1U),
                                           &session->report->audit,
                                           EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC, session->exchange);
+            /*
+             * **权威的禁用走邮箱，不走 PDO。而且它排在这一段的最前面。**
+             *
+             * 一、为什么走邮箱。安全停机那条路（本文件上面的周期交换）把控制字 0x0000
+             * 放进了 PDO —— 而 PDO 只在 OP 下有效。从站一旦掉出 OP，"禁用"就到不了它，
+             * 驱动器保持着最后一次收到的"使能"，功率级继续带电。2026-10-08 实测：ESC 的
+             * AL 状态已是 INIT，而 12 台驱动器的 0x6041 全是 0x1237（Operation enabled +
+             * Voltage enabled）—— 操作员几个月来反复报告的"主站说退出了 OP，但电机明显
+             * 还在保持"就是这一条。**这是一条安全缺陷。**
+             *
+             * 一条基本道理：**不能用周期通道去送"停止周期通道"的命令。** 那条命令必须在
+             * 通道坏掉之后仍然送得到，而邮箱正是这样一条通道（PRE-OP 下仍可用，只有
+             * INIT 才关闭）。
+             *
+             * 二、为什么排在最前。这一段之后还有一批 SDO 读（0x6060/0x6061/0x60F4、驱动
+             * 诊断、1C32/1C33、换算、配置诊断），12 台 x 十来次邮箱往返。2026-10-08 实测：
+             * 环上最后两席（第 11、12 台）的邮箱操作在这条队列的**末端全部失败**
+             * （statusword_before_read=false），于是那次禁用根本没发出去，**那两台在会话
+             * 结束后一直是使能的**（独立扫描实测 0x1237），要人手动再禁一次。
+             * **禁用是这一段里最不能失败的一条，所以它必须排在前面。**
+             *
+             * 顺序是「读状态字 -> 写禁用 -> 再读状态字」。前一次读留下"我们动手之前它
+             * 是不是已经使能着"，后一次读是**写入生效的证据** —— 只看写调用的返回值不
+             * 够：写成功而驱动器没照做，是这里真正要抓的形状。
+             */
+            axis_result->shutdown_statusword_before_read = emaster_soem_read_u16(
+                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword_before);
+            axis_result->shutdown_disable_written = emaster_soem_write_u16(
+                &sdo, UINT16_C(0x6040), UINT8_C(0), UINT16_C(0x0000));
+            axis_result->shutdown_statusword_read = emaster_soem_read_u16(
+                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword);
             axis_result->mode_command_sdo_read = emaster_soem_read_i8(
                 &sdo, UINT16_C(0x6060), UINT8_C(0), &axis_result->mode_command_sdo);
             axis_result->mode_display_sdo_read = emaster_soem_read_i8(
@@ -1002,40 +1033,6 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
                                                &axis_result->sm2_diagnostic);
             emaster_session_observer_read_sync(&sdo, UINT16_C(0x1C33),
                                                &axis_result->sm3_diagnostic);
-            /*
-             * CiA 402 层的两个读数：状态字（驱动器在不在使能）与故障码。
-             *
-             * 与上面几条同一个窗口 —— 输出已停、邮箱还在，所以不额外制造周期空洞。
-             * 这一对是报告里唯一能回答"主站退出后驱动器还在不在使劲"的读数：AL 状态
-             * 是 ESC 那一层，答不了它。2026-10-08 实测 AL=INIT 而 0x6041=0x1237
-             * （Operation Enabled + Voltage enabled）同时成立 —— 操作员摸到的就是后者。
-             */
-            /*
-             * **权威的禁用走邮箱，不走 PDO。**
-             *
-             * 安全停机那条路（本文件上面的周期交换）把控制字 0x0000 放进了 PDO —— 而
-             * PDO 只在 OP 下有效。从站一旦掉出 OP，"禁用"就到不了它，驱动器保持着最后
-             * 一次收到的"使能"，功率级继续带电。2026-10-08 实测：ESC 的 AL 状态已经是
-             * INIT，而 12 台驱动器的 0x6041 全是 0x1237（Operation enabled + Voltage
-             * enabled）—— 操作员几个月来反复报告的"主站说退出了 OP，但电机明显还在
-             * 保持"就是这一条。**这是一条安全缺陷。**
-             *
-             * 一条基本道理：**不能用周期通道去送"停止周期通道"的命令。** 那条命令必须在
-             * 通道坏掉之后仍然送得到，而邮箱正是这样一条通道（PRE-OP 下仍可用，只有
-             * INIT 才关闭）。所以这里与 PDO 那条路走没走通无关，补一次权威的禁用。
-             *
-             * 位置就在本诊断块里：过程数据输出已停、邮箱还活着，且本来就有一批 SDO 要读。
-             * 顺序是「读之前 -> 写禁用 -> 读之后」，三次邮箱操作；前一次读是必要的，因为
-             * 只有它能把"我们禁用它之前它确实是使能的"记下来。
-             */
-            axis_result->shutdown_statusword_before_read = emaster_soem_read_u16(
-                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword_before);
-            axis_result->shutdown_disable_written = emaster_soem_write_u16(
-                &sdo, UINT16_C(0x6040), UINT8_C(0), UINT16_C(0x0000));
-            axis_result->shutdown_statusword_read = emaster_soem_read_u16(
-                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword);
-            axis_result->shutdown_error_code_read = emaster_soem_read_u16(
-                &sdo, UINT16_C(0x603F), UINT8_C(0), &axis_result->shutdown_error_code);
             if (!axis_result->position_scale.read_succeeded) {
                 emaster_session_observer_read_position_scale(&sdo, &axis_result->position_scale);
             }

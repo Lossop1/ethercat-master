@@ -484,14 +484,24 @@ static bool write_axis(FILE *stream,
      */
     REQUIRE_WRITE(fprintf(stream,
         ",\"startup_cia402\":{\"statusword_read\":%s,\"statusword\":%u,"
-        "\"disable_written\":%s,\"operation_enabled\":%s,\"voltage_enabled\":%s}",
+        "\"disable_written\":%s,\"statusword_after_read\":%s,\"statusword_after\":%u,"
+        "\"operation_enabled\":%s,\"voltage_enabled\":%s,\"still_enabled\":%s}",
         axis->startup_statusword_read ? "true" : "false",
         (unsigned int)axis->startup_statusword,
         axis->startup_disable_written ? "true" : "false",
+        axis->startup_statusword_after_read ? "true" : "false",
+        (unsigned int)axis->startup_statusword_after,
+        /* 顺序必须与格式串一致：operation_enabled、voltage_enabled、still_enabled。
+         * 2026-10-08 我把 still_enabled 插到了 operation_enabled 之前，于是三个字段整体
+         * 错位一格 —— 报告里出现"statusword_after=0x1250（未使能）而 still_enabled=true"
+         * 这种自相矛盾的读数。**格式串与实参的对应关系没有任何东西替你检查，只能数。** */
         (axis->startup_statusword_read &&
          (axis->startup_statusword & 0x0004U) != 0U) ? "true" : "false",
         (axis->startup_statusword_read &&
-         (axis->startup_statusword & 0x0010U) != 0U) ? "true" : "false") >= 0);
+         (axis->startup_statusword & 0x0010U) != 0U) ? "true" : "false",
+        /* still_enabled：写后读回仍显示 Operation enabled —— 这才是"没禁掉"的证据。 */
+        (axis->startup_statusword_after_read &&
+         (axis->startup_statusword_after & 0x0004U) != 0U) ? "true" : "false") >= 0);
     /*
      * 字段名里的 before/after 指的是**写"禁用电压"（0x6040=0x0000）之前与之后**。
      *

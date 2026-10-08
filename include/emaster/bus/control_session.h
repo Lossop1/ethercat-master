@@ -432,6 +432,13 @@ typedef struct
     bool startup_statusword_read;
     bool startup_disable_written;
     /*
+     * 写完禁用之后**再读一次**的状态字。只看写调用的返回值不够：写成功而驱动器
+     * 没照做，是这里真正要抓的形状。2026-10-08 就因为缺这一条，我把"写过"当成了
+     * "生效了"，而当时环上最后两席的邮箱操作整段失败、那两台一直使能着。
+     */
+    uint16_t startup_statusword_after;
+    bool startup_statusword_after_read;
+    /*
      * 权威禁用写进去了没有。走的是邮箱（SDO），不依赖 PDO。
      *
      * 2026-10-08 之前，主站的禁用只走 PDO（安全停机那条周期交换），而从站一旦掉出 OP
