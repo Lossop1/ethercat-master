@@ -34,6 +34,9 @@
 #         r<NN>_<TAG>/device-identity.txt 这一轮跑的是什么代码、什么配置、总线上是哪几台
 #         r<NN>_<TAG>/anomalies.tsv     该轮主站日志里的异常，按探索任务书 3.4 节的列
 #         r<NN>_<TAG>/notes.md          现场观察记录；"没看懂的"也写在这里
+#         r<NN>_<TAG>/nic-before.txt    网卡收发计数（轮前）
+#         r<NN>_<TAG>/nic-after.txt     网卡收发计数（轮后）
+#         r<NN>_<TAG>/nic-diff.txt      两者的差与判定：帧有没有回到网卡
 #       **完整报告不入库**（几十到几百 MB），它留在部署配置 run_report_path 所指
 #       目录的 archive/ 下，上面那个文件名就是指向它的坐标。
 #
@@ -133,6 +136,16 @@ for round_index in $(seq 1 "$ROUNDS"); do
         echo "capture_error=采集失败（此时 device-identity.txt 不可用，该轮的跨轮比较不成立）" \
             > "$ROUND_DIR/device-identity.txt"
 
+    # 网卡收发计数：轮前快照。**这是主站软件之外的唯一观测点**，用来分辨
+    # "帧没回来"（链路/从站）与"帧回来了主站没读"（主机）。接口名从上面那份
+    # device-identity.txt 里取，不在这里重复解析配置——两处各解析一次，将来改配置
+    # 就会有一处忘改。
+    NIC_IFACE="$(sed -n 's/^interface=//p' "$ROUND_DIR/device-identity.txt" 2>/dev/null)"
+    if [ -n "$NIC_IFACE" ] && [ "$NIC_IFACE" != "unknown" ]; then
+        python3 "$REPO/scripts/nic_counters.py" "$ROUND_DIR/nic-before.txt" \
+            --interface "$NIC_IFACE" >/dev/null 2>&1 || true
+    fi
+
     # 现场记录模板。探查的结论经常来自"没看懂的"那几条，给它一个固定的地方，
     # 免得它们只留在终端滚动里。
     [ -f "$ROUND_DIR/notes.md" ] || cat > "$ROUND_DIR/notes.md" <<'NOTES'
@@ -169,6 +182,15 @@ NOTES
         [ -f "/tmp/${TAG}_$artifact" ] && cp -f "/tmp/${TAG}_$artifact" "$ROUND_DIR/"
     done
     [ -f "/tmp/${TAG}_done" ] && cp -f "/tmp/${TAG}_done" "$ROUND_DIR/exit-code.txt"
+
+    # 网卡收发计数：轮后快照 + 差分。差分把"这一轮有没有帧没回到网卡"写成一行，
+    # 而它正是分辨主机侧与链路侧的那一刀。
+    if [ -n "$NIC_IFACE" ] && [ "$NIC_IFACE" != "unknown" ]; then
+        python3 "$REPO/scripts/nic_counters.py" "$ROUND_DIR/nic-after.txt" \
+            --interface "$NIC_IFACE" >/dev/null 2>&1 || true
+        python3 "$REPO/scripts/nic_counters.py" --diff "$ROUND_DIR/nic-before.txt" \
+            "$ROUND_DIR/nic-after.txt" > "$ROUND_DIR/nic-diff.txt" 2>&1 || true
+    fi
 
     # 异常表：把主站日志里已经有的坐标固定成一张可跨轮归并的表。只读日志，因此快且
     # 必然可用（报告可能因磁盘或崩溃而缺失）。日志不在就跳过，不让派生文件拖垮一轮。
