@@ -26,6 +26,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <time.h>
 
 /* 读一个 u32 对象。ecx_SDOread 返回的是工作计数器：>0 才算这一条真的回来了；
  * 宽度也必须相符，"读回来 2 个字节"不等于"读到了一个 u32"。 */
@@ -156,11 +157,37 @@ int main(int argc, char *argv[])
      * 邮箱访问前必须显式等待并确认全体从站到达 PRE-OP，否则快速设备偶然成功、
      * 慢设备全部 SDO 超时，形成不可复现的竞态。
      */
-    const bool preop_reached = ecx_statecheck(&context, 0U, EC_STATE_PRE_OP,
-                                              EC_TIMEOUTSTATE * 4) == EC_STATE_PRE_OP;
+    bool preop_reached = ecx_statecheck(&context, 0U, EC_STATE_PRE_OP,
+                                        EC_TIMEOUTSTATE * 4) == EC_STATE_PRE_OP;
     if (!preop_reached)
     {
-        fprintf(stderr, "警告：全体未在超时内到达 PRE-OP，换算参数一律印 na\n");
+        /*
+         * **重试一次。**
+         *
+         * ecx_config_init 里那次 PRE-OP 请求（ec_config.c:459）返回值被丢弃、也不重试，
+         * 而实测（2026-10-08）它有一次不生效：从站在 config_init 之后仍停在 INIT，
+         * 而在它返回之后**再写一次同样的 PRE-OP|ACK，从站就进了 PRE-OP**
+         * （alctl_wkc=1、state_after=2、errbit=0）。
+         *
+         * 所以"进不去 PRE-OP"不一定是从站的问题 —— 值得先重试一次再下结论。
+         */
+        fprintf(stderr, "提示：config_init 之后未到 PRE-OP，逐台重写一次请求\n");
+        for (int index = 1; index <= context.slavecount; ++index)
+        {
+            uint16_t request = htoes((uint16_t)(EC_STATE_PRE_OP | EC_STATE_ACK));
+            (void)ecx_FPWR(&context.port, context.slavelist[index].configadr, ECT_REG_ALCTL,
+                           sizeof(request), &request, EC_TIMEOUTRET3);
+        }
+        {
+            const struct timespec settle = {0, 50000000L};   /* 50 ms 给全体走完转移 */
+            (void)nanosleep(&settle, NULL);
+        }
+        preop_reached = ecx_statecheck(&context, 0U, EC_STATE_PRE_OP,
+                                       EC_TIMEOUTSTATE * 4) == EC_STATE_PRE_OP;
+        if (!preop_reached)
+        {
+            fprintf(stderr, "警告：重试后仍未到达 PRE-OP，换算参数一律印 na\n");
+        }
     }
     /* 重新读一次各站状态：上面那次 statecheck 读的是地址 0 的广播结果。 */
     ecx_readstate(&context);
@@ -210,15 +237,41 @@ int main(int argc, char *argv[])
         uint16_t error_code = 0U;
         bool statusword_read = false;
         bool error_code_read = false;
+        uint32_t vendor_fault = 0U;
+        uint32_t vendor_ext_fault = 0U;
+        bool vendor_fault_read = false;
+        bool vendor_ext_fault_read = false;
         if (preop_reached && (slave->mbx_proto & ECT_MBXPROT_COE) != 0U)
         {
             statusword_read = read_u16(&context, (uint16_t)index, UINT16_C(0x6041),
                                        UINT8_C(0x00), &statusword);
             error_code_read = read_u16(&context, (uint16_t)index, UINT16_C(0x603F),
                                        UINT8_C(0x00), &error_code);
+            /*
+             * **厂商故障码。这台驱动器的真实故障码在这里，不在标准的 603F 里。**
+             *
+             * 厂商手册（docs/lz-joint/良质关节驱动协议手册.md，对象组 2000h 一览）把
+             * 203Eh「扩展伺服故障码」与 203Fh「伺服故障码」列为 Uint32 的 TPDO 对象。
+             * 2026-10-08 台架上 12 台驱动器的标准 603F 全是 0，而它们同时停在 CiA 402
+             * 的「未就绪」——只读 603F 会把"有故障"读成"没故障"。
+             *
+             * 这台驱动器是 ODrive 派生固件，CiA 402 是厂商在其上做的一层（手册
+             * 2830 行把 6040h 与 odrv0.axis0.requested_state 直接对上）。所以
+             * "为什么未就绪"的答案常常是底层的一个故障位，而它只在这两个对象里。
+             */
+            vendor_fault_read = read_u32(&context, (uint16_t)index, UINT16_C(0x203F),
+                                         UINT8_C(0x00), &vendor_fault);
+            vendor_ext_fault_read = read_u32(&context, (uint16_t)index, UINT16_C(0x203E),
+                                             UINT8_C(0x00), &vendor_ext_fault);
         }
         char statusword_text[16];
         char error_code_text[16];
+        char vendor_fault_text[16];
+        char vendor_ext_text[16];
+        (void)snprintf(vendor_fault_text, sizeof(vendor_fault_text),
+                       vendor_fault_read ? "0x%08X" : "na", (unsigned)vendor_fault);
+        (void)snprintf(vendor_ext_text, sizeof(vendor_ext_text),
+                       vendor_ext_fault_read ? "0x%08X" : "na", (unsigned)vendor_ext_fault);
         if (statusword_read)
         {
             (void)snprintf(statusword_text, sizeof(statusword_text), "0x%04X",
@@ -265,15 +318,63 @@ int main(int argc, char *argv[])
          * 读到 PRE-OP 之后正常值是 2；出现别的值说明那一台有自己的问题，
          * 而主站启动日志里"AL state="那一栏印的就是它。
          */
+        /*
+         * 直接探一次这一台的 AL 状态寄存器，并把**工作计数器**印出来。
+         *
+         * WKC 是"这一帧有没有从站处理过"的唯一凭据：=1 说明寻址正常、帧到了它；
+         * =0 说明这一台根本没收到。2026-10-08 台架上 12 台全部停在 INIT、进不去
+         * PRE-OP、且 AL 状态里没有 error 位 —— 没有 error 位意味着从站不认为它拒绝过，
+         * 那么"请求的帧到底到没到"就是分界，而它只能靠 WKC 回答。
+         */
+        uint16_t al_probe = 0U;
+        const int al_probe_wkc = ecx_FPRD(&context.port, slave->configadr,
+                                          ECT_REG_ALSTAT, sizeof(al_probe), &al_probe,
+                                          EC_TIMEOUTRET);
+        /*
+         * **自己写一次 AL Control = PRE-OP | ACK，并看工作计数器。**
+         *
+         * ecx_config_init 里那次写（ec_config.c:459）返回值被丢弃，所以"请求有没有发到
+         * 从站"从来没有依据。这里补一条会看结果的写，把三种情况分开：
+         *   WKC = 0            -> 帧没到（寻址或链路）
+         *   WKC >= 1 且变为 2  -> 写是有效的，说明 config_init 里那一次没成
+         *   WKC >= 1 且仍为 1  -> 收到了、没执行
+         * 仅当 AL 状态的 error 位置起时，AL 状态码（0x0134）才有意义，所以只在那种情况下读它。
+         */
+        uint16_t alctl_request = htoes((uint16_t)(EC_STATE_PRE_OP | EC_STATE_ACK));
+        const int alctl_wkc = ecx_FPWR(&context.port, slave->configadr, ECT_REG_ALCTL,
+                                       sizeof(alctl_request), &alctl_request, EC_TIMEOUTRET3);
+        /* 给从站一点时间走转移再读回。用 nanosleep 而不是 usleep：本文件定义的是
+         * _POSIX_C_SOURCE 200809L，usleep 已从该标准移除，用它过不了 -Werror。 */
+        {
+            const struct timespec settle = {0, 20000000L};
+            (void)nanosleep(&settle, NULL);
+        }
+        uint16_t al_after = 0U;
+        const int al_after_wkc = ecx_FPRD(&context.port, slave->configadr, ECT_REG_ALSTAT,
+                                          sizeof(al_after), &al_after, EC_TIMEOUTRET);
+        uint16_t al_code = 0U;
+        const bool al_error_bit = (etohs(al_after) & EC_STATE_ERROR) != 0U;
+        if (al_error_bit)
+        {
+            (void)ecx_FPRD(&context.port, slave->configadr, ECT_REG_ALSTATCODE,
+                           sizeof(al_code), &al_code, EC_TIMEOUTRET);
+        }
+
         printf("slave=%d name=%s vendor=0x%08X product=0x%08X revision=0x%08X "
-               "state=%u al_status=0x%04X dc=%d coe=%d mbx_rl=%u gear=%s/%s enc=%s/%s "
-               "cia402_6041=%s cia402=%s cia402_603f=%s\n",
+               "state=%u al_status=0x%04X dc=%d coe=%d mbx_rl=%u cfgadr=%u al_wkc=%d "
+               "alctl_wkc=%d state_after=%u ack_wkc=%d al_code=0x%04X errbit=%d "
+               "gear=%s/%s enc=%s/%s "
+               "cia402_6041=%s cia402=%s cia402_603f=%s fault_203f=%s fault_203e=%s\n",
                index, slave->name, (unsigned)slave->eep_man, (unsigned)slave->eep_id,
                (unsigned)slave->eep_rev, (unsigned)slave->state,
                (unsigned)slave->ALstatuscode, slave->hasdc != 0U ? 1 : 0,
                (slave->mbx_proto & ECT_MBXPROT_COE) != 0U ? 1 : 0, (unsigned)slave->mbx_rl,
+               (unsigned)slave->configadr, al_probe_wkc,
+               alctl_wkc, (unsigned)(etohs(al_after) & 0x0fU), al_after_wkc,
+               (unsigned)al_code, al_error_bit ? 1 : 0,
                gear_motor_text, gear_shaft_text, encoder_increments_text,
-               encoder_revolutions_text, statusword_text, cia402_state, error_code_text);
+               encoder_revolutions_text, statusword_text, cia402_state, error_code_text,
+               vendor_fault_text, vendor_ext_text);
     }
 
     /* 看完就把全体请求回 INIT：本工具不参与运行，不该把从站留在 PRE-OP。 */
