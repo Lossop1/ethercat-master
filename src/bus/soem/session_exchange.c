@@ -129,7 +129,12 @@ static bool monotonic_ns(const struct timespec *stamp, uint64_t *out)
     return true;
 }
 
-/* 只保留最近 EMASTER_CYCLE_TRACE_CAPACITY 个周期，写满后覆盖最旧的一条。 */
+/*
+ * 收一拍。滚动环永远收；窗口打开后**同时**往窗口里追加，直到收满为止。
+ *
+ * 关窗只看条数、不看时间：窗口满了再收就要挤掉最前面的那些拍，而它们正是"异常之前"
+ * 的现场，比后面补上来的更值钱。
+ */
 static void cycle_trace_push(emaster_cycle_trace_t *trace,
                              const emaster_cycle_trace_sample_t *sample)
 {
@@ -139,10 +144,22 @@ static void cycle_trace_push(emaster_cycle_trace_t *trace,
     {
         ++trace->sample_count;
     }
+
+    if (trace->window_open && trace->window_count < EMASTER_CYCLE_TRACE_WINDOW_CAPACITY)
+    {
+        trace->window[trace->window_count] = *sample;
+        ++trace->window_count;
+    }
 }
 
-/* 按时间顺序把当前环冻结进"首次不符之前"的副本，整个会话只做一次。 */
-static void cycle_trace_freeze(emaster_cycle_trace_t *trace)
+/*
+ * 打开异常窗口：按时间顺序把当前环里已有的拍搬进窗口的"之前"那一段，整个会话只做一次。
+ *
+ * 调用点在**本周期入环之前**（record_first_mismatch_scene 早于周期尾部的 push），
+ * 所以这里搬进来的是不符之前的那些拍，而不符那一拍本身由紧随其后的 push 落进
+ * window[trigger_index]。窗口不在这里关：后面的 push 会继续收"之后"的 POST 拍。
+ */
+static void cycle_trace_open_window(emaster_cycle_trace_t *trace)
 {
     size_t count = trace->sample_count;
     size_t start = (trace->write_index + EMASTER_CYCLE_TRACE_CAPACITY - count) %
@@ -150,10 +167,11 @@ static void cycle_trace_freeze(emaster_cycle_trace_t *trace)
 
     for (size_t index = 0U; index < count; ++index)
     {
-        trace->mismatch_samples[index] =
-            trace->samples[(start + index) % EMASTER_CYCLE_TRACE_CAPACITY];
+        trace->window[index] = trace->samples[(start + index) % EMASTER_CYCLE_TRACE_CAPACITY];
     }
-    trace->mismatch_sample_count = count;
+    trace->window_count = count;
+    trace->trigger_index = count;
+    trace->window_open = true;
 }
 
 /*
@@ -203,7 +221,7 @@ static void record_first_mismatch_scene(emaster_soem_session_t *session)
      * 不含本周期，单独留一个标量才能回答"从站掉出的那一刻，总线刚断多久"。
      */
     report->first_mismatch_frame_interval_ns = session->frame_interval_ns;
-    cycle_trace_freeze(&report->cycle_trace);
+    cycle_trace_open_window(&report->cycle_trace);
     report->cycle_trace.mismatch_present = true;
     report->cycle_trace.mismatch_exchange = session->exchange;
     report->cycle_trace.mismatch_wkc = report->actual_wkc;

@@ -392,8 +392,26 @@ typedef struct
     uint16_t shutdown_exit_al_status_code;
 } emaster_control_session_axis_result_t;
 
-/* 周期现场环的容量。64 条约等于 64 ms，够覆盖一次掉出 OP 前后的窗口。 */
-#define EMASTER_CYCLE_TRACE_CAPACITY 64U
+/*
+ * 周期现场环的容量（滚动窗口，只留最近这些拍）。
+ *
+ * 原先是 64 拍 = 64 ms。2026-10-08 的空转轮里，首个不符之后系统又跑了 9573 拍才中止，
+ * 收尾时环里只剩最后 64 拍——离异常已经 9.5 秒，什么也说明不了。异常**之前**那一半由
+ * 下面的窗口负责；这一份留给"会话因别的原因结束时，最后几拍发生了什么"。
+ */
+#define EMASTER_CYCLE_TRACE_CAPACITY 200U
+
+/*
+ * 首次异常前后的窗口：前 PRE 拍 + 异常那一拍 + 后 POST 拍。
+ *
+ * 为什么是 200：1 ms 周期下 200 拍 = 200 ms，够覆盖一次掉出 OP 的完整过程（驱动器攒满
+ * 6 次 SM2 事件丢失才掉出，最慢也在几十毫秒量级），也够看出"谁先动、谁是果"。
+ * 再长收益递减，而每一拍都要写进报告。
+ */
+#define EMASTER_CYCLE_TRACE_PRE_CAPACITY 200U
+#define EMASTER_CYCLE_TRACE_POST_CAPACITY 200U
+#define EMASTER_CYCLE_TRACE_WINDOW_CAPACITY \
+    (EMASTER_CYCLE_TRACE_PRE_CAPACITY + 1U + EMASTER_CYCLE_TRACE_POST_CAPACITY)
 
 /* 周期现场样本的标志位。截止超时不在其中：它由报告里带交换号的标量单独记录。 */
 #define EMASTER_CYCLE_TRACE_FLAG_WKC_MISMATCH 0x0001U
@@ -425,9 +443,15 @@ typedef struct
 } emaster_cycle_trace_sample_t;
 
 /*
- * 环形覆盖的周期现场。会话结束时环里就是最后 64 个周期（故障窗口本身）；
- * 第一个 WKC 不符当下另冻结一份副本，那份记录的是不符之前的 64 个周期——
- * 环会被后续周期覆盖，不冻结就没有异常之前的历史。
+ * 环形覆盖的周期现场，外加异常前后的一个窗口。
+ *
+ * 会话结束时环里是最后 EMASTER_CYCLE_TRACE_CAPACITY 拍。首个 WKC 不符当下打开窗口，
+ * 把不符**之前**已经入环的那些拍整份搬进来，此后每拍继续追加，直到收满"之后"的
+ * POST 拍为止。
+ *
+ * 为什么"之后"也要收：只有一个"之前"的副本时，异常之后那段的形状完全不可见，而
+ * "谁先动"恰恰要靠它——驱动器掉出 OP、主站判超限、错误计数器读失败，这几件事在异常
+ * 之后各自晚若干拍发生，先后顺序就是因果方向。此前这一段会被后续周期覆盖掉。
  */
 typedef struct
 {
@@ -437,8 +461,13 @@ typedef struct
     bool mismatch_present;
     uint64_t mismatch_exchange;
     int mismatch_wkc;
-    size_t mismatch_sample_count;
-    emaster_cycle_trace_sample_t mismatch_samples[EMASTER_CYCLE_TRACE_CAPACITY];
+    /* 窗口：前 PRE 拍 + 异常那一拍 + 后 POST 拍，按时间顺序。 */
+    size_t window_count;
+    /* 异常那一拍在窗口里的下标。窗口没满时它同样是有效下标，不是估算。 */
+    size_t trigger_index;
+    /* 首次不符后置真；此后每拍追加，收满即止——再收就要丢最前面的"之前"那些拍。 */
+    bool window_open;
+    emaster_cycle_trace_sample_t window[EMASTER_CYCLE_TRACE_WINDOW_CAPACITY];
 } emaster_cycle_trace_t;
 
 /* 首次周期失败只写一次，后续停机交换不能改变其 WKC、阶段和交换号。 */

@@ -1086,15 +1086,26 @@ static bool write_cycle_trace(FILE *stream, const emaster_cycle_trace_t *trace)
         REQUIRE_WRITE(write_cycle_trace_sample(
             stream, &trace->samples[(start + index) % EMASTER_CYCLE_TRACE_CAPACITY]));
     }
+    /*
+     * 异常窗口：前 PRE 拍 + 异常那一拍 + 后 POST 拍，按时间顺序。
+     *
+     * trigger_index 必须印出来。窗口收满时它是 PRE；会话在"之后"那一段走完之前就结束
+     * （异常后很快中止，或 POST 还没收齐）时它小于 PRE，而**这两种情况下 samples 的
+     * 长度不同、含义也不同**：读的人要靠这个下标才知道哪一拍是异常，否则只能假设
+     * "中间那一拍"——那在窗口没满时会指到错误的位置上去。
+     */
     REQUIRE_WRITE(fprintf(stream,
         "]},\"mismatch\":{\"present\":%s,\"exchange\":%" PRIu64
-        ",\"wkc\":%d,\"count\":%zu,\"samples\":[",
+        ",\"wkc\":%d,\"count\":%zu,\"trigger_index\":%zu,"
+        "\"pre_capacity\":%u,\"post_capacity\":%u,\"samples\":[",
         trace->mismatch_present ? "true" : "false", trace->mismatch_exchange,
-        trace->mismatch_wkc, trace->mismatch_sample_count) >= 0);
-    for (size_t index = 0U; index < trace->mismatch_sample_count; ++index)
+        trace->mismatch_wkc, trace->window_count, trace->trigger_index,
+        (unsigned int)EMASTER_CYCLE_TRACE_PRE_CAPACITY,
+        (unsigned int)EMASTER_CYCLE_TRACE_POST_CAPACITY) >= 0);
+    for (size_t index = 0U; index < trace->window_count; ++index)
     {
         REQUIRE_WRITE(fputs(index == 0U ? "" : ",", stream) != EOF);
-        REQUIRE_WRITE(write_cycle_trace_sample(stream, &trace->mismatch_samples[index]));
+        REQUIRE_WRITE(write_cycle_trace_sample(stream, &trace->window[index]));
     }
     return fputs("]}}", stream) != EOF;
 }
