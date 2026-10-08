@@ -104,6 +104,7 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     add_subdirectory(tools/status_client)
     add_subdirectory(tools/target_probe)
     add_subdirectory(tools/diagnose_slave)
+    add_subdirectory(tools/disable_drives)
 endif()
 
 add_subdirectory(src/bus/observation)
