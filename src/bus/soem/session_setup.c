@@ -143,6 +143,24 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         emaster_soem_sdo_context_init(&sdo, &session->context, bus_position,
                                       &session->report->audit,
                                       EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, session->exchange);
+        /*
+         * **先把驱动器落到已知状态，再开始配置。**
+         *
+         * 主站在此之前已经发过 INIT->PRE-OP 请求（ecx_config_init 里），那一刻过程数据
+         * 就停了 —— 若驱动器此刻是 CiA 402 的 Operation enabled（电机使能着），它会带着
+         * 使能、在"没有目标、也没有被明确禁用"的状态下，等主站走完 PRE-OP -> SAFE-OP -> OP
+         * 这一整段。控制字要到 OP 才通过过程数据发出去，而 SAFE-OP 下输出不生效。
+         *
+         * 所以这里用邮箱补一次权威禁用，与停机路径同一个道理：
+         * **能用邮箱送的命令，就不要依赖过程数据那条会断的通道。**
+         *
+         * 先读后写：读到的状态字留下，事后能回答"主站接手时驱动器在不在使劲"——
+         * 这是操作员反复报告、而报告里长期没有的那个读数。
+         */
+        session->axes[axis_index].startup_statusword_read = emaster_soem_read_u16(
+            &sdo, UINT16_C(0x6041), UINT8_C(0), &session->axes[axis_index].startup_statusword);
+        session->axes[axis_index].startup_disable_written = emaster_soem_write_u16(
+            &sdo, UINT16_C(0x6040), UINT8_C(0), UINT16_C(0x0000));
         emaster_cyclic_timing_stats_init(&session->axes[axis_index].timing);
         session->axes[axis_index].requested_mode = axis->operation_mode->value;
         session->axes[axis_index].actual_vendor_id = slave->eep_man;

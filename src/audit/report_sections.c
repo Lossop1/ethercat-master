@@ -478,6 +478,21 @@ static bool write_axis(FILE *stream,
      * read=false 表示没读到，与读到的 0 分得开：0x0000 在状态字里是有含义的值。
      */
     /*
+     * 主站接手时的驱动器状态字，以及那一刻发出的禁用。与上面 shutdown_cia402 配成一对：
+     * 一个回答"我来的时候它在不在使劲"，一个回答"我走之后它还在不在使劲"。
+     * 两者都是 ESC 那一层读不到的 —— AL 状态与 CiA 402 状态互不决定。
+     */
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"startup_cia402\":{\"statusword_read\":%s,\"statusword\":%u,"
+        "\"disable_written\":%s,\"operation_enabled\":%s,\"voltage_enabled\":%s}",
+        axis->startup_statusword_read ? "true" : "false",
+        (unsigned int)axis->startup_statusword,
+        axis->startup_disable_written ? "true" : "false",
+        (axis->startup_statusword_read &&
+         (axis->startup_statusword & 0x0004U) != 0U) ? "true" : "false",
+        (axis->startup_statusword_read &&
+         (axis->startup_statusword & 0x0010U) != 0U) ? "true" : "false") >= 0);
+    /*
      * 字段名里的 before/after 指的是**写"禁用电压"（0x6040=0x0000）之前与之后**。
      *
      * 这一对是本次安全修复的证据位：before 若是 Operation enabled，说明主站退出时

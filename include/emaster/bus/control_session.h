@@ -417,6 +417,21 @@ typedef struct
     uint16_t shutdown_statusword_before;
     bool shutdown_statusword_before_read;
     /*
+     * 主站接手时驱动器的状态字，以及在这一刻发出的禁用（0x6040 = 0x0000）。
+     *
+     * 与停机侧那一对同一个道理，只是时机相反：主站启动时对从站的既有状态不做任何
+     * 判断，ecx_config_init 一上来就发 INIT->PRE-OP 请求，把从站从任何状态（包括 OP）
+     * 拉回来 —— 而那一刻过程数据就停了。若驱动器此刻是 CiA 402 的 Operation enabled，
+     * 它会带着使能、在"没有目标、也没有被明确禁用"的状态下，等主站走完
+     * PRE-OP -> SAFE-OP -> OP 这一整段（控制字要到 OP 才发得出去，SAFE-OP 下输出不生效）。
+     *
+     * 所以在 PRE-OP 配置一开始，用邮箱先读状态字、再写一次权威禁用。
+     * **能用邮箱送的命令，就不依赖过程数据那条会断的通道。**
+     */
+    uint16_t startup_statusword;
+    bool startup_statusword_read;
+    bool startup_disable_written;
+    /*
      * 权威禁用写进去了没有。走的是邮箱（SDO），不依赖 PDO。
      *
      * 2026-10-08 之前，主站的禁用只走 PDO（安全停机那条周期交换），而从站一旦掉出 OP
