@@ -1002,6 +1002,18 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
                                                &axis_result->sm2_diagnostic);
             emaster_session_observer_read_sync(&sdo, UINT16_C(0x1C33),
                                                &axis_result->sm3_diagnostic);
+            /*
+             * CiA 402 层的两个读数：状态字（驱动器在不在使能）与故障码。
+             *
+             * 与上面几条同一个窗口 —— 输出已停、邮箱还在，所以不额外制造周期空洞。
+             * 这一对是报告里唯一能回答"主站退出后驱动器还在不在使劲"的读数：AL 状态
+             * 是 ESC 那一层，答不了它。2026-10-08 实测 AL=INIT 而 0x6041=0x1237
+             * （Operation Enabled + Voltage enabled）同时成立 —— 操作员摸到的就是后者。
+             */
+            axis_result->shutdown_statusword_read = emaster_soem_read_u16(
+                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword);
+            axis_result->shutdown_error_code_read = emaster_soem_read_u16(
+                &sdo, UINT16_C(0x603F), UINT8_C(0), &axis_result->shutdown_error_code);
             if (!axis_result->position_scale.read_succeeded) {
                 emaster_session_observer_read_position_scale(&sdo, &axis_result->position_scale);
             }

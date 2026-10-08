@@ -468,6 +468,30 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->shutdown_exit_al_state,
         (unsigned int)axis->shutdown_exit_al_status_code) >= 0);
     /*
+     * CiA 402 层：主站退出时驱动器自己报的状态字与故障码。
+     *
+     * 与上面的 shutdown_al_exit 并排放，因为**只有并排才能说明问题**：AL 状态是 ESC
+     * 那一层的，退出时必然回到 INIT；而驱动器层（0x6041）不随它复位，可以仍然是
+     * Operation Enabled 且功率级带电。报告此前只有前者，于是"主站停了"被读成
+     * "电机没劲了"——2026-10-08 实测两者同时成立（AL=1 而 0x6041=0x1237）。
+     *
+     * read=false 表示没读到，与读到的 0 分得开：0x0000 在状态字里是有含义的值。
+     */
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"shutdown_cia402\":{\"statusword_read\":%s,\"statusword\":%u,"
+        "\"error_code_read\":%s,\"error_code\":%u,"
+        "\"operation_enabled\":%s,\"voltage_enabled\":%s,\"fault\":%s}",
+        axis->shutdown_statusword_read ? "true" : "false",
+        (unsigned int)axis->shutdown_statusword,
+        axis->shutdown_error_code_read ? "true" : "false",
+        (unsigned int)axis->shutdown_error_code,
+        (axis->shutdown_statusword_read &&
+         (axis->shutdown_statusword & 0x0004U) != 0U) ? "true" : "false",
+        (axis->shutdown_statusword_read &&
+         (axis->shutdown_statusword & 0x0010U) != 0U) ? "true" : "false",
+        (axis->shutdown_statusword_read &&
+         (axis->shutdown_statusword & 0x0008U) != 0U) ? "true" : "false") >= 0);
+    /*
      * 首个 WKC 不符当下的逐轴 AL 快照，是全报告中唯一一次"帧已经不对、而驱动器
      * 尚未被任何停机流程碰过"的读数：轴若此刻仍在 OP（8），说明帧异常在前；若已到
      * SAFE-OP（20 / 0x001A），说明驱动器侧监督在前。

@@ -390,6 +390,25 @@ typedef struct
      */
     uint16_t shutdown_exit_al_state;
     uint16_t shutdown_exit_al_status_code;
+    /*
+     * 停机诊断里读的 CiA 402 状态字与故障码（0x6041 / 0x603F，走邮箱）。
+     *
+     * **这是"驱动器在不在使劲"的唯一通道。** AL 状态是 ESC 那一层的：它掉到 INIT 之后
+     * 邮箱就关了，主站从此问不到驱动器自己的状态 —— 而操作员在现场摸得到电机还在保持。
+     * 2026-10-08 实测：AL=INIT 的同时，12 台驱动器的 0x6041 全是 0x1237（Operation
+     * Enabled + Voltage enabled），即**两层不同的东西同时成立**。报告里此前只有 ESC
+     * 那一层，所以操作员"电机还在 OP"的观察几个月都无法被证实或证伪。
+     *
+     * 读的位置在停机序言的诊断块里（session_shutdown.c）：那里过程数据输出已经停止、
+     * 邮箱还活着，且本来就有一批 SDO 要读 —— 不额外制造周期空洞。**若读在更早的位置，
+     * 12 台 x 2.7 ms 的邮箱往返会自己把驱动器推出 OP**，那就是仪表制造它要观测的事。
+     *
+     * read 为假表示"没读到"，与读到的 0 必须分得开：0x0000 在状态字里是有含义的值。
+     */
+    uint16_t shutdown_statusword;
+    bool shutdown_statusword_read;
+    uint16_t shutdown_error_code;
+    bool shutdown_error_code_read;
 } emaster_control_session_axis_result_t;
 
 /*

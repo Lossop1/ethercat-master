@@ -44,7 +44,29 @@ static bool read_u32(ecx_contextt *context, uint16_t slave, uint16_t index, uint
     return true;
 }
 
-/* 一个 u32 对象印成十进制，读不到印 na —— 0 在减速比／分辨率里是非法值，
+/*
+ * 一个 u16 对象。CiA 402 的状态字与故障码都是 u16。
+ *
+ * 与 read_u32 同样的理由：读不到返回 false，由调用方印 na，不印 0 —— 0 在状态字里
+ * 是有含义的值（"没准备"），与"没读回来"必须分得开。
+ */
+static bool read_u16(ecx_contextt *context, uint16_t slave, uint16_t index, uint8_t subindex,
+                     uint16_t *out)
+{
+    uint16_t value = 0U;
+    int size = (int)sizeof(value);
+
+    if (ecx_SDOread(context, slave, index, subindex, FALSE, &size, &value, EC_TIMEOUTRXM) <= 0 ||
+        size != (int)sizeof(value))
+    {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
+/*
+ * 一个 u32 对象印成十进制，读不到印 na —— 0 在减速比／分辨率里是非法值，
  * 印 0 会被当成"驱动器报的就是 0"，而它其实是"这一条没读回来"。 */
 static void format_u32(char *out, size_t size, bool read, uint32_t value)
 {
@@ -81,6 +103,44 @@ int main(int argc, char *argv[])
         fprintf(stderr, "错误：ecx_init 失败，接口 %s 打不开（网卡名对不对？网卡 up 了吗？）\n",
                 argv[1]);
         return 1;
+    }
+
+    /*
+     * **到达时的状态，必须在 ecx_config_init 之前读。**
+     *
+     * ecx_config_init() 自己会发出 INIT -> PRE-OP 请求（见下面那段注释），所以它之后
+     * 读到的状态是**本工具造出来的**，不是从站原来的。2026-10-08 台架上正是这一点造成
+     * 了分歧：操作员摸到电机在使能保持（OP），而本工具报 PRE-OP —— 因为工具先把它们
+     * 拉下来了。**仪器改变了被观测对象，然后报告了自己造成的那个状态。**
+     *
+     * 这里读的是全体从站 AL 状态（0x0130）的按位或，形状与 SOEM 自己的 ecx_readstate
+     * 一致：一条 2 字节广播数据报，**只读不改**。或值足以回答"有没有从站在 OP"：
+     * OP(8) 的第 3 位一旦置起，或值里就看得见。它答不了"哪几台在 OP"，但那正是
+     * 后面逐站读要回答的事 —— 而逐站读必须在改状态之后才能做，这是无法回避的顺序。
+     */
+    uint16_t al_state_or_at_arrival = 0U;
+    bool al_state_or_valid = false;
+    {
+        uint16_t raw = 0U;
+        const int wkc = ecx_BRD(&context.port, 0x0000, ECT_REG_ALSTAT, sizeof(raw), &raw,
+                                EC_TIMEOUTRET);
+        if (wkc > 0)
+        {
+            al_state_or_at_arrival = (uint16_t)(etohs(raw) & 0x000fU);
+            al_state_or_valid = true;
+        }
+    }
+    if (al_state_or_valid)
+    {
+        printf("al_state_at_arrival_or=%u\n", (unsigned)al_state_or_at_arrival);
+        /* 第 3 位是 OP。把它单独说清楚：这是全工具里唯一一条"没有被自己改过"的状态读数。 */
+        printf("al_state_at_arrival_has_op=%s\n",
+               (al_state_or_at_arrival & 0x08U) != 0U ? "yes" : "no");
+    }
+    else
+    {
+        /* 读不到就写 na，不写 0：0 不是合法的 AL 状态，写成 0 会被当成"没读到"以外的意思。 */
+        printf("al_state_at_arrival_or=na\n");
     }
 
     const int slave_count = ecx_config_init(&context);
@@ -135,6 +195,64 @@ int main(int argc, char *argv[])
                                     &encoder_revolutions);
         }
 
+        /*
+         * CiA 402 层的两个读数，走邮箱（SDO）。
+         *
+         * **这才是"驱动器在不在使劲"的通道。** AL 状态是 ESC 那一层：它一旦掉到 INIT，
+         * 邮箱就关了，主站从此问不到驱动器自己的状态 —— 而操作员在现场摸得到电机还在
+         * 保持。2026-10-08 台架上这件事重复出现：主站报 AL=INIT（如实），电机仍使能保持
+         * （也如实），两者说的是两层不同的东西，而报告里一直只有一层。
+         *
+         * 必须在 PRE-OP（邮箱活着）时读。本工具读 0x6091/0x608F 时正好在这个窗口里，
+         * 所以顺手读掉，不额外增加过程数据静默。
+         */
+        uint16_t statusword = 0U;
+        uint16_t error_code = 0U;
+        bool statusword_read = false;
+        bool error_code_read = false;
+        if (preop_reached && (slave->mbx_proto & ECT_MBXPROT_COE) != 0U)
+        {
+            statusword_read = read_u16(&context, (uint16_t)index, UINT16_C(0x6041),
+                                       UINT8_C(0x00), &statusword);
+            error_code_read = read_u16(&context, (uint16_t)index, UINT16_C(0x603F),
+                                       UINT8_C(0x00), &error_code);
+        }
+        char statusword_text[16];
+        char error_code_text[16];
+        if (statusword_read)
+        {
+            (void)snprintf(statusword_text, sizeof(statusword_text), "0x%04X",
+                           (unsigned)statusword);
+        }
+        else
+        {
+            (void)snprintf(statusword_text, sizeof(statusword_text), "na");
+        }
+        if (error_code_read)
+        {
+            (void)snprintf(error_code_text, sizeof(error_code_text), "0x%04X",
+                           (unsigned)error_code);
+        }
+        else
+        {
+            (void)snprintf(error_code_text, sizeof(error_code_text), "na");
+        }
+        /*
+         * 把状态字译成一句话。人要看的是"在不在使劲"，不是十六进制。
+         * 判据按 CiA 402 状态机的位定义：0x0008=Fault、0x0004=Operation Enabled、
+         * 0x0040=Switch On Disabled、0x0021=Ready to Switch On。
+         */
+        const char *cia402_state = "na";
+        if (statusword_read)
+        {
+            if ((statusword & 0x0008U) != 0U)          { cia402_state = "fault"; }
+            else if ((statusword & 0x0004U) != 0U)     { cia402_state = "operation-enabled"; }
+            else if ((statusword & 0x0040U) != 0U)     { cia402_state = "switch-on-disabled"; }
+            else if ((statusword & 0x0021U) == 0x0021U) { cia402_state = "ready-to-switch-on"; }
+            else if ((statusword & 0x0001U) == 0U)     { cia402_state = "not-ready"; }
+            else                                        { cia402_state = "switched-on"; }
+        }
+
         format_u32(gear_motor_text, sizeof(gear_motor_text), gear_read, gear_motor);
         format_u32(gear_shaft_text, sizeof(gear_shaft_text), gear_read, gear_shaft);
         format_u32(encoder_increments_text, sizeof(encoder_increments_text), encoder_read,
@@ -148,13 +266,14 @@ int main(int argc, char *argv[])
          * 而主站启动日志里"AL state="那一栏印的就是它。
          */
         printf("slave=%d name=%s vendor=0x%08X product=0x%08X revision=0x%08X "
-               "state=%u al_status=0x%04X dc=%d coe=%d mbx_rl=%u gear=%s/%s enc=%s/%s\n",
+               "state=%u al_status=0x%04X dc=%d coe=%d mbx_rl=%u gear=%s/%s enc=%s/%s "
+               "cia402_6041=%s cia402=%s cia402_603f=%s\n",
                index, slave->name, (unsigned)slave->eep_man, (unsigned)slave->eep_id,
                (unsigned)slave->eep_rev, (unsigned)slave->state,
                (unsigned)slave->ALstatuscode, slave->hasdc != 0U ? 1 : 0,
                (slave->mbx_proto & ECT_MBXPROT_COE) != 0U ? 1 : 0, (unsigned)slave->mbx_rl,
                gear_motor_text, gear_shaft_text, encoder_increments_text,
-               encoder_revolutions_text);
+               encoder_revolutions_text, statusword_text, cia402_state, error_code_text);
     }
 
     /* 看完就把全体请求回 INIT：本工具不参与运行，不该把从站留在 PRE-OP。 */
