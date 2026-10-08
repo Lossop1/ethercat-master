@@ -1010,6 +1010,28 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
              * 是 ESC 那一层，答不了它。2026-10-08 实测 AL=INIT 而 0x6041=0x1237
              * （Operation Enabled + Voltage enabled）同时成立 —— 操作员摸到的就是后者。
              */
+            /*
+             * **权威的禁用走邮箱，不走 PDO。**
+             *
+             * 安全停机那条路（本文件上面的周期交换）把控制字 0x0000 放进了 PDO —— 而
+             * PDO 只在 OP 下有效。从站一旦掉出 OP，"禁用"就到不了它，驱动器保持着最后
+             * 一次收到的"使能"，功率级继续带电。2026-10-08 实测：ESC 的 AL 状态已经是
+             * INIT，而 12 台驱动器的 0x6041 全是 0x1237（Operation enabled + Voltage
+             * enabled）—— 操作员几个月来反复报告的"主站说退出了 OP，但电机明显还在
+             * 保持"就是这一条。**这是一条安全缺陷。**
+             *
+             * 一条基本道理：**不能用周期通道去送"停止周期通道"的命令。** 那条命令必须在
+             * 通道坏掉之后仍然送得到，而邮箱正是这样一条通道（PRE-OP 下仍可用，只有
+             * INIT 才关闭）。所以这里与 PDO 那条路走没走通无关，补一次权威的禁用。
+             *
+             * 位置就在本诊断块里：过程数据输出已停、邮箱还活着，且本来就有一批 SDO 要读。
+             * 顺序是「读之前 -> 写禁用 -> 读之后」，三次邮箱操作；前一次读是必要的，因为
+             * 只有它能把"我们禁用它之前它确实是使能的"记下来。
+             */
+            axis_result->shutdown_statusword_before_read = emaster_soem_read_u16(
+                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword_before);
+            axis_result->shutdown_disable_written = emaster_soem_write_u16(
+                &sdo, UINT16_C(0x6040), UINT8_C(0), UINT16_C(0x0000));
             axis_result->shutdown_statusword_read = emaster_soem_read_u16(
                 &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword);
             axis_result->shutdown_error_code_read = emaster_soem_read_u16(

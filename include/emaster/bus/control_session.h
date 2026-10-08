@@ -407,6 +407,23 @@ typedef struct
      */
     uint16_t shutdown_statusword;
     bool shutdown_statusword_read;
+    /*
+     * 写"禁用电压"（控制字 0x6040 = 0x0000）之前读到的状态字。
+     *
+     * 与上面的 shutdown_statusword（写之后）配成一对：只有这一对能回答
+     * "主站退出时驱动器是不是还使能着"，而这正是几个月来反复出现、报告里一直
+     * 证实不了的那件事。
+     */
+    uint16_t shutdown_statusword_before;
+    bool shutdown_statusword_before_read;
+    /*
+     * 权威禁用写进去了没有。走的是邮箱（SDO），不依赖 PDO。
+     *
+     * 2026-10-08 之前，主站的禁用只走 PDO（安全停机那条周期交换），而从站一旦掉出 OP
+     * 那条命令就到不了它 —— 驱动器保持着最后一次收到的"使能"，功率级继续带电。
+     * **不能用周期通道去送"停止周期通道"的命令**，这是一条安全缺陷，不是记录缺失。
+     */
+    bool shutdown_disable_written;
     uint16_t shutdown_error_code;
     bool shutdown_error_code_read;
 } emaster_control_session_axis_result_t;

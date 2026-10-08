@@ -477,14 +477,30 @@ static bool write_axis(FILE *stream,
      *
      * read=false 表示没读到，与读到的 0 分得开：0x0000 在状态字里是有含义的值。
      */
+    /*
+     * 字段名里的 before/after 指的是**写"禁用电压"（0x6040=0x0000）之前与之后**。
+     *
+     * 这一对是本次安全修复的证据位：before 若是 Operation enabled，说明主站退出时
+     * 驱动器还使能着 —— 而 2026-10-08 之前那条禁用只走 PDO，从站掉出 OP 就到不了它，
+     * 于是"主站报退出 OP、电机仍在保持"这件事在报告里几个月都无法证实。disable_written
+     * 则说明这一次的权威禁用（邮箱 SDO）到底写进去没有。
+     */
     REQUIRE_WRITE(fprintf(stream,
-        ",\"shutdown_cia402\":{\"statusword_read\":%s,\"statusword\":%u,"
+        ",\"shutdown_cia402\":{\"disable_written\":%s,"
+        "\"statusword_before_read\":%s,\"statusword_before\":%u,"
+        "\"statusword_read\":%s,\"statusword\":%u,"
         "\"error_code_read\":%s,\"error_code\":%u,"
-        "\"operation_enabled\":%s,\"voltage_enabled\":%s,\"fault\":%s}",
+        "\"operation_enabled_before\":%s,\"operation_enabled\":%s,"
+        "\"voltage_enabled\":%s,\"fault\":%s}",
+        axis->shutdown_disable_written ? "true" : "false",
+        axis->shutdown_statusword_before_read ? "true" : "false",
+        (unsigned int)axis->shutdown_statusword_before,
         axis->shutdown_statusword_read ? "true" : "false",
         (unsigned int)axis->shutdown_statusword,
         axis->shutdown_error_code_read ? "true" : "false",
         (unsigned int)axis->shutdown_error_code,
+        (axis->shutdown_statusword_before_read &&
+         (axis->shutdown_statusword_before & 0x0004U) != 0U) ? "true" : "false",
         (axis->shutdown_statusword_read &&
          (axis->shutdown_statusword & 0x0004U) != 0U) ? "true" : "false",
         (axis->shutdown_statusword_read &&
