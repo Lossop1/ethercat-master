@@ -393,6 +393,51 @@ typedef struct
 } emaster_control_session_axis_result_t;
 
 /*
+ * 周期时序越界的分档计数与最长连续段。
+ *
+ * 为什么要有它。报告此前只有极值（tail_max_*）与最长连续段（且只覆盖 sync0 迟到），
+ * 而"晚拍是偶发还是在恶化"这个问题极值答不了：一次 72 us 的晚发会把最大值顶上去并
+ * 一直挂着，此后无论运行多健康都不再变化；反过来，最大值不变也可能是每一拍都在轻微
+ * 越界。2026-10-08 实测到的两种失败机制（发晚、收包超时）都落在这个盲区里。
+ *
+ * 分档边界是**测量粒度，不是判定阈值**：报告里会把边界值一并印出，任何读的人都能
+ * 不看源码解释每一档。档数固定 4，占用是常数。
+ */
+#define EMASTER_TIMING_EXCURSION_BUCKETS 4U
+
+typedef struct
+{
+    /*
+     * 发帧晚点的累计拍数。边界（含下界，递增）10 / 25 / 50 us，第 4 档为 > 50 us。
+     * 第 0 档因此是"小于 10 us"——正常周期（实测约 3 us）落在这一档。
+     */
+    uint64_t send_late_buckets[EMASTER_TIMING_EXCURSION_BUCKETS];
+    /*
+     * 收包段耗时的累计拍数。边界 150 / 200 / 250 us，第 4 档为 > 250 us。
+     * 250 us 就是 frame_timeout_us 的默认值（cycle_ns/4），所以落在第 4 档的周期
+     * 多半就是超时周期。
+     */
+    uint64_t receive_buckets[EMASTER_TIMING_EXCURSION_BUCKETS];
+    /*
+     * sync0 裕量的累计拍数。边界**递减**（越低越坏）150 / 100 / 50 us，
+     * 第 4 档为 < 50 us。裕量为负意味着本周期输出对驱动器已经迟到。
+     */
+    uint64_t margin_buckets[EMASTER_TIMING_EXCURSION_BUCKETS];
+    /*
+     * 最长连续越界段（拍）与段末的交换号。越界的定义：发晚 > 25 us、收包 >= 200 us。
+     * 取"连续"而不是累计，是因为驱动器的容忍也是按连续算的（攒满 6 次 SM 事件丢失
+     * 才掉出 OP），散落的单次越界与连续越界对它的意义完全不同。
+     */
+    uint64_t send_late_max_consecutive;
+    uint64_t send_late_max_exchange;
+    uint64_t receive_slow_max_consecutive;
+    uint64_t receive_slow_max_exchange;
+    /* 当前段长度。只用于累计，不印进报告。 */
+    uint64_t send_late_run;
+    uint64_t receive_slow_run;
+} emaster_timing_excursions_t;
+
+/*
  * 周期现场环的容量（滚动窗口，只留最近这些拍）。
  *
  * 原先是 64 拍 = 64 ms。2026-10-08 的空转轮里，首个不符之后系统又跑了 9573 拍才中止，
@@ -910,6 +955,12 @@ typedef struct
      * 与 frame_timeout_us 配对使用：后者由这个值导出，前者不进报告就没有依据可查。
      */
     uint64_t tail_max_receive_ok_ns;
+    /*
+     * 周期时序的越界分布与最长连续段。与上面的极值互补：极值回答"最坏有多坏"，
+     * 这里回答"有多频繁、连不连续"——两者都要，缺一个就会把偶发当成恶化、
+     * 或把持续轻微越界当成没问题。
+     */
+    emaster_timing_excursions_t timing_excursions;
     /*
      * 本周期实际使用的过程数据收包超时（µs）。固定为 cycle_ns/4，运行期不变
      * （EMASTER_FRAME_TIMEOUT_US 的对照实验支路除外）；报告里留最终值，让两次

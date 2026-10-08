@@ -96,15 +96,16 @@ def find_config(kind_dir, id_field, wanted):
 
 
 def collect_config_chain(deployment_id):
-    """按引用链解析配置，返回 (lines, interface)。
+    """按引用链解析配置，返回 (lines, interface, rt_core)。
 
     链：部署档 -> 拓扑 / 运动方案 / 操作方案(可多份) -> 设备档(来自拓扑里的 profile_id)。
+    rt_core 是部署档的 realtime.cpu_core —— 实时线程绑定的核号，宿主上下文要按它取。
     """
     lines = []
     deployment_path, deployment = find_config("deployments", "deployment_id", deployment_id)
     if deployment is None:
         lines.append("config_error=部署档未找到(%s)" % deployment_id)
-        return lines, None
+        return lines, None, None
 
     lines.append("config_deployment_id=%s" % deployment_id)
     lines.append("config_deployment_file=%s" % os.path.relpath(deployment_path, REPO))
@@ -139,7 +140,100 @@ def collect_config_chain(deployment_id):
     lines.append("config_device_profile_id=%s" % (device_id or "unknown"))
     lines.append("config_device_profile_sha256=%s" % (sha256(path) if path else "unknown"))
 
-    return lines, interface
+    realtime = deployment.get("realtime") or {}
+    rt_core = realtime.get("cpu_core")
+    lines.append("config_rt_core=%s" % (rt_core if rt_core is not None else "unknown"))
+    lines.append("config_rt_required=%s" % ("yes" if realtime.get("required") else "no"))
+    return lines, interface, rt_core
+
+
+def collect_interrupts(interface, rt_core):
+    """按 CPU 汇总中断，并单列网卡与实时核。
+
+    为什么记这个。2026-10-08 查到网卡 14 个队列里只有 0 号在用、且全落在核 0，
+    而实时线程绑在核 11；irqbalance 未安装，所以落点是内核默认值，没人管过。
+    中断会抢占 SCHED_FIFO 线程，所以"实时核上来了多少中断"直接决定周期抖动。
+
+    记的是**每轮开始前**的快照，不是运行中的峰值 —— 差分两次快照就能得到本轮的中断数，
+    而运行中的峰值需要采样线程，那本身就会挤占实时核。
+    """
+    try:
+        with open("/proc/interrupts", encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError as error:
+        return ["interrupts_error=读不了 /proc/interrupts（%s）" % error]
+    if not lines:
+        return ["interrupts_error=/proc/interrupts 是空的"]
+
+    cpu_count = len(lines[0].split())
+    per_cpu = [0] * cpu_count
+    nic_total = 0
+    nic_queues = 0
+    for line in lines[1:]:
+        _, sep, rest = line.partition(":")
+        if not sep:
+            continue
+        fields = rest.split()
+        if len(fields) < cpu_count:
+            continue
+        counts = []
+        for value in fields[:cpu_count]:
+            try:
+                counts.append(int(value))
+            except ValueError:
+                counts = None
+                break
+        if counts is None:
+            continue
+        for index, value in enumerate(counts):
+            per_cpu[index] += value
+        # 网卡的中断行名字形如 enp49s0-0、enp49s0-1…… 逐队列各一行。
+        if interface and interface in rest:
+            nic_total += sum(counts)
+            nic_queues += 1
+
+    out = ["interrupts_cpu_count=%d" % cpu_count,
+           "interrupts_total_all_cpus=%d" % sum(per_cpu)]
+    for index, value in enumerate(per_cpu):
+        out.append("interrupts_cpu_%d=%d" % (index, value))
+    if interface:
+        out.append("nic_irq_queues=%d" % nic_queues)
+        out.append("nic_irq_total=%d" % nic_total)
+        if nic_queues == 1:
+            # 单队列意味着全部收包处理挤在一个核上；多队列而只有一个在用是浪费，
+            # 但更重要的是它决定了"谁在处理这一拍的回包"。
+            out.append("nic_irq_note=只有一个队列在用")
+    else:
+        out.append("nic_irq_total=unknown")
+
+    if rt_core is not None and 0 <= rt_core < cpu_count:
+        out.append("interrupts_on_rt_core=%d" % per_cpu[rt_core])
+    return out
+
+
+def collect_rt_core_threads(rt_core):
+    """实时核上当时住着哪些线程。中断抢占实时线程，线程本身也抢（内核线程尤其）。"""
+    if rt_core is None:
+        return []
+    rc, out = run(["ps", "-eLo", "psr,comm", "--sort=psr"], timeout=30)
+    if rc != 0:
+        return ["rt_core_threads_error=ps 失败"]
+    names = []
+    for line in out.splitlines()[1:]:
+        fields = line.split(None, 1)
+        if len(fields) != 2:
+            continue
+        try:
+            core = int(fields[0])
+        except ValueError:
+            continue
+        if core == rt_core:
+            names.append(fields[1].strip())
+    # 去重后计数：同一个程序多个线程时，只关心"有哪些东西"。
+    unique = sorted(set(names))
+    return ["rt_core=%d" % rt_core,
+            "rt_core_thread_count=%d" % len(names),
+            "rt_core_threads=%s" % ",".join(unique)]
 
 
 def collect_scan(interface):
@@ -195,10 +289,16 @@ def main():
     lines.append("binary=%s" % os.path.relpath(binary, REPO))
     lines.append("binary_sha256=%s" % (sha256(binary) if os.path.isfile(binary) else "missing"))
 
-    config_lines, interface = collect_config_chain(args.deployment)
+    config_lines, interface, rt_core = collect_config_chain(args.deployment)
     lines.extend(config_lines)
 
     lines.append("interface=%s" % (interface or "unknown"))
+    try:
+        with open("/proc/loadavg", encoding="utf-8") as handle:
+            load = handle.read().split()[:3]
+        lines.append("loadavg=%s" % " ".join(load))
+    except OSError:
+        lines.append("loadavg=unknown")
     if interface:
         try:
             with open("/sys/class/net/%s/carrier" % interface, encoding="utf-8") as handle:
@@ -224,6 +324,15 @@ def main():
     rc, after = run(["bash", "-c", "ulimit -r unlimited 2>/dev/null; ulimit -r"])
     lines.append("ulimit_r_inherited=%s" % (before if rc == 0 else "unknown"))
     lines.append("ulimit_r_after_raise=%s" % (after if rc == 0 else "unknown"))
+
+    # 宿主上下文。与装置身份同放一份：两者回答的是同一类问题 —— "这一轮是在什么条件下跑的"。
+    rt_core = None
+    for line in lines:
+        if line.startswith("config_rt_core="):
+            value = line.split("=", 1)[1]
+            rt_core = int(value) if value.isdigit() else None
+    lines.extend(collect_interrupts(interface, rt_core))
+    lines.extend(collect_rt_core_threads(rt_core))
 
     if args.no_scan:
         lines.append("scan=skipped")

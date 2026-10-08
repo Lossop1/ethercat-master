@@ -1071,6 +1071,40 @@ static bool write_soem_errors(FILE *stream, const emaster_control_session_report
  * 周期现场环的两份记录：最近 64 个周期（环形，需按时间顺序展开），
  * 以及第一个 WKC 不符之前冻结的那 64 个周期（冻结时已展开）。
  */
+/*
+ * 周期时序越界的分档计数与最长连续段。与极值互补：极值回答"最坏有多坏"，
+ * 这里回答"有多频繁、连不连续"。两者缺一，就会把偶发当成恶化、或把持续轻微
+ * 越界当成没问题。
+ *
+ * **分档边界一并印出**。把边界藏在代码里，这份分布就只对写它的人有意义；
+ * 印出来之后任何读报告的人都能解释每一档，也能发现档位被改过。
+ */
+static bool write_timing_excursions(FILE *stream,
+                                    const emaster_timing_excursions_t *excursions)
+{
+    REQUIRE_WRITE(fprintf(stream,
+        ",\"timing_excursions\":{"
+        "\"send_late_bounds_ns\":[10000,25000,50000],"
+        "\"receive_bounds_ns\":[150000,200000,250000],"
+        "\"margin_low_bounds_ns\":[150000,100000,50000],"
+        "\"send_late_buckets\":[%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "],"
+        "\"receive_buckets\":[%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "],"
+        "\"margin_buckets\":[%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "],"
+        "\"send_late_max_consecutive\":%" PRIu64 ","
+        "\"send_late_max_exchange\":%" PRIu64 ","
+        "\"receive_slow_max_consecutive\":%" PRIu64 ","
+        "\"receive_slow_max_exchange\":%" PRIu64 "}",
+        excursions->send_late_buckets[0], excursions->send_late_buckets[1],
+        excursions->send_late_buckets[2], excursions->send_late_buckets[3],
+        excursions->receive_buckets[0], excursions->receive_buckets[1],
+        excursions->receive_buckets[2], excursions->receive_buckets[3],
+        excursions->margin_buckets[0], excursions->margin_buckets[1],
+        excursions->margin_buckets[2], excursions->margin_buckets[3],
+        excursions->send_late_max_consecutive, excursions->send_late_max_exchange,
+        excursions->receive_slow_max_consecutive, excursions->receive_slow_max_exchange) >= 0);
+    return true;
+}
+
 static bool write_cycle_trace(FILE *stream, const emaster_cycle_trace_t *trace)
 {
     size_t start = (trace->write_index + EMASTER_CYCLE_TRACE_CAPACITY -
@@ -1430,6 +1464,7 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(write_observer_stop(stream, &report->observer_stop));
     REQUIRE_WRITE(fputs(",\"thread_schedstat\":", stream) != EOF);
     REQUIRE_WRITE(write_thread_schedstat(stream, report));
+    REQUIRE_WRITE(write_timing_excursions(stream, &report->timing_excursions));
     REQUIRE_WRITE(fputs(",\"cycle_trace\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_trace(stream, &report->cycle_trace));
     /* access_count 是"实际用掉多少条"，和两个容量放在一起才看得出预留是宽是紧。 */

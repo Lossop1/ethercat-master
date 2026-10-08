@@ -175,6 +175,70 @@ static void cycle_trace_open_window(emaster_cycle_trace_t *trace)
 }
 
 /*
+ * 周期时序越界的分档计数与连续段。
+ *
+ * 三个量的越界方向不同：发帧晚点与收包耗时是"越大越坏"，sync0 裕量是"越小越坏"。
+ * 分档只在越界侧细分，正常侧一律归第 0 档——"比正常还好"没有诊断价值。
+ *
+ * 连续段的判据取得比第 1 档更严（发晚 25 us、收包 200 us）：10 us 级的抖动在非实时
+ * 内核上常见，拿它当越界会让"最长连续段"恒等于运行的拍数，这个数就没有信息了。
+ */
+static void timing_excursions_record(emaster_control_session_report_t *report,
+                                     int32_t send_lateness_ns,
+                                     uint64_t receive_duration_ns,
+                                     int32_t sync0_margin_ns,
+                                     uint64_t exchange)
+{
+    emaster_timing_excursions_t *excursions = &report->timing_excursions;
+    uint32_t bucket;
+
+    bucket = 0U;
+    if (send_lateness_ns >= 50000)      { bucket = 3U; }
+    else if (send_lateness_ns >= 25000) { bucket = 2U; }
+    else if (send_lateness_ns >= 10000) { bucket = 1U; }
+    ++excursions->send_late_buckets[bucket];
+    if (send_lateness_ns >= 25000)
+    {
+        ++excursions->send_late_run;
+        if (excursions->send_late_run > excursions->send_late_max_consecutive)
+        {
+            excursions->send_late_max_consecutive = excursions->send_late_run;
+            excursions->send_late_max_exchange = exchange;
+        }
+    }
+    else
+    {
+        excursions->send_late_run = 0U;
+    }
+
+    bucket = 0U;
+    if (receive_duration_ns >= 250000U)     { bucket = 3U; }
+    else if (receive_duration_ns >= 200000U) { bucket = 2U; }
+    else if (receive_duration_ns >= 150000U) { bucket = 1U; }
+    ++excursions->receive_buckets[bucket];
+    if (receive_duration_ns >= 200000U)
+    {
+        ++excursions->receive_slow_run;
+        if (excursions->receive_slow_run > excursions->receive_slow_max_consecutive)
+        {
+            excursions->receive_slow_max_consecutive = excursions->receive_slow_run;
+            excursions->receive_slow_max_exchange = exchange;
+        }
+    }
+    else
+    {
+        excursions->receive_slow_run = 0U;
+    }
+
+    /* 裕量递减分档：>=150 us 归第 0 档，<50 us 归第 3 档。 */
+    bucket = 0U;
+    if (sync0_margin_ns < 50000)       { bucket = 3U; }
+    else if (sync0_margin_ns < 100000) { bucket = 2U; }
+    else if (sync0_margin_ns < 150000) { bucket = 1U; }
+    ++excursions->margin_buckets[bucket];
+}
+
+/*
  * 第一个 WKC 不符当下的现场：冻结不符之前的周期现场，并读一次三轴 AL 状态。
  *
  * 2026-09-16 实测推翻了这里原先"不发邮箱就不花钱"的判断：ecx_readstate 的第一发
@@ -870,6 +934,9 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                 }
             }
         }
+        timing_excursions_record(session->report, trace_sample.send_lateness_ns,
+                                 receive_duration_ns, trace_sample.sync0_margin_ns,
+                                 session->exchange);
         cycle_trace_push(&session->report->cycle_trace, &trace_sample);
     }
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis) {
