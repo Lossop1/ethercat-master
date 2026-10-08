@@ -150,6 +150,45 @@ def resolve_displacement(deployment_id):
     return None
 
 
+def resolve_wkc_policy(deployment_id):
+    """按 deployment -> error_recovery_policy_id 查策略，返回两类的阈值。
+
+    返回 {"short": (连续, 窗口次数, 窗口毫秒), "no_frame": 同}；查不到返回 None。
+
+    阈值从配置读而不是写死：这些数就是判定边界，写死在工具里之后，改配置不会改判定，
+    而"改了配置判定没跟着变"是最难发现的一类不一致。
+    """
+    root = repo_root()
+    policy_id = None
+    for path in sorted(glob.glob(os.path.join(root, "config", "deployments", "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if data.get("deployment_id") == deployment_id:
+            policy_id = data.get("error_recovery_policy_id")
+            break
+    if not policy_id:
+        return None
+
+    policy_path = os.path.join(root, "config", "error_recovery_policies", policy_id + ".json")
+    try:
+        with open(policy_path, encoding="utf-8") as handle:
+            policy = json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+    def triple(section):
+        block = policy.get(section) or {}
+        return (block.get("consecutive_error_threshold"),
+                block.get("total_error_threshold"),
+                block.get("total_error_window_ms"))
+
+    return {"short": triple("wkc_recovery"), "no_frame": triple("no_frame_recovery"),
+            "policy_id": policy_id}
+
+
 def number(text, default=0):
     """index 里读不到的字段一律是 "-"，它不等于 0，但判据里要当"没有这一项"处理。"""
     try:
@@ -158,7 +197,7 @@ def number(text, default=0):
         return default
 
 
-def judge(row, sdir, displacements):
+def judge(row, sdir, displacements, policy):
     """判一轮，返回 (failures, warnings)。两者都是人话字符串的列表。"""
     failures = []
     warnings = []
@@ -213,11 +252,28 @@ def judge(row, sdir, displacements):
         warnings.append("WKC 期望 %d ≠ %d×轴数（%d）——帧构成与从站数对不上（P12.53）"
                         % (expected_wkc, WKC_PER_SLAVE, WKC_PER_SLAVE * axes))
 
-    for key, label in (("wkc_mismatch", "WKC 不符"), ("wkc_no_frame", "整帧未回"),
+    # WKC 一类：判据是**连续**数，不是累计数。策略里 consecutive_error_threshold 与
+    # total_error_threshold（后者是滑动窗口内的次数，不是整轮累计）是两条并联的边。
+    # 用累计数比较会把"散落 2 次"与"连续 5 次"看成同一件事——实测里前者跑完、
+    # 后者中止，区别只在连续数上。
+    for key, label, section in (("wkc_max_consecutive", "短帧连续不符", "short"),
+                                ("wkc_no_frame_max_consecutive", "整帧缺失连续", "no_frame")):
+        value = number(row.get(key), 0)
+        if value <= 0:
+            continue
+        limit = (policy or {}).get(section, (None, None, None))[0]
+        if limit:
+            warnings.append("%s 最长 %d 次（阈值 %d，策略 %s）"
+                            % (label, value, limit, policy.get("policy_id")))
+        else:
+            warnings.append("%s 最长 %d 次（策略阈值未知）" % (label, value))
+
+    for key, label in (("wkc_short_window_max", "短帧窗口峰值"),
+                       ("wkc_no_frame_window_max", "整帧窗口峰值"),
                        ("deadline_missed", "截止期错失"), ("over_budget", "超预算")):
         value = number(row.get(key), 0)
         if value > 0:
-            warnings.append("%s %d 次" % (label, value))
+            warnings.append("%s %d" % (label, value))
 
     # 恒为假就区分不出任何东西，所以只提示、不判。
     if number(row.get("motion_completed"), 1) == 0:
@@ -248,13 +304,15 @@ def main():
         return 2
 
     displacements = None
+    policy = None
     if rows:
         displacements = resolve_displacement(rows[0].get("deployment", ""))
+        policy = resolve_wkc_policy(rows[0].get("deployment", ""))
 
     failed_rounds = 0
     warned_rounds = 0
     for row in rows:
-        failures, warnings = judge(row, sdir, displacements)
+        failures, warnings = judge(row, sdir, displacements, policy)
         verdict = "FAIL" if failures else ("WARN" if warnings else "PASS")
         if failures:
             failed_rounds += 1

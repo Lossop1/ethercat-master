@@ -9,6 +9,12 @@ report_row.py——工具本身有 bug 时（2026-09-29 就发生过：两个字
 的坐标，所以**整张表随时能从归档重建**。这条重建能力是那件事逼出来的，不是预留的。
 
 重建只读归档报告，不碰总线、不碰硬件。
+
+**重建必须与原索引等价，否则"能从归档重建"这句话是打折的。** 原先那六列前缀
+（series/deployment/mode/round_at/gap_s/exit_code）被硬编码成 "-"，理由是它们只存在
+于 bench_series.sh 的内存里。现在每轮目录里有 condition.txt 与 exit-code.txt，
+这六列是可恢复的 —— 而它们恰恰是跨轮比较时第一步要看的东西（确定两轮的差别在哪）。
+本工具从这两份文件取回它们；老系列没有这两份文件时仍然填 "-"，不猜。
 """
 import glob
 import os
@@ -27,6 +33,30 @@ def _row_columns():
     return out.stdout.strip().split("\t")
 
 
+def _condition(directory):
+    """取回"这一轮施加了什么"。文件不在就返回空字典，由调用方填 "-"。"""
+    fields = {}
+    path = os.path.join(directory, "condition.txt")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                key, sep, value = line.strip().partition("=")
+                if sep:
+                    fields[key.strip()] = value.strip()
+    return fields
+
+
+def _exit_code(directory):
+    """真退出码。以单轮脚本自己写下的 exit-code.txt 为准（理由见 bench_series.sh）。"""
+    path = os.path.join(directory, "exit-code.txt")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            value = handle.read().strip()
+            if value:
+                return value
+    return "-"
+
+
 def rebuild(evidence_dir):
     os.chdir(REPO)
     rounds = sorted(d for d in glob.glob(os.path.join(evidence_dir, "r*"))
@@ -40,6 +70,13 @@ def rebuild(evidence_dir):
     missing = []
     for directory in rounds:
         tag = os.path.basename(directory).split("_", 1)[1]
+        condition = _condition(directory)
+        prefix = (condition.get("series", evidence_dir),
+                  condition.get("deployment", "-"),
+                  condition.get("mode", "-"),
+                  condition.get("started_at", "-"),
+                  condition.get("gap_s", "-"),
+                  _exit_code(directory))
         name_file = os.path.join(directory, "report-name.txt")
         archive = "-"
         if os.path.exists(name_file):
@@ -48,7 +85,7 @@ def rebuild(evidence_dir):
         path = os.path.join(ARCHIVE_REL, archive)
         if archive == "-" or not os.path.exists(path):
             missing.append(tag)
-            lines.append("\t".join((evidence_dir, "-", "-", "-", "-", "-") + (tag,) +
+            lines.append("\t".join(prefix + (tag,) +
                                     ("-",) * (len(_row_columns()) - 1)))
             continue
         out = subprocess.run([sys.executable, ROW_TOOL, path, tag],
@@ -56,7 +93,7 @@ def rebuild(evidence_dir):
         row = out.stdout.strip()
         with open(os.path.join(directory, "row.tsv"), "w", encoding="utf-8") as handle:
             handle.write(row + "\n")
-        lines.append("\t".join((evidence_dir, "-", "-", "-", "-", "-") + tuple(row.split("\t"))))
+        lines.append("\t".join(prefix + tuple(row.split("\t"))))
 
     index = os.path.join(evidence_dir, "index.tsv")
     with open(index, "w", encoding="utf-8") as handle:

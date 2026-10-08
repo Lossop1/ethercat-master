@@ -30,7 +30,18 @@ import sys
 
 COLUMNS = (
     "round", "cycles", "wkc_expected", "wkc_actual",
-    "wkc_mismatch", "wkc_error", "wkc_no_frame", "first_mismatch_ex",
+    "wkc_mismatch", "wkc_error", "wkc_no_frame",
+    # 判据是"连续"，不是"累计"。策略 config/error_recovery_policies/default.json 里
+    # 写的是 wkc_recovery.consecutive_error_threshold=5 与 total_error_threshold=50
+    # （后者是 60 秒滑动窗口内的次数，不是整轮累计）。只记累计数会把两种性质不同的
+    # 现象看成一件：实测里"散落 2 次"跑完、"连续 5 次"中止，区别只在连续数上。
+    #
+    # 两类故障各有自己的一套：整帧缺失（actual_wkc<=0）与短帧（帧回来了但计数短）。
+    # 连续段是**联合**的（整帧缺失也计入连续），窗口是**分类**的（各推各的），
+    # 所以 short_window_max 可能小于 max_consecutive —— 那不是矛盾，是两个口径。
+    "wkc_max_consecutive", "wkc_no_frame_max_consecutive",
+    "wkc_short_window_max", "wkc_no_frame_window_max",
+    "first_mismatch_ex",
     "deadline_missed", "over_budget", "frame_gap", "frame_interval_max",
     "receive_max", "receive_ok_max", "errctr_max", "errctr_fail",
     "op_reached", "all_enabled", "motion_completed",
@@ -85,6 +96,10 @@ def row_for(path, round_label):
         _get(timing, "wkc_mismatch_count"),
         _get(result, "wkc_error_count"),
         _get(result, "wkc_no_frame_count"),
+        _get(result, "wkc_max_consecutive_errors"),
+        _get(result, "wkc_no_frame_max_consecutive_errors"),
+        _get(result, "wkc_short_frame_window_max"),
+        _get(result, "wkc_no_frame_window_max"),
         _get(delivery, "first_mismatch_exchange"),
         _get(timing, "deadline_missed_count"),
         _get(delivery, "over_budget_cycle_count"),
