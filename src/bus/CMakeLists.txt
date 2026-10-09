@@ -17,7 +17,7 @@ target_compile_features(emaster_soem_common PUBLIC c_std_11)
 target_include_directories(
     emaster_soem_common
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>"
-    PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/internal")
 emaster_enable_strict_warnings(emaster_soem_common)
 
 # 只读探测与拓扑映射：最高到 PRE-OP，不发过程数据。
@@ -28,7 +28,7 @@ target_compile_features(emaster_soem_adapter PUBLIC c_std_11)
 target_include_directories(
     emaster_soem_adapter
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>"
-    PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/internal")
 emaster_enable_strict_warnings(emaster_soem_adapter)
 
 # DC 配置：测传播延迟、写 SYNC0，并回读核对。
@@ -41,7 +41,7 @@ target_compile_features(emaster_soem_dc_prepare PUBLIC c_std_11)
 target_include_directories(
     emaster_soem_dc_prepare
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>"
-    PRIVATE "${CMAKE_SOURCE_DIR}/src")
+    PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/internal")
 emaster_enable_strict_warnings(emaster_soem_dc_prepare)
 
 # 控制会话：会话编排 + 观测生产 + 命令口。
