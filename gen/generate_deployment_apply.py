@@ -95,7 +95,7 @@ DEPLOYMENT_CAPACITY = 64
 
 def render(deployments: list[dict[str, Any]]) -> str:
     out: list[str] = [
-        "/* 由 tools/generate_deployment_apply.py 生成，不要手改。 */",
+        "/* 由 gen/generate_deployment_apply.py 生成，不要手改。 */",
         '#include "emaster/config/generated_deployment.h"',
         '#include "emaster/config/generated_apply.h"',
         '#include "emaster/config/generated_runtime.h"',
@@ -434,7 +434,7 @@ def render(deployments: list[dict[str, Any]]) -> str:
 
 def render_header() -> str:
     return "\n".join([
-        "/* 由 tools/generate_deployment_apply.py 生成，不要手改。 */",
+        "/* 由 gen/generate_deployment_apply.py 生成，不要手改。 */",
         "#ifndef EMASTER_CONFIG_GENERATED_DEPLOYMENT_H",
         "#define EMASTER_CONFIG_GENERATED_DEPLOYMENT_H",
         "",
@@ -471,7 +471,7 @@ def main() -> int:
     operations = operation_values(load(args.operations))
     motions = motion_values(load(args.motions))
     deployments = deployment_values(load(args.deployments), topologies, operations, motions)
-    head = "/* 由 tools/generate_deployment_apply.py 生成，不要手改。 */\n"
+    head = "/* 由 gen/generate_deployment_apply.py 生成，不要手改。 */\n"
     args.c_output.write_text(render(deployments), encoding="utf-8", newline="\n")
     args.h_output.write_text(render_header(), encoding="utf-8", newline="\n")
     rows = deployment_rows(deployments)

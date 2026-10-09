@@ -13,7 +13,7 @@
 合成的产物必须与拆分前的设备档逐字段一致 —— scripts 里有一条校验跑这件事。
 
 两个输入
-    --facts   由 tools/derive_device_facts.py 从 ESI 产出
+    --facts   由 gen/device/derive_device_facts.py 从 ESI 产出
     --policy  人写的策略档
 """
 

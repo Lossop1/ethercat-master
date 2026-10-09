@@ -17,7 +17,7 @@
  *
  * 编译与运行（本机 MinGW 与 Pi 都适用；不依赖 SOEM）：
  *   gcc -std=c11 -O2 -Isrc -o tmp/test_recovery_gap \
- *       tests/unit/cycle_clock/test_recovery_gap.c src/bus/soem/cycle_clock.c
+ *       tests/unit/cycle_clock/test_recovery_gap.c src/cyclic/clock.c
  *   ./tmp/test_recovery_gap
  */
 #define _POSIX_C_SOURCE 200809L

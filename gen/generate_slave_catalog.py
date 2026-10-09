@@ -364,7 +364,7 @@ def generate(documents: list[dict[str, Any]]) -> str:
     initializers = ",\n".join(
         profile_initializer(value, ordinal) for ordinal, value in enumerate(values)
     )
-    return f"""/* 由 tools/generate_slave_catalog.py 生成，禁止手工修改。 */
+    return f"""/* 由 gen/generate_slave_catalog.py 生成，禁止手工修改。 */
 #include "emaster/catalog/slave_profile.h"
 
 #include <stddef.h>

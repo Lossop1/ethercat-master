@@ -215,7 +215,7 @@ def generate(document: dict[str, object]) -> str:
         f"    [EMASTER_TEXT_{key.upper()}] = {c_string(messages[key])}"
         for key in MESSAGE_KEYS
     )
-    return f"""/* 由 tools/generate_messages.py 生成，禁止手工修改。 */
+    return f"""/* 由 gen/generate_messages.py 生成，禁止手工修改。 */
 #include "emaster/messages.h"
 
 static const char *const messages[EMASTER_TEXT_COUNT] = {{

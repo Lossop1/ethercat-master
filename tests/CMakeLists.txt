@@ -43,7 +43,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # ——两边各造一份，迟早问的不是同一份报告。
     #
     # 只在 Linux 上建，与 src/audit 的 report 库同因（那个库本身就这么门控着）。
-    # 报告主体份数/日志那半边的判别力由 scripts/checks/report_archive_check.py
+    # 报告主体份数/日志那半边的判别力由 checks/report_archive_check.py
     # 用变异对照另外看住：删除留声是子进程 stderr 的事，在 C 里判得重定向再恢复 fd，
     # 反而更容易把要验的东西写歪。
     add_executable(test_report_fault_fields unit/audit/test_report_fault_fields.c)

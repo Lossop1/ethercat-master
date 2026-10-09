@@ -22,7 +22,7 @@
 # 对照二进制怎么来（OLD，默认 /tmp/emaster-old25-quint）：
 #   "连上就不读"能冻住回路，靠的是阶段2.5 之前 respond 里的阻塞 write()。
 #   所以对照件 = 当前源码反向打掉那一处：
-#     git diff <阶段2.5提交> <阶段2.5提交>~1 -- src/bus/soem/command_server.c > /tmp/rev.patch
+#     git diff <阶段2.5提交> <阶段2.5提交>~1 -- src/bus/io/command_server.c > /tmp/rev.patch
 #     tar -c --exclude=./build --exclude=./.git --exclude=./runtime -C <仓库> . | tar -x -C /tmp/old_src
 #     cd /tmp/old_src && patch -p1 < /tmp/rev.patch
 #     cmake -S . -B build && cmake --build build -j4 --target emaster-master

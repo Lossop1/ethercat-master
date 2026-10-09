@@ -26,7 +26,7 @@
  *
  * 值层面归本文件管；**JSON 是否仍然合法**（新加的三块把 runtime 那个对象的收尾
  * 改成了 `}}`，少一个括号就是一份解析不了的报告）归
- * scripts/checks/report_axis_fault_check.py 用 json.loads 判，并带变异对照。
+ * checks/report_axis_fault_check.py 用 json.loads 判，并带变异对照。
  *
  * 编译与运行（本机 MinGW 建不了：src/audit 的 report 库只在 Linux 上建，见
  * src/audit/CMakeLists.txt）：

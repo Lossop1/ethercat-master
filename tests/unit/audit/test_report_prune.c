@@ -25,7 +25,7 @@
  *   4. 报告主体本身总在（削旧从不碰 run_report_path 那一份）。
  *
  * "删了要出声"（stderr 里那行 `归档削旧：…`）由
- * scripts/checks/report_archive_check.py 判——那要看子进程的 stderr，放在 C 里就得
+ * checks/report_archive_check.py 判——那要看子进程的 stderr，放在 C 里就得
  * 重定向并恢复 fd，反而更容易把要验的东西写歪。
  *
  * 编译与运行（本机 MinGW 建不了：src/audit 的 report 库只在 Linux 上建，见

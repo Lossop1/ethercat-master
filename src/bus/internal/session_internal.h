@@ -31,7 +31,7 @@
  *     存进对应索引的缓冲区并置 EC_BUF_RCVD（nicdrv.c:436-447），不是丢掉。所以
  *     观测线程**不会**把过程数据帧取走。
  *
- * 线程归属（与 scripts/checks/soem_call_sites.sh 的 ALLOWED 一一对应，那张名单
+ * 线程归属（与 checks/soem_call_sites.sh 的 ALLOWED 一一对应，那张名单
  * 是这条约束的可执行检查，改动本段时必须同步）：
  *
  *   周期线程（RT）      session_exchange.c

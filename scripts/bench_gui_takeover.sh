@@ -3,7 +3,7 @@
 # 这是 P12.19（界面多轴输入框）与 P12.20（真机验证）的实机回归。
 #
 # 为什么需要这一轮：`--selftest-takeover` 这套动作计划此前**只在假主站上跑过**
-# （scripts/checks/gui_offline_check.py）。假主站能证"框里的字被解成了目标、发到了
+# （checks/gui_offline_check.py）。假主站能证"框里的字被解成了目标、发到了
 # 命令口"，证不到"真主站认这条命令、轴真的按它动了、别的轴没动"。后者只有台架能给。
 #
 # 动作计划（界面的自检计划，见 tools/emaster_gui/app.py 的 _schedule_selftest_drive）：

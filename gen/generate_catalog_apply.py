@@ -146,7 +146,7 @@ def render(values: list[dict[str, Any]]) -> str:
     超限不再存在：唯一的限制是内存，而不是某个生成期写死的数。
     """
     L: list[str] = [
-        "/* 由 tools/generate_catalog_apply.py 生成，不要手改。 */",
+        "/* 由 gen/generate_catalog_apply.py 生成，不要手改。 */",
         '#include "emaster/config/generated_catalog.h"',
         "",
         "#include <stddef.h>",
@@ -545,7 +545,7 @@ def render_header() -> str:
     """
     return "\n".join(
         [
-            "/* 由 tools/generate_catalog_apply.py 生成，不要手改。 */",
+            "/* 由 gen/generate_catalog_apply.py 生成，不要手改。 */",
             "#ifndef EMASTER_CONFIG_GENERATED_CATALOG_H",
             "#define EMASTER_CONFIG_GENERATED_CATALOG_H",
             "",

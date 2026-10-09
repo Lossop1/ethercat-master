@@ -195,7 +195,7 @@ def render(operations: list[dict[str, Any]], motions: list[dict[str, Any]]) -> s
     后一类只能声明成"指针可变、指向内容只读"，赋值处显式转型。
     """
     L: list[str] = [
-        "/* 由 tools/generate_runtime_apply.py 生成，不要手改。 */",
+        "/* 由 gen/generate_runtime_apply.py 生成，不要手改。 */",
         '#include "emaster/config/generated_runtime.h"',
         "",
         "#include <stddef.h>",
@@ -644,7 +644,7 @@ def render_header() -> str:
     """
     return "\n".join(
         [
-            "/* 由 tools/generate_runtime_apply.py 生成，不要手改。 */",
+            "/* 由 gen/generate_runtime_apply.py 生成，不要手改。 */",
             "#ifndef EMASTER_CONFIG_GENERATED_RUNTIME_H",
             "#define EMASTER_CONFIG_GENERATED_RUNTIME_H",
             "",
@@ -685,7 +685,7 @@ def main() -> int:
     motions = motion_values(
         [json.loads(p.read_text(encoding="utf-8")) for p in sorted(args.motions.glob("*.json"))]
     )
-    head = "/* 由 tools/generate_runtime_apply.py 生成，不要手改。 */\n"
+    head = "/* 由 gen/generate_runtime_apply.py 生成，不要手改。 */\n"
     args.c_output.write_text(
         head + render(operations, motions),
         encoding="utf-8",

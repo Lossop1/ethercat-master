@@ -92,7 +92,7 @@ OBS_PORT=${OBS_PORT:-5002}
 EVIDENCE_DIR=${EVIDENCE_DIR:-$REPO/reports/_gui}
 EVIDENCE=$EVIDENCE_DIR/evidence_e2e.txt
 RUN_LOG=/tmp/gui_e2e_run.txt
-# 逐臂存档报告的地方。可覆盖**是为了让判据那一段能被离线检查**（scripts/checks/
+# 逐臂存档报告的地方。可覆盖**是为了让判据那一段能被离线检查**（checks/
 # bench_gui_e2e_summary_check.sh 就把它指到自己的夹具目录）。夹具要是写进真目录，
 # 检查跑一次就会在台架证据目录里留下六份假报告。
 RPT_DIR=${RPT_DIR:-/tmp}

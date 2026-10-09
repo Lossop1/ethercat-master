@@ -80,7 +80,7 @@ MAX_STEP_MARGIN = 0.8
 RECONNECT_INTERVAL_S = 1.0
 
 # 主站刚被拉起来那段时间的重连间隔。主站的 accept 队列只有 1 格，半开连接要 5 秒
-# 才回收（src/bus/soem/command_server.c:99-104），连接/断开快过这个节奏就会把后面的
+# 才回收（src/bus/io/command_server.c:99-104），连接/断开快过这个节奏就会把后面的
 # 连接全挤掉，客户端只会看到 Connection refused。所以这段窗口里慢一点、别重试。
 STARTUP_RETRY_S = 3.0
 

@@ -61,7 +61,7 @@ sudo env REPO="$PWD" DEPLOYMENT=<deployment-id> IDLE=60 OBSERVATION=1 TAG=first_
 
 ### 命令接口
 
-`src/bus/soem/command_server.c` 通过 AF_UNIX 流套接字接收换行结尾的文本命令。建议复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine，不要假定一次 socket read 就是一条完整回复。
+`src/bus/io/command_server.c` 通过 AF_UNIX 流套接字接收换行结尾的文本命令。建议复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine，不要假定一次 socket read 就是一条完整回复。
 
 | 命令 | 用途与约束 |
 | --- | --- |
@@ -87,7 +87,7 @@ sudo env REPO="$PWD" DEPLOYMENT=<deployment-id> IDLE=60 OBSERVATION=1 TAG=first_
 | 观测口 | `/tmp/emaster-<部署>-obs.sock` | AF_UNIX，只读；**要 `EMASTER_OBSERVATION=1` 才存在** |
 | 单轮测试 | `scripts/bench_idle.sh`、`scripts/bench_reciprocate_30deg.sh` | 跑一轮，产物落 `/tmp/<TAG>_*` |
 | 多轮测试 | `scripts/bench_series.sh` | 重复 N 轮 + 把证据收进仓库 |
-| 读报告 | `scripts/analysis/*.py` | 报告是覆盖式的，且可能几百 MB |
+| 读报告 | `analysis/*.py` | 报告是覆盖式的，且可能几百 MB |
 | 桥 | `tools/socket_bridge.py` | 把两个 unix 套接字搬成 TCP |
 | 图形界面 | `tools/emaster_gui/`（PyQt5） | 跨机，跑在**另一台机器**上 |
 | 终端面板 | `scripts/console.sh` → `tools/emaster_console.py` | 同机，TUI |
@@ -277,7 +277,7 @@ reports/_<SERIES>/
 | `panel_transcript.py` | 终端面板会话转录 |
 | `uprobe_offsets.py` | uprobe 偏移计算（开发用） |
 
-**`scripts/analysis/` 共 19 个脚本**，上面是常用的；其余看目录。
+**`analysis/` 共 19 个脚本**，上面是常用的；其余看目录。
 另有两条在 `scripts/` 顶层：`nic_counters.py --diff`（网卡收发计数差分）、
 `capture_identity.py`（装置身份 + 主机上下文）。
 
@@ -396,7 +396,7 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVER_VERBOSE=1 EMASTER_O
 ### 11.2 按阶段读指定对象
 
 ```bash
-sudo python3 scripts/analysis/extract_report.py runtime/reports/<部署>-latest.json |
+sudo python3 analysis/extract_report.py runtime/reports/<部署>-latest.json |
   grep -E '^axis[0-9]+\.(status_word|mode_display|target_position)\.'
 ```
 
@@ -822,7 +822,7 @@ wholetest/  采集记录
 cmake -S . -B build && cmake --build build -j4
 ```
 
-现有 `tests/` 通过 CTest 运行，`scripts/checks/` 验证配置链、报告与工具行为；构建检查不能替代真机协议和运动验证。
+现有 `tests/` 通过 CTest 运行，`checks/` 验证配置链、报告与工具行为；构建检查不能替代真机协议和运动验证。
 
 ---
 
@@ -847,7 +847,7 @@ config/*.json
 | 参数解析、部署查找、实时调度、回调装配、报告发布 | `apps/master/main.c`、`apps/master/console.c` |
 | JSON 到生成 C | `CMakeLists.txt`、`gen/generate_config_apply.py`、`generate_catalog_apply.py`、`generate_runtime_apply.py`、`generate_deployment_apply.py`、`generate_slave_catalog.py`（被前者 import）、`generate_error_recovery_config.py`、`generate_messages.py` |
 | 部署与轴计划校验 | `src/session/session_plan.c`、`src/config/`、`src/catalog/` |
-| SOEM 初始化、身份与 PDO/DC 配置 | `src/bus/soem/control_session.c`、`session_setup.c`、`soem_common.c` |
+| SOEM 初始化、身份与 PDO/DC 配置 | `src/bus/session/control_session.c`、`session_setup.c`、`soem_common.c` |
 | SAFE-OP 到 OP、起始位置与控制字初始值 | `session_start.c`、`cia_process_image.c` |
 | PDO 描述与字节编解码 | `src/protocol/pdo_layout.c`、`pdo_codec.c`、`cia_process_image.c` |
 
@@ -883,9 +883,9 @@ GUI/TUI/CLI
 
 命令线程主动退出实时策略；响应使用 `MSG_DONTWAIT`，短写/阻塞视作慢客户端并关闭连接，避免实时线程被 socket 写阻塞。状态类命令会在周期线程执行；客户端请求频率不等于周期频率。
 
-观测分为快、慢两路。快路由周期线程把 PDO 反馈组为帧写入 `src/bus/observation/ring.c`，独立观测 socket 供 `tools/observation_client.py` 解码；发布耗时计入报告。慢路由 `session_observer_thread.c` 通过邮箱 SDO 读设备 `slow_telemetry` 配置项，写线程安全快照；周期线程只拷贝已采样值，不执行这些 SDO。停机时请求 observer 退出，在内联停机序言各周期继续发送 PDO 等待线程退出，然后 join 并把快照写入报告。
+观测分为快、慢两路。快路由周期线程把 PDO 反馈组为帧写入 `src/observation/ring.c`，独立观测 socket 供 `tools/observation_client.py` 解码；发布耗时计入报告。慢路由 `session_observer_thread.c` 通过邮箱 SDO 读设备 `slow_telemetry` 配置项，写线程安全快照；周期线程只拷贝已采样值，不执行这些 SDO。停机时请求 observer 退出，在内联停机序言各周期继续发送 PDO 等待线程退出，然后 join 并把快照写入报告。
 
-报告由 `src/audit/run_audit.c` 累积总线访问和有效性信息，`src/audit/report_sections.c`、`run_report.c` 序列化 JSON，入口在会话完全收尾后原子发布。实时周期内不写报告文件。分析脚本位于 `scripts/analysis/`，采集编排脚本位于 `scripts/bench_*.sh`。
+报告由 `src/audit/run_audit.c` 累积总线访问和有效性信息，`src/audit/report_sections.c`、`run_report.c` 序列化 JSON，入口在会话完全收尾后原子发布。实时周期内不写报告文件。分析脚本位于 `analysis/`，采集编排脚本位于 `scripts/bench_*.sh`。
 
 ### 停止与异常动作
 
@@ -906,7 +906,7 @@ SIGINT / stop / shutdown / 应用 stop callback
 
 | 风险 | 代码证据与影响 | 建议 |
 | --- | --- | --- |
-| 本机命令口权限过宽 | `src/bus/soem/command_server.c` 将 socket `chmod 0666`；无认证，可由本机任意用户控制运动、故障复位或停机 | 改专用组和 `0660`，明确服务用户边界；TCP 桥增加认证/访问控制 |
+| 本机命令口权限过宽 | `src/bus/io/command_server.c` 将 socket `chmod 0666`；无认证，可由本机任意用户控制运动、故障复位或停机 | 改专用组和 `0660`，明确服务用户边界；TCP 桥增加认证/访问控制 |
 | 命令接收依赖一次 `read()` | 同一文件对 `SOCK_STREAM` 单次 read 缓冲后立即按命令比较；TCP/Unix stream 不保留写入消息边界，拆包会拒绝合法命令，粘包可能把多条合为一条。目标缓冲还可能将超长输入截断后按局部有效值处理 | 做换行累积解析、最大行长拒绝和一连接多命令测试；完整一行验证后才更新全轴快照 |
 | 外部目标年龄未证实为安全停机 | `main.c` 注释说明超时后 CSP/HOLD 保持上个位置；函数将 `available` 清零后也会保持最后位置。若产品要求断连后撤使能或受控减速，现行为不满足需求 | 冻结断连动作需求；实施并验证超时后停止/减速，CST 单独确认归零力矩和限幅 |
 | 每轴保护统一使用首轴比例 | `main.c` 用 `plan.axes[0]` 的运动配置/换算计算 following error 与 max step counts，再作为统一回调限制 | 每轴分别换算并检查；异齿轮比/异型号拓扑加入配置校验和测试 |

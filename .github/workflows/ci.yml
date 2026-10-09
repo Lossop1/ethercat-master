@@ -28,7 +28,7 @@ jobs:
       # （见 session_internal.h 顶部说明）。新出现一个调用点就是新出现一个潜在的
       # 共用方，必须由人确认后再登记。同样是纯文本检查，放在构建之前快速失败。
       - name: 校验 SOEM 调用点
-        run: bash scripts/checks/soem_call_sites.sh
+        run: bash checks/soem_call_sites.sh
 
       # 又一条纯文本的结构检查，与上面那条同源。主线程在进 OP 前先把自己升成
       # SCHED_FIFO 并绑核，而 Linux 上 pthread_create 新建的线程会**继承**创建者
@@ -36,7 +36,7 @@ jobs:
       # 与周期线程同核同级。同核同优先级的 FIFO 之间不抢占，所以后果是周期被整段
       # 挡住，而表面上总线照通、帧距照对。新加一个线程却忘了那一句时，这条拦住它。
       - name: 主站线程调度（离线）
-        run: python3 scripts/checks/master_thread_sched_check.py
+        run: python3 checks/master_thread_sched_check.py
 
       # 两条纯 Python 的离线检查，都不需要硬件、不需要 PyQt5，所以在 CI 上跑得动。
       # 它们钉住的是两件"出错了也不会喊"的事：界面自检日志的判定（上一轮台架监控
@@ -44,20 +44,20 @@ jobs:
       # 程序照样跑，只是每秒多重绑 122 次、日志刷到 657 KB）。
       # 放在构建之前：都是纯文本/纯 Python，几秒钟的事，应当快速失败。
       - name: 界面证据判定（离线）
-        run: python3 scripts/checks/gui_evidence_check.py
+        run: python3 checks/gui_evidence_check.py
 
       - name: 绑核缓存（离线）
-        run: python3 scripts/checks/rt_affinity_check.py
+        run: python3 checks/rt_affinity_check.py
 
       # 又是两条"写歪了不会喊"的检查。控制台的观测开关默认必须是关的：默认成开会
       # 让每个手动拉起的主站白付每拍一次的组帧代价，而屏幕上什么都不说。报告里
       # 慢速遥测那几个 0 更阴——"没读到"印成 0.0°C 长得就像"这一路很凉"，而它本来
       # 该印成「—」（P11.8）。
       - name: 控制台观测开关（离线）
-        run: bash scripts/checks/console_obs_switch_check.sh
+        run: bash checks/console_obs_switch_check.sh
 
       - name: 报告慢速遥测渲染（离线）
-        run: python3 scripts/checks/report_telemetry_check.py
+        run: python3 checks/report_telemetry_check.py
 
       # 本轮"证据留得住 + 停得下来"那一半的守卫。它们盯的三种死法有一个共同的性子：
       # **出错了也不喊**——报告文件照旧躺在原地、工具照旧退出 0、主站照旧跑着。
@@ -66,44 +66,44 @@ jobs:
       # ③ 命令口的 stop 走了一条不接安全门的空路（P12.1）：回 OK，什么都不发生。
       # 后面每条的 --mutate 是同一批检查的对抗性对照：把缺陷塞回临时副本，必须变红。
       - name: 分析工具不得硬编码报告路径（离线）
-        run: python3 scripts/checks/analysis_tools_check.py
+        run: python3 checks/analysis_tools_check.py
 
       - name: 硬编码路径检查的判别力（离线，期望不通过）
-        run: python3 scripts/checks/analysis_tools_check.py --mutate
+        run: python3 checks/analysis_tools_check.py --mutate
 
       - name: 命令口停机走安全门（离线）
-        run: python3 scripts/checks/stop_path_check.py
+        run: python3 checks/stop_path_check.py
 
       - name: 停机路径检查的判别力（离线，期望不通过）
-        run: python3 scripts/checks/stop_path_check.py --mutate
+        run: python3 checks/stop_path_check.py --mutate
 
       - name: 慢速遥测渲染的判别力（离线，期望不通过）
-        run: python3 scripts/checks/report_telemetry_check.py --mutate
+        run: python3 checks/report_telemetry_check.py --mutate
 
       # 下面两条自带 cc 编译（把报告库单独编出来跑），所以不用等 cmake 那两步：
       # 它们判的分别是"报告还解析得动吗"（少一个闭括号，C 断言全过、整份 JSON 死掉）
       # 与"削旧删了谁、删的时候出没出声"。
       - name: 报告故障字段的 JSON 合法性（离线）
-        run: python3 scripts/checks/report_axis_fault_check.py
+        run: python3 checks/report_axis_fault_check.py
 
       - name: 故障字段检查的判别力（离线，期望不通过）
-        run: python3 scripts/checks/report_axis_fault_check.py --mutate
+        run: python3 checks/report_axis_fault_check.py --mutate
 
       - name: 归档削旧与删除留声（离线）
-        run: python3 scripts/checks/report_archive_check.py
+        run: python3 checks/report_archive_check.py
 
       - name: 削旧检查的判别力（离线，期望不通过）
-        run: python3 scripts/checks/report_archive_check.py --mutate
+        run: python3 checks/report_archive_check.py --mutate
 
       # 控制台引擎与按键层的离线回归，外加启动窗口那条检查的对抗性对照。
       # 对照单独跑一次是有意的：它证明"主站还在启动"那段窗口的检查抓得住
       # 裸下标（2026-09-18 面板一帧就死、主站没人看着跑到两根轴进故障那个）。
       # 不带对照的话，这条检查哪天变成永远绿也没人知道。
       - name: 控制台引擎回归（离线）
-        run: python3 scripts/checks/console_engine_check.py --selftest
+        run: python3 checks/console_engine_check.py --selftest
 
       - name: 启动窗口检查的判别力（离线，期望不通过）
-        run: python3 scripts/checks/console_engine_check.py --mutate-startup-window
+        run: python3 checks/console_engine_check.py --mutate-startup-window
 
       - name: 配置
         run: cmake --preset linux-debug

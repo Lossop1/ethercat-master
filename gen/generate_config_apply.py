@@ -53,7 +53,7 @@ def render(topologies: list[dict[str, Any]]) -> str:
     超限时加载**响亮地失败**，不截断。
     """
     L: list[str] = [
-        "/* 由 tools/generate_config_apply.py 生成，不要手改。 */",
+        "/* 由 gen/generate_config_apply.py 生成，不要手改。 */",
         '#include "emaster/config/generated_apply.h"',
         "",
         "#include <stddef.h>",
@@ -244,7 +244,7 @@ def render_header() -> str:
     """
     return "\n".join(
         [
-            "/* 由 tools/generate_config_apply.py 生成，不要手改。 */",
+            "/* 由 gen/generate_config_apply.py 生成，不要手改。 */",
             "#ifndef EMASTER_CONFIG_GENERATED_APPLY_H",
             "#define EMASTER_CONFIG_GENERATED_APPLY_H",
             "",

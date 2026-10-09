@@ -36,7 +36,7 @@
  *
  * 编译与运行（本机 MinGW 与 Pi 都适用；不依赖 SOEM、不访问总线）：
  *   gcc -std=c11 -O2 -Iinclude -o tmp/test_slow_age \
- *       tests/unit/observation/test_slow_age.c src/bus/observation/slow.c
+ *       tests/unit/observation/test_slow_age.c src/observation/slow.c
  *   ./tmp/test_slow_age
  */
 #include "emaster/observation/slow.h"
