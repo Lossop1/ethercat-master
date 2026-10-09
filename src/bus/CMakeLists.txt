@@ -54,7 +54,10 @@ add_library(emaster_soem_control_session STATIC
     observe/session_observer.c observe/session_observer_thread.c observe/session_observation.c
     io/command_server.c)
 add_library(emaster::soem_control_session ALIAS emaster_soem_control_session)
-target_link_libraries(emaster_soem_control_session PRIVATE emaster::soem_common soem
+# topology_mapper.c 归 emaster_soem_adapter（它是只读探测那一类），而会话建立时
+# 要调 emaster_soem_session_map_topology，所以这里显式依赖 adapter。
+target_link_libraries(emaster_soem_control_session PRIVATE emaster::soem_adapter
+                                                         emaster::soem_common soem
                                                          emaster::session emaster::catalog
                                                          emaster::protocol emaster::pdo_codec
                                                          emaster::multiaxis emaster::motion
