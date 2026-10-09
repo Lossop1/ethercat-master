@@ -17,8 +17,7 @@ SOCK=/tmp/emaster-${DEPLOYMENT}.sock
 LOG=/tmp/test_csp_reliability.log
 REPORT_DST=/tmp/test_csp_reliability_report.json
 DURATION_SEC=${1:-300}
-REPO=/home/orangepi/ethercat-master
-
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # 报告路径从部署配置读，不写死：换部署时忘了同步会归档到一份别处的旧报告。
 REPORT_REL=$(DEPLOYMENT="$DEPLOYMENT" python3 -c "
 import json, os, glob, sys
@@ -38,14 +37,15 @@ if [ -z "$REPORT_REL" ]; then
 fi
 REPORT_SRC=$REPO/$REPORT_REL
 
-cd /home/orangepi/ethercat-master/build || exit 1
-
+cd "$REPO/build" || exit 1
 sudo rm -f "$SOCK" "$LOG"
 
 echo "=== CSP reliability test deployment=$DEPLOYMENT duration=${DURATION_SEC}s ==="
 echo ""
 
-sudo ./tools/master/emaster-master --deployment "$DEPLOYMENT" 2>"$LOG" &
+# ulimit -r 必须在 sudo 里的同一个 shell 提：非交互 bash 默认 0，主站拿不到 SCHED_FIFO
+# 会拒绝进 OP（部署声明 realtime.required=true）。
+sudo bash -c "ulimit -r unlimited; exec ./tools/master/emaster-master --deployment '$DEPLOYMENT'" 2>"$LOG" &
 MASTER_PID=$!
 
 for i in $(seq 1 40); do

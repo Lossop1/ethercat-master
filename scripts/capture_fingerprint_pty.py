@@ -5,6 +5,7 @@ expect 在 Windows 侧编写容易被行尾和编码破坏，这里用 paramiko 
 驱动远端程序：等提示出现后写入确认令牌，再把全部输出回显给调用者。
 """
 
+from pathlib import Path
 from __future__ import annotations
 
 import argparse
@@ -17,7 +18,7 @@ HOST = "192.168.137.54"
 USER = "orangepi"
 PASSWORD = "orangepi"
 
-DEFAULT_BINARY = "/home/orangepi/ethercat-master/build/tools/fingerprint/emaster-fingerprint"
+DEFAULT_BINARY = str(Path(__file__).resolve().parents[1] / "build/tools/fingerprint/emaster-fingerprint")
 DEFAULT_DEPLOYMENT = "orangepi-current-bench-idle"
 DEFAULT_OUTPUT = "/tmp/fingerprint-capture.json"
 CONFIRM_TOKEN = "PRE-OP"

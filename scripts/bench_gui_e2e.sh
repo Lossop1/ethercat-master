@@ -76,7 +76,7 @@
 # 会停在那里只做了一半）。取下来之后 `sudo rm` 或 `sudo chown` 一下再同步。
 set -u
 
-REPO=${REPO:-/home/orangepi/ethercat-master}
+REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 DEPLOY=${DEPLOY:-orangepi-bench-quint-30deg}
 BUILD=${BUILD:-$REPO/build}
 MASTER_BIN=${MASTER_BIN:-$BUILD/tools/master/emaster-master}

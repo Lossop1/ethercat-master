@@ -14,8 +14,7 @@
 #
 # 前置：主站已经在跑（本脚本不负责起主站）。用 --range 3 把软范围压到 ±3°，
 # 于是往返验证的默认振幅是 min(30, 3×0.6)=1.8°，全程都是小动作。
-cd /home/orangepi/ethercat-master || exit 1
-
+cd "$(dirname "$0")/.." || exit 1
 RANGE=${RANGE:-3}
 DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 OUT=/tmp/panel-out.txt

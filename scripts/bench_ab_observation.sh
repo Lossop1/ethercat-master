@@ -128,7 +128,9 @@ probe_cycle() {
 
 start_master() {
     export EMASTER_OBSERVATION=$1
-    setsid bash -c "echo \$\$ > /tmp/ab.pid; cd $REPO; exec $2 --deployment $DEPLOY" > /tmp/ab_master.log 2>&1 &
+    # ulimit -r 必须在同一个 bash 里提：非交互 bash 不读 .bashrc，默认是 0，主站拿不到
+    # SCHED_FIFO 会拒绝进 OP（部署声明 realtime.required=true），整臂白跑。
+    setsid bash -c "ulimit -r unlimited; echo \$\$ > /tmp/ab.pid; cd $REPO; exec $2 --deployment $DEPLOY" > /tmp/ab_master.log 2>&1 &
     # ab.pid 必须真的写进去了才能往下走。写不进去时后面 `kill -INT` 会打空，而
     # 打空的表现是"主站已自行退出"——一个看起来完全正常的假象，代价是整臂的停机
     # 路径和报告（见文件头 rm -f 那段）。宁可在这里硬失败。

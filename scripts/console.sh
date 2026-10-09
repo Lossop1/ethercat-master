@@ -27,7 +27,7 @@
 
 set -u
 
-REPO=/home/orangepi/ethercat-master
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 RANGE=${RANGE:-45}
 JOG_SPEED=${JOG_SPEED:-10}

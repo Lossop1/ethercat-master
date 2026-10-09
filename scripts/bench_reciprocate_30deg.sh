@@ -42,7 +42,7 @@
 
 set -u
 
-REPO=/home/orangepi/ethercat-master
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # 非交互的 bash 不读 .bashrc/.profile，ulimit -r 默认是 0，主站拿不到 SCHED_FIFO——
 # 而部署声明了 realtime.required=true，它会**拒绝进入 OP**，整轮白跑，且失败信息要到
 # 报告里才看得出来。sudo 也救不了，因为这是 rlimit 不是权限（硬上限本来就是 unlimited，

@@ -4,8 +4,7 @@
 # 终端按住一个键 = 一次性按下 + 每 30ms 左右一个重复事件。这里就是照这个节奏
 # 往 pty 里灌 '+'，然后灌 '-' 走回来。RANGE=15 是为了让 10°/s 跑满 1 秒也够地方。
 # 前置：主站已经在跑。轴会真动，跑之前确认台架周围是安全的。
-cd /home/orangepi/ethercat-master || exit 1
-
+cd "$(dirname "$0")/.." || exit 1
 RANGE=${RANGE:-15}
 DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 OUT=/tmp/panel-jog.txt

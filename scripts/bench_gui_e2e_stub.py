@@ -11,7 +11,7 @@
 
 干跑（香橙派上，root，**先确认没有真主站在跑**；证据与报告都指到 /tmp，别覆盖真台架的）：
 
-    export MASTER_BIN=/home/orangepi/ethercat-master/scripts/bench_gui_e2e_stub.py
+    export MASTER_BIN=$PWD/scripts/bench_gui_e2e_stub.py
     export ARMS='obs' DUR=5 ROUNDS=1
     export RPT_DIR=/tmp/gui_e2e_dryrun_reports EVIDENCE_DIR=/tmp/gui_e2e_dryrun_evidence
     bash scripts/bench_gui_e2e.sh

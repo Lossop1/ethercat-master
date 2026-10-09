@@ -43,7 +43,7 @@
 set -u
 
 T=/sys/kernel/debug/tracing
-REPO=/home/orangepi/ethercat-master
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BIN=$REPO/build/tools/master/emaster-master
 TAG=${TAG:-trace}
 TRACE=/tmp/${TAG}_trace.txt
