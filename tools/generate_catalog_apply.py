@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""设备目录的"填充代码"渲染层（原型）。
+"""设备目录的"填充代码"渲染层。
 
 与 generate_slave_catalog.py 的关系
     两者共用同一套校验与归一化（直接 import 那个脚本的 profile_values），只换渲染层：

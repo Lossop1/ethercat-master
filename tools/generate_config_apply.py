@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""原型：把拓扑配置渲染成"填充代码"，而不是静态初始化器。
+"""把拓扑配置渲染成"填充代码"，而不是静态初始化器。
 
-与现有 generate_runtime_config.py 的关系
+与 generate_runtime_config.py 的关系
     两者共用同一个模型层（runtime_config_model.topology_values），只换渲染层。
-    现有渲染层产出静态数组 + 初始化器，配置因此被编进二进制；
-    本渲染层产出 apply(reader)，配置在启动时从扁平文件读入。
+    生成静态数组 + 初始化器那条路会把配置编进二进制；本脚本产出 apply(reader)，
+    配置在启动时从扁平文件读入。CMakeLists.txt 调的是本脚本。
 
 为什么由 Python 给字段名、而不是让 Python 算偏移
     生成的每一行都是 "结构体字段 = 读取器取出的值"，取址和类型检查由 C 编译器做。

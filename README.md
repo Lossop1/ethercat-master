@@ -844,7 +844,7 @@ config/*.json
 | 步骤 | 主要源码 |
 | --- | --- |
 | 参数解析、部署查找、实时调度、回调装配、报告发布 | `tools/master/main.c`、`tools/master/console.c` |
-| JSON 到生成 C | `CMakeLists.txt`、`tools/generate_slave_catalog.py`、`generate_runtime_config.py`、`generate_error_recovery_config.py`、`generate_messages.py` |
+| JSON 到生成 C | `CMakeLists.txt`、`tools/generate_config_apply.py`、`generate_catalog_apply.py`、`generate_runtime_apply.py`、`generate_deployment_apply.py`、`generate_slave_catalog.py`（被前者 import）、`generate_error_recovery_config.py`、`generate_messages.py` |
 | 部署与轴计划校验 | `src/session/session_plan.c`、`src/config/`、`src/catalog/` |
 | SOEM 初始化、身份与 PDO/DC 配置 | `src/bus/soem/control_session.c`、`session_setup.c`、`soem_common.c` |
 | SAFE-OP 到 OP、起始位置与控制字初始值 | `session_start.c`、`cia_process_image.c` |

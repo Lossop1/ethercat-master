@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""运行方案与运动方案的"填充代码"渲染层（原型）。
+"""运行方案与运动方案的"填充代码"渲染层。
 
 与 generate_runtime_config.py 的关系
     共用模型层（runtime_config_model 的 operation_values / motion_values），只换渲染层。
