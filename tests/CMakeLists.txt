@@ -11,7 +11,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # 走 clock_nanosleep 的绝对时基等待，MinGW 上没有这个调用，因此只在 Linux 上建。
     add_executable(test_recovery_gap
         unit/cycle_clock/test_recovery_gap.c
-        ${CMAKE_SOURCE_DIR}/src/bus/soem/cycle_clock.c)
+        ${CMAKE_SOURCE_DIR}/src/cyclic/clock.c)
     target_include_directories(test_recovery_gap PRIVATE ${CMAKE_SOURCE_DIR}/src)
     emaster_enable_strict_warnings(test_recovery_gap)
     add_test(NAME recovery_gap COMMAND test_recovery_gap)

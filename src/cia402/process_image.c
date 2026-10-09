@@ -1,4 +1,4 @@
-#include "cia_process_image.h"
+#include "process_image.h"
 
 #include "emaster/catalog/slave_profile.h"
 

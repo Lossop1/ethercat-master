@@ -1,7 +1,7 @@
 #ifndef EMASTER_BUS_SOEM_SESSION_OBSERVER_H
 #define EMASTER_BUS_SOEM_SESSION_OBSERVER_H
 
-#include "cia_process_image.h"
+#include "cia402/process_image.h"
 #include "emaster/bus/control_session.h"
 #include "soem_common.h"
 

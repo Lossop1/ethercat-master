@@ -22,7 +22,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 
-#include "bus/soem/cycle_clock.h"
+#include "cyclic/clock.h"
 
 #include <inttypes.h>
 #include <stdint.h>

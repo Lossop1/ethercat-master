@@ -1,8 +1,8 @@
 #ifndef EMASTER_BUS_SOEM_SESSION_INTERNAL_H
 #define EMASTER_BUS_SOEM_SESSION_INTERNAL_H
 
-#include "cia_process_image.h"
-#include "cycle_clock.h"
+#include "cia402/process_image.h"
+#include "cyclic/clock.h"
 #include "emaster/bus/command_server.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/config/error_recovery_config.h"
