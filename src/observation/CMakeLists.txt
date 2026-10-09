@@ -13,7 +13,7 @@ target_compile_features(emaster_observation_slow PUBLIC c_std_11)
 target_include_directories(
     emaster_observation_slow
     PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../../include>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>"
         "$<INSTALL_INTERFACE:include>")
 emaster_enable_strict_warnings(emaster_observation_slow)
 
@@ -32,6 +32,6 @@ target_compile_features(emaster_observation PUBLIC c_std_11)
 target_include_directories(
     emaster_observation
     PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../../include>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>"
         "$<INSTALL_INTERFACE:include>")
 emaster_enable_strict_warnings(emaster_observation)
