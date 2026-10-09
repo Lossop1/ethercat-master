@@ -4,6 +4,7 @@
 #include "emaster/audit/run_report.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/config/runtime_config.h"
+#include "emaster/config/runtime_config_load.h"
 #include "emaster/messages.h"
 #include "emaster/motion/relative_position.h"
 
@@ -373,36 +374,66 @@ int main(int argc, char **argv) {
     size_t axis_capacity;
     char resolved_report_path[EMASTER_REPORT_PATH_CAPACITY];
 
-    /* 解析命令行参数：支持 --deployment <id> 指定部署配置 */
-    if (argc == 3 && strcmp(argv[1], "--deployment") == 0) {
-        deployment = emaster_deployment_config_by_id(argv[2]);
-        if (deployment == NULL) {
-            fprintf(stderr, "错误：未找到部署配置 '%s'\n", argv[2]);
-            fprintf(stderr, "可用的部署配置：\n");
-            for (size_t i = 0U; i < emaster_deployment_config_count(); ++i) {
-                const emaster_deployment_config_t *cfg = emaster_deployment_config_at(i);
-                if (cfg != NULL) {
-                    fprintf(stderr, "  %s", cfg->deployment_id);
-                    if (cfg->hostname != NULL) {
-                        fprintf(stderr, " (主机=%s)", cfg->hostname);
-                    }
-                    fprintf(stderr, "\n");
-                }
+    /*
+     * 解析命令行参数。
+     *
+     * 配置在运行时从文件加载，所以多了一件事：这些文件在哪。默认取当前目录下的
+     * config-runtime/，用 --config-dir 覆盖。其余行为不变 —— 给 --deployment 就按
+     * ID 查，不给就按当前主机名匹配。
+     *
+     * 主机名匹配在配置外置之后才有了实际用处：第三方把自己的主机名写进部署档即可，
+     * 不需要重编译。以前它匹配的是一个编译期常量。
+     */
+    {
+        const char *config_directory = "config-runtime";
+        const char *requested_deployment = NULL;
+        int argument_index;
+        bool bad_usage = false;
+
+        for (argument_index = 1; argument_index < argc && !bad_usage; ++argument_index) {
+            if (strcmp(argv[argument_index], "--config-dir") == 0 && argument_index + 1 < argc) {
+                config_directory = argv[++argument_index];
+            } else if (strcmp(argv[argument_index], "--deployment") == 0 &&
+                       argument_index + 1 < argc) {
+                requested_deployment = argv[++argument_index];
+            } else {
+                bad_usage = true;
             }
+        }
+        if (bad_usage) {
+            fprintf(stderr, "用法：%s [--config-dir <目录>] [--deployment <部署ID>]\n", argv[0]);
+            fprintf(stderr, "  --config-dir：运行时配置目录，默认 config-runtime\n");
+            fprintf(stderr, "  --deployment：显式指定部署配置ID；不给则按当前主机名匹配\n");
+            fprintf(stderr, "注意：运行参数由部署配置决定，不接受参数覆盖\n");
             return 2;
         }
-    } else if (argc == 1) {
-        /* 无参数时自动匹配当前主机 */
-        deployment = deployment_for_current_host();
-        if (deployment == NULL) {
-            /* deployment_for_current_host 已输出详细错误信息 */
+        if (!emaster_runtime_config_load(config_directory)) {
+            fprintf(stderr, "错误：无法从 '%s' 加载运行时配置\n", config_directory);
             return 1;
         }
-    } else {
-        fprintf(stderr, "用法：%s [--deployment <deployment-id>]\n", argv[0]);
-        fprintf(stderr, "  无参数：自动匹配当前主机的部署配置\n");
-        fprintf(stderr, "  --deployment：显式指定部署配置ID\n");
-        fprintf(stderr, "注意：运行参数由部署配置决定，不接受参数覆盖\n");
+        if (requested_deployment != NULL) {
+            deployment = emaster_deployment_config_by_id(requested_deployment);
+        } else {
+            deployment = deployment_for_current_host();
+            if (deployment == NULL) {
+                /* deployment_for_current_host 已输出详细错误信息 */
+                return 1;
+            }
+        }
+    }
+    if (deployment == NULL) {
+        fprintf(stderr, "错误：未找到匹配的部署配置\n");
+        fprintf(stderr, "可用的部署配置：\n");
+        for (size_t i = 0U; i < emaster_deployment_config_count(); ++i) {
+            const emaster_deployment_config_t *cfg = emaster_deployment_config_at(i);
+            if (cfg != NULL) {
+                fprintf(stderr, "  %s", cfg->deployment_id);
+                if (cfg->hostname != NULL) {
+                    fprintf(stderr, " (主机=%s)", cfg->hostname);
+                }
+                fprintf(stderr, "\n");
+            }
+        }
         return 2;
     }
 

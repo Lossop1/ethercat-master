@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "profile_id": "cyberbeast.isvd90rc-300b-100-70.rev1",
+  "reference_pdo_set_id": "dynamic_csp_csv_cst",
+  "safe_stop_status_mask": "0x0004",
+  "safe_stop_status_value": "0x0000",
+  "pdo_sets": [
+    {
+      "id": "dynamic_csp_csv_cst",
+      "module_ident": "0x00119800",
+      "module_slot": 1,
+      "mode_value": 8
+    },
+    {
+      "id": "dynamic_cst",
+      "module_ident": "0x00119800",
+      "module_slot": 1,
+      "mode_value": 10
+    },
+    {
+      "id": "fixed_csp",
+      "module_ident": "0x00219800",
+      "module_slot": 1,
+      "mode_value": 8
+    },
+    {
+      "id": "fixed_csv",
+      "module_ident": "0x00319800",
+      "module_slot": 1,
+      "mode_value": 9
+    }
+  ],
+  "conversion": {
+    "coordinate_frame": "motor_rotor",
+    "encoder_resolution_object": "0x608F:01",
+    "encoder_counts_per_motor_revolution_default": 16384,
+    "rated_torque_object": "0x6076:00",
+    "gear_ratio_object": "0x6091",
+    "must_read_from_each_physical_slave": true
+  },
+  "slow_telemetry": [
+    {
+      "name": "actual_current",
+      "index": "0x6078",
+      "subindex": 0,
+      "type": "i16",
+      "semantic": "actual_current",
+      "unit": "0.001 A"
+    },
+    {
+      "name": "cia402_error_code",
+      "index": "0x603F",
+      "subindex": 0,
+      "type": "u16",
+      "semantic": "error_code",
+      "unit": ""
+    },
+    {
+      "name": "bus_voltage",
+      "index": "0x6079",
+      "subindex": 0,
+      "type": "u32",
+      "semantic": "bus_voltage",
+      "unit": "mV"
+    },
+    {
+      "name": "mosfet_temperature",
+      "index": "0x200B",
+      "subindex": 1,
+      "type": "i16",
+      "semantic": "mosfet_temperature",
+      "unit": "0.1 degC"
+    },
+    {
+      "name": "motor_temperature",
+      "index": "0x200B",
+      "subindex": 2,
+      "type": "i16",
+      "semantic": "motor_temperature",
+      "unit": "0.1 degC"
+    },
+    {
+      "name": "actual_motor_speed",
+      "index": "0x200B",
+      "subindex": 8,
+      "type": "i32",
+      "semantic": "actual_velocity",
+      "unit": "rpm"
+    },
+    {
+      "name": "speed_command",
+      "index": "0x200B",
+      "subindex": 9,
+      "type": "i32",
+      "semantic": "target_velocity",
+      "unit": "rpm"
+    },
+    {
+      "name": "extended_servo_error_code",
+      "index": "0x203E",
+      "subindex": 0,
+      "type": "u32",
+      "semantic": "extended_error_code",
+      "unit": ""
+    },
+    {
+      "name": "servo_error_code",
+      "index": "0x203F",
+      "subindex": 0,
+      "type": "u32",
+      "semantic": "servo_error_code",
+      "unit": ""
+    },
+    {
+      "name": "target_position_readback",
+      "index": "0x607A",
+      "subindex": 0,
+      "type": "i32",
+      "semantic": "target_position_readback",
+      "unit": "count"
+    },
+    {
+      "name": "max_torque",
+      "index": "0x6072",
+      "subindex": 0,
+      "type": "u16",
+      "semantic": "max_torque",
+      "unit": ""
+    },
+    {
+      "name": "max_motor_speed",
+      "index": "0x6080",
+      "subindex": 0,
+      "type": "u32",
+      "semantic": "max_motor_speed",
+      "unit": ""
+    }
+  ]
+}
