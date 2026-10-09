@@ -43,6 +43,9 @@
 set -u
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# 构建目录跟随 CMakePresets.json 的 linux-debug（CI 也用同一个）。
+# 单数形式 $REPO/build 是旧台架树的习惯，两处不一致会让脚本去找不存在的二进制。
+BUILD=${BUILD:-$REPO/build/linux-debug}
 # 非交互的 bash 不读 .bashrc/.profile，ulimit -r 默认是 0，主站拿不到 SCHED_FIFO——
 # 而部署声明了 realtime.required=true，它会**拒绝进入 OP**，整轮白跑，且失败信息要到
 # 报告里才看得出来。sudo 也救不了，因为这是 rlimit 不是权限（硬上限本来就是 unlimited，
@@ -136,9 +139,9 @@ rm -f /tmp/emaster-*.sock
 # 由 env 把开关递进主站的环境。不写成 "$OBS_PREFIX ./build/..." 是因为空字符串会
 # 展开成一个空参数，主站会把它当成可执行文件名（P12.11 在 gui_e2e 上踩过这个）。
 if [ "$OBSERVATION" = "1" ]; then
-    env EMASTER_OBSERVATION=1 ./build/apps/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+    env EMASTER_OBSERVATION=1 $BUILD/apps/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
 else
-    ./build/apps/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+    $BUILD/apps/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
 fi
 MASTER_PID=$!
 echo "主站 pid=$MASTER_PID"

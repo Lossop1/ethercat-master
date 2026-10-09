@@ -35,6 +35,9 @@
 #               对抗客户端在第 258 组被主站主动断开（Broken pipe）——这正是设计的处置方式
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+# 构建目录跟随 CMakePresets.json 的 linux-debug（CI 也用同一个）。
+# 单数形式 $REPO/build 是旧台架树的习惯，两处不一致会让脚本去找不存在的二进制。
+BUILD=${BUILD:-$REPO/build/linux-debug}
 DEPLOY=${DEPLOY:-orangepi-bench-quint-30deg}
 SOCK=/tmp/emaster-${DEPLOY}.sock
 OSOCK=/tmp/emaster-${DEPLOY}-obs.sock
@@ -49,7 +52,7 @@ sys.exit(1)
 " 2>/dev/null)
 if [ -z "$REPORT_REL" ]; then echo "错误：读不出部署 $DEPLOY 的 run_report_path" >&2; exit 1; fi
 REPORT=$REPO/$REPORT_REL
-NEW=$REPO/build/apps/master/emaster-master
+NEW=$BUILD/apps/master/emaster-master
 OLD=${OLD:-/tmp/emaster-old25-quint}
 DUR=${DUR:-40}
 OUT=${OUT:-/tmp/ab_out.txt}

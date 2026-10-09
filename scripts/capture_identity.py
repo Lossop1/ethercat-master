@@ -285,7 +285,7 @@ def main():
     # 工作区脏意味着"源码提交"不足以标识这一轮跑的代码，必须一起记。
     lines.append("git_dirty=%s" % ("yes" if (rc == 0 and dirty) else "no"))
 
-    binary = os.path.join(REPO, "build", "tools", "master", "emaster-master")
+    binary = os.path.join(REPO, "build", "linux-debug", "apps", "master", "emaster-master")
     lines.append("binary=%s" % os.path.relpath(binary, REPO))
     lines.append("binary_sha256=%s" % (sha256(binary) if os.path.isfile(binary) else "missing"))
 

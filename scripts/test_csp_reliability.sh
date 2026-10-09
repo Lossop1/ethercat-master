@@ -18,6 +18,9 @@ LOG=/tmp/test_csp_reliability.log
 REPORT_DST=/tmp/test_csp_reliability_report.json
 DURATION_SEC=${1:-300}
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# 构建目录跟随 CMakePresets.json 的 linux-debug（CI 也用同一个）。
+# 单数形式 $REPO/build 是旧台架树的习惯，两处不一致会让脚本去找不存在的二进制。
+BUILD=${BUILD:-$REPO/build/linux-debug}
 # 报告路径从部署配置读，不写死：换部署时忘了同步会归档到一份别处的旧报告。
 REPORT_REL=$(DEPLOYMENT="$DEPLOYMENT" python3 -c "
 import json, os, glob, sys
@@ -37,7 +40,7 @@ if [ -z "$REPORT_REL" ]; then
 fi
 REPORT_SRC=$REPO/$REPORT_REL
 
-cd "$REPO/build" || exit 1
+cd "$REPO/build/linux-debug" || exit 1
 sudo rm -f "$SOCK" "$LOG"
 
 echo "=== CSP reliability test deployment=$DEPLOYMENT duration=${DURATION_SEC}s ==="

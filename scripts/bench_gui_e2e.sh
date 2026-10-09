@@ -78,7 +78,7 @@ set -u
 
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 DEPLOY=${DEPLOY:-orangepi-bench-quint-30deg}
-BUILD=${BUILD:-$REPO/build}
+BUILD=${BUILD:-$REPO/build/linux-debug}
 MASTER_BIN=${MASTER_BIN:-$BUILD/apps/master/emaster-master}
 DUR=${DUR:-60}                 # 每个 GUI 臂跑多久
 ROUNDS=${ROUNDS:-1}

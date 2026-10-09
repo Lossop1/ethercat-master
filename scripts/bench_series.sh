@@ -1,35 +1,60 @@
-﻿#!/bin/bash
-# 鍙版灦澶氳疆娴嬭瘯椹卞姩鍣細鎶?璺戜竴杞?鐨勮剼鏈噸澶?N 杞紝骞舵妸姣忎竴杞殑璇佹嵁褰掓嫝鍒颁粨搴撻噷銆?#
-#   sudo env DEPLOYMENT=<閮ㄧ讲ID> SERIES=<绯诲垪鍚? ROUNDS=6 GAP=60 MODE=reciprocate \
+#!/bin/bash
+# 台架多轮测试驱动器：把"跑一轮"的脚本重复 N 轮，并把每一轮的证据归拢到仓库里。
+#
+#   sudo env DEPLOYMENT=<部署ID> SERIES=<系列名> ROUNDS=6 GAP=60 MODE=reciprocate \
 #        bash scripts/bench_series.sh
 #
-# 涓轰粈涔堣鏈夎繖涓€灞傘€傛帓鏌?杩欐潯鏁呴殰鏄繀鐜般€侀殢鏈恒€佽繕鏄病鏈?鍙兘闈犺繛璺戯紝鑰屽崟杞剼鏈?# 锛坆ench_idle.sh / bench_reciprocate_30deg.sh锛変竴娆″彧璺戜竴杞€佷骇鐗╄惤鍦?/tmp銆傝繛璺?# 鍗佸嚑杞箣鍚庯紝"绗嚑杞槸浠€涔堝舰鐘?灏辨暎鍦ㄤ竴鍫?/tmp 鏂囦欢閲岋紝鎶ュ憡鍙堟槸瑕嗙洊寮忕殑鈥斺€斾笂涓€杞?# 杩樻病鐪嬪氨琚笅涓€杞洊鎺夈€傝繖涓剼鏈妸閭ｄ欢浜嬫敹鎴愪竴浠讹細**姣忚疆涓€浠借嚜瓒崇殑璇佹嵁鐩綍**銆?#
-# 瀹冧笉鑷繁璧蜂富绔欍€佷笉鑷繁鍙戠洰鏍囷紝閭ｄ簺浠嶇敱鍗曡疆鑴氭湰璐熻矗锛涜繖閲屽彧绠?閲嶅 + 鏀惰瘉鎹?銆?# 鎵€浠ュ弬鏁颁笉鐢ㄥ湪杩欓噷鍐嶅垪涓€閬嶁€斺€旂幆澧冨彉閲忓師鏍疯瀛愯剼鏈户鎵匡紙瑙佷笅闈?鍙傛暟"锛夈€?#
-# 鍙傛暟锛堢幆澧冨彉閲忥級锛?#   DEPLOYMENT  蹇呭～銆傞儴缃?ID銆傛病鏈夐粯璁ゅ€硷細鍐欎竴涓粯璁ら儴缃茬瓑浜庢妸鏌愪竴涓彴鏋跺啓杩涘伐鍏烽噷銆?#   SERIES      蹇呭～銆傜郴鍒楀悕锛屽喅瀹氳瘉鎹洰褰?reports/_<SERIES>/銆?#   ROUNDS      杞暟锛岄粯璁?6銆?#   GAP         杞棿闂撮殧绉掓暟锛岄粯璁?60銆?*杩欎釜鍊兼湰韬槸鍙橀噺**锛氳儗闈犺儗閲嶅惎浼氫笉浼氳椹卞姩鍣?#               鏉ヤ笉鍙婂氨缁紝鏄緟鏌ョ殑闂涔嬩竴锛屾墍浠ラ棿闅旇鑳借皟銆佸苟涓旇杩?index.tsv銆?#   MODE        idle | reciprocate锛岄粯璁?reciprocate锛屽喅瀹氳皟鍝釜鍗曡疆鑴氭湰銆?#   鍏朵綑锛圖URATION锛廡RAVERSE锛廌EGREES锛廟ATE锛廜NLY_AXIS锛廔DLE锛廜BSERVATION 鈥︼級
-#               鍘熸牱浼犵粰鍗曡疆鑴氭湰锛屽悇鑷湁鍚勮嚜鏂囨。锛岃繖閲屼笉閲嶅涔熶笉鏍￠獙銆?#
-# 浜х墿锛歳eports/_<SERIES>/
-#         index.tsv            姣忚疆涓€琛岋紙琛ㄥご鏉ヨ嚜 report_row.py --header锛?#         r<NN>_<TAG>/master.log      涓荤珯鏃ュ織
-#         r<NN>_<TAG>/outcome.txt     鍗曡疆鑴氭湰鐨勫叏绋嬭緭鍑?#         r<NN>_<TAG>/client.log      瀹㈡埛绔棩蹇楋紙鏈夌殑璇濓級
-#         r<NN>_<TAG>/summary.txt     report_summary.py 瀵硅杞姤鍛婄殑杈撳嚭
-#         r<NN>_<TAG>/row.tsv         璇ヨ疆鍦?index.tsv 閲岄偅涓€琛?#         r<NN>_<TAG>/report-name.txt 璇ヨ疆鍦ㄥ綊妗ｇ洰褰曢噷鐨勫畬鏁存姤鍛婃枃浠跺悕
-#         r<NN>_<TAG>/condition.txt     杩欎竴杞柦鍔犵殑鏉′欢锛堣酱鏁?鏃堕暱/鑺傛媿/闂撮殧/瑙傛祴鈥︼級
-#         r<NN>_<TAG>/device-identity.txt 杩欎竴杞窇鐨勬槸浠€涔堜唬鐮併€佷粈涔堥厤缃€佹€荤嚎涓婃槸鍝嚑鍙?#         r<NN>_<TAG>/anomalies.tsv     璇ヨ疆涓荤珯鏃ュ織閲岀殑寮傚父锛屾寜鎺㈢储浠诲姟涔?3.4 鑺傜殑鍒?#         r<NN>_<TAG>/notes.md          鐜板満瑙傚療璁板綍锛?娌＄湅鎳傜殑"涔熷啓鍦ㄨ繖閲?#         r<NN>_<TAG>/nic-before.txt    缃戝崱鏀跺彂璁℃暟锛堣疆鍓嶏級
-#         r<NN>_<TAG>/nic-after.txt     缃戝崱鏀跺彂璁℃暟锛堣疆鍚庯級
-#         r<NN>_<TAG>/nic-diff.txt      涓よ€呯殑宸笌鍒ゅ畾锛氬抚鏈夋病鏈夊洖鍒扮綉鍗?#       **瀹屾暣鎶ュ憡涓嶅叆搴?*锛堝嚑鍗佸埌鍑犵櫨 MB锛夛紝瀹冪暀鍦ㄩ儴缃查厤缃?run_report_path 鎵€鎸?#       鐩綍鐨?archive/ 涓嬶紝涓婇潰閭ｄ釜鏂囦欢鍚嶅氨鏄寚鍚戝畠鐨勫潗鏍囥€?#
-# 閫€鍑虹爜锛? = 鍏ㄩ儴杞閮借窇瀹屼簡锛?*涓嶄唬琛ㄦ瘡杞兘鎴愬姛**鈥斺€旀垚璐ュ湪 index.tsv 閲岀湅锛夛紱
-#         1 = 鐜涓嶅锛堟病鏈?root銆佹病鏈?DEPLOYMENT銆佹姤鍛婅矾寰勮В鏋愪笉鍑烘潵锛夈€?
+# 为什么要有这一层。排查"这条故障是必现、随机、还是没有"只能靠连跑，而单轮脚本
+# （bench_idle.sh / bench_reciprocate_30deg.sh）一次只跑一轮、产物落在 /tmp。连跑
+# 十几轮之后，"第几轮是什么形状"就散在一堆 /tmp 文件里，报告又是覆盖式的——上一轮
+# 还没看就被下一轮盖掉。这个脚本把那件事收成一件：**每轮一份自足的证据目录**。
+#
+# 它不自己起主站、不自己发目标，那些仍由单轮脚本负责；这里只管"重复 + 收证据"。
+# 所以参数不用在这里再列一遍——环境变量原样被子脚本继承（见下面"参数"）。
+#
+# 参数（环境变量）：
+#   DEPLOYMENT  必填。部署 ID。没有默认值：写一个默认部署等于把某一个台架写进工具里。
+#   SERIES      必填。系列名，决定证据目录 reports/_<SERIES>/。
+#   ROUNDS      轮数，默认 6。
+#   GAP         轮间间隔秒数，默认 60。**这个值本身是变量**：背靠背重启会不会让驱动器
+#               来不及就绪，是待查的问题之一，所以间隔要能调、并且记进 index.tsv。
+#   MODE        idle | reciprocate，默认 reciprocate，决定调哪个单轮脚本。
+#   其余（DURATION／TRAVERSE／DEGREES／RATE／ONLY_AXIS／IDLE／OBSERVATION …）
+#               原样传给单轮脚本，各自有各自文档，这里不重复也不校验。
+#
+# 产物：reports/_<SERIES>/
+#         index.tsv            每轮一行（表头来自 report_row.py --header）
+#         r<NN>_<TAG>/master.log      主站日志
+#         r<NN>_<TAG>/outcome.txt     单轮脚本的全程输出
+#         r<NN>_<TAG>/client.log      客户端日志（有的话）
+#         r<NN>_<TAG>/summary.txt     report_summary.py 对该轮报告的输出
+#         r<NN>_<TAG>/row.tsv         该轮在 index.tsv 里那一行
+#         r<NN>_<TAG>/report-name.txt 该轮在归档目录里的完整报告文件名
+#         r<NN>_<TAG>/condition.txt     这一轮施加的条件（轴数/时长/节拍/间隔/观测…）
+#         r<NN>_<TAG>/device-identity.txt 这一轮跑的是什么代码、什么配置、总线上是哪几台
+#         r<NN>_<TAG>/anomalies.tsv     该轮主站日志里的异常，按探索任务书 3.4 节的列
+#         r<NN>_<TAG>/notes.md          现场观察记录；"没看懂的"也写在这里
+#         r<NN>_<TAG>/nic-before.txt    网卡收发计数（轮前）
+#         r<NN>_<TAG>/nic-after.txt     网卡收发计数（轮后）
+#         r<NN>_<TAG>/nic-diff.txt      两者的差与判定：帧有没有回到网卡
+#       **完整报告不入库**（几十到几百 MB），它留在部署配置 run_report_path 所指
+#       目录的 archive/ 下，上面那个文件名就是指向它的坐标。
+#
+# 退出码：0 = 全部轮次都跑完了（**不代表每轮都成功**——成败在 index.tsv 里看）；
+#         1 = 环境不对（没有 root、没有 DEPLOYMENT、报告路径解析不出来）。
+
 set -u
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 1
 
-fail() { echo "閿欒锛?1" >&2; exit 1; }
+fail() { echo "错误：$1" >&2; exit 1; }
 
-[ "$(id -u)" = "0" ] || fail "蹇呴』鍦?root 涓嬭繍琛岋紙鍗曡疆鑴氭湰瑕?mlockall + SCHED_FIFO锛?
+[ "$(id -u)" = "0" ] || fail "必须在 root 下运行（单轮脚本要 mlockall + SCHED_FIFO）"
 DEPLOYMENT="${DEPLOYMENT:-${EMASTER_DEPLOYMENT:-}}"
-[ -n "$DEPLOYMENT" ] || fail "娌℃湁缁?DEPLOYMENT锛堜篃涓嶈鐢ㄩ粯璁ゅ€尖€斺€旈粯璁ゅ€肩瓑浜庢妸鏌愪釜鍙版灦鍐欒繘宸ュ叿閲岋級"
+[ -n "$DEPLOYMENT" ] || fail "没有给 DEPLOYMENT（也不要用默认值——默认值等于把某个台架写进工具里）"
 SERIES="${SERIES:-}"
-[ -n "$SERIES" ] || fail "娌℃湁缁?SERIES锛堝畠鍐冲畾璇佹嵁鐩綍 reports/_<SERIES>/锛?
+[ -n "$SERIES" ] || fail "没有给 SERIES（它决定证据目录 reports/_<SERIES>/）"
 ROUNDS="${ROUNDS:-6}"
 GAP="${GAP:-60}"
 MODE="${MODE:-reciprocate}"
@@ -37,12 +62,17 @@ MODE="${MODE:-reciprocate}"
 case "$MODE" in
     idle)        ROUND_SCRIPT="$REPO/scripts/bench_idle.sh" ;;
     reciprocate) ROUND_SCRIPT="$REPO/scripts/bench_reciprocate_30deg.sh" ;;
-    *)           fail "涓嶈璇?MODE=$MODE锛坕dle | reciprocate锛? ;;
+    *)           fail "不认识 MODE=$MODE（idle | reciprocate）" ;;
 esac
-# 鏌ュ瓨鍦ㄤ笌鍙锛?*涓嶆煡鍙墽琛屼綅**锛氭湰浠撳簱 scripts/ 涓嬬殑鑴氭湰涓€寰嬩互 `bash <鑴氭湰>` 璋冪敤锛?# 绱㈠紩閲屼篃閮芥槸 100644锛堝彧鏈夋瀬灏戞暟琚埆鐨勮剼鏈敤 [ -x ] 鏌ヨ繃鐨勬墠甯﹀彲鎵ц浣嶏級銆?# 杩欓噷鑻ユ煡 -x锛屽氨闇€瑕佹瘡涓崟杞剼鏈澶栧甫涓€涓潈闄愪綅锛屼笌浠撳簱绾﹀畾鐩稿弽銆?[ -r "$ROUND_SCRIPT" ] || fail "鍗曡疆鑴氭湰涓嶅瓨鍦ㄦ垨涓嶅彲璇伙細$ROUND_SCRIPT"
+# 查存在与可读，**不查可执行位**：本仓库 scripts/ 下的脚本一律以 `bash <脚本>` 调用，
+# 索引里也都是 100644（只有极少数被别的脚本用 [ -x ] 查过的才带可执行位）。
+# 这里若查 -x，就需要每个单轮脚本额外带一个权限位，与仓库约定相反。
+[ -r "$ROUND_SCRIPT" ] || fail "单轮脚本不存在或不可读：$ROUND_SCRIPT"
 
-# 鎶ュ憡璺緞鎸?deployment_id 浠庨厤缃噷鎵撅紝涓嶆寜鏂囦欢鍚嶇寽锛堟枃浠跺悕鐢ㄤ笅鍒掔嚎銆両D 鐢ㄨ繛瀛楃锛夛紝
-# 涔熶笉鍐欐鈥斺€旀崲閮ㄧ讲鏃跺繕浜嗗悓姝ヤ細璇诲畬涓€浠藉埆澶勭殑鏃ф姤鍛婂嵈鐪嬩笉鍑哄紓甯搞€?# 杩欎竴娈典笌 tools/verify_p25_motion.sh 鍚屼竴鏉¤鍒欍€?REPORT_REL=$(DEPLOYMENT="$DEPLOYMENT" python3 -c "
+# 报告路径按 deployment_id 从配置里找，不按文件名猜（文件名用下划线、ID 用连字符），
+# 也不写死——换部署时忘了同步会读完一份别处的旧报告却看不出异常。
+# 这一段与 tools/verify_p25_motion.sh 同一条规则。
+REPORT_REL=$(DEPLOYMENT="$DEPLOYMENT" python3 -c "
 import glob, json, os, sys
 target = os.environ['DEPLOYMENT']
 for path in sorted(glob.glob(os.path.join('$REPO', 'config', 'deployments', '*.json'))):
@@ -52,7 +82,7 @@ for path in sorted(glob.glob(os.path.join('$REPO', 'config', 'deployments', '*.j
             sys.exit(0)
 sys.exit(1)
 " 2>/dev/null)
-[ -n "$REPORT_REL" ] || fail "璇讳笉鍑洪儴缃?$DEPLOYMENT 鐨?run_report_path"
+[ -n "$REPORT_REL" ] || fail "读不出部署 $DEPLOYMENT 的 run_report_path"
 REPORT="$REPO/$REPORT_REL"
 REPORT_DIR="$(dirname "$REPORT")"
 ARCHIVE_DIR="$REPORT_DIR/archive"
@@ -61,14 +91,15 @@ EVIDENCE="$REPO/reports/_$SERIES"
 mkdir -p "$EVIDENCE"
 INDEX="$EVIDENCE/index.tsv"
 if [ ! -f "$INDEX" ]; then
-    # 琛ㄥご = 鏈剼鏈嚜宸遍偅鍑犲垪 + report_row.py 鐨勫垪锛堜袱澶勫悇鍐欏悇鐨勪細婕傦紝鎵€浠ュ悎鎴愪竴娆★級銆?    printf 'series\tdeployment\tmode\tround_at\tgap_s\texit_code\t%s\n' \
+    # 表头 = 本脚本自己那几列 + report_row.py 的列（两处各写各的会漂，所以合成一次）。
+    printf 'series\tdeployment\tmode\tround_at\tgap_s\texit_code\t%s\n' \
         "$(python3 "$REPO/analysis/report_row.py" --header)" > "$INDEX"
 fi
 
-echo "绯诲垪=$SERIES 閮ㄧ讲=$DEPLOYMENT 妯″紡=$MODE 杞暟=$ROUNDS 闂撮殧=${GAP}s"
-echo "鍗曡疆鑴氭湰=$ROUND_SCRIPT"
-echo "璇佹嵁鐩綍=$EVIDENCE"
-echo "鎶ュ憡=$REPORT"
+echo "系列=$SERIES 部署=$DEPLOYMENT 模式=$MODE 轮数=$ROUNDS 间隔=${GAP}s"
+echo "单轮脚本=$ROUND_SCRIPT"
+echo "证据目录=$EVIDENCE"
+echo "报告=$REPORT"
 echo
 
 for round_index in $(seq 1 "$ROUNDS"); do
@@ -77,8 +108,9 @@ for round_index in $(seq 1 "$ROUNDS"); do
     ROUND_DIR="$EVIDENCE/$(printf 'r%02d' "$round_index")_$TAG"
     mkdir -p "$ROUND_DIR"
 
-    # 鏉′欢璁板綍銆備簨鍚庢瘮杈冧袱杞椂锛岀涓€姝ュ氨鏄‘瀹氬畠浠殑宸埆鍦ㄥ摢锛涜€岃疆娆℃槸鑴氭湰寰幆鍑烘潵鐨勶紝
-    # 鍛戒护琛屽巻鍙查噷鍙湁涓€鏉″懡浠わ紝鐪嬩笉鍑烘瘡涓€杞悇鑷殑鏉′欢銆?    {
+    # 条件记录。事后比较两轮时，第一步就是确定它们的差别在哪；而轮次是脚本循环出来的，
+    # 命令行历史里只有一条命令，看不出每一轮各自的条件。
+    {
         echo "series=$SERIES"
         echo "round=$round_index"
         echo "tag=$TAG"
@@ -88,69 +120,88 @@ for round_index in $(seq 1 "$ROUNDS"); do
         echo "gap_s=$GAP"
         echo "rounds=$ROUNDS"
         echo "round_script=$ROUND_SCRIPT"
-        # 鍏朵綑鏉′欢鐢卞崟杞剼鏈户鎵匡紝杩欓噷鐓ф牱璁颁竴浠斤細瀹冧滑鏄?杩愬姩褰㈡€?鐨勫叏閮ㄥ弬鏁般€?        for name in DURATION IDLE TRAVERSE DEGREES RATE WAVE ONLY_AXIS \
+        # 其余条件由单轮脚本继承，这里照样记一份：它们是"运动形态"的全部参数。
+        for name in DURATION IDLE TRAVERSE DEGREES RATE WAVE ONLY_AXIS \
                     REPORT_INTERVAL OBSERVATION SETTLE_TICKS; do
             value="${!name:-}"
             [ -n "$value" ] && echo "$(printf '%s' "$name" | tr 'A-Z' 'a-z')=$value"
         done
     } > "$ROUND_DIR/condition.txt"
 
-    # 瑁呯疆韬唤锛氳繖涓€杞窇鐨勬槸浠€涔堜唬鐮併€佷粈涔堥厤缃€佹€荤嚎涓婃彃鐨勬槸鍝嚑鍙般€?    # 娌℃湁瀹冿紝璺ㄨ疆娆′笌璺ㄥぉ鐨勬瘮杈冧笉鎴愮珛銆傞噰闆嗗け璐ュ彧鍐欎竴琛岃鏄庯紝涓嶈鏁磋疆鍋滀笅 鈥斺€?    # 涓€涓淳鐢熸枃浠朵笉璇ユ嫋鍨竴杞帰鏌ャ€?    python3 "$REPO/scripts/capture_identity.py" "$ROUND_DIR/device-identity.txt" \
+    # 装置身份：这一轮跑的是什么代码、什么配置、总线上插的是哪几台。
+    # 没有它，跨轮次与跨天的比较不成立。采集失败只写一行说明，不让整轮停下 ——
+    # 一个派生文件不该拖垮一轮探查。
+    python3 "$REPO/scripts/capture_identity.py" "$ROUND_DIR/device-identity.txt" \
         --deployment "$DEPLOYMENT" >/dev/null 2>&1 ||
-        echo "capture_error=閲囬泦澶辫触锛堟鏃?device-identity.txt 涓嶅彲鐢紝璇ヨ疆鐨勮法杞瘮杈冧笉鎴愮珛锛? \
+        echo "capture_error=采集失败（此时 device-identity.txt 不可用，该轮的跨轮比较不成立）" \
             > "$ROUND_DIR/device-identity.txt"
 
-    # 缃戝崱鏀跺彂璁℃暟锛氳疆鍓嶅揩鐓с€?*杩欐槸涓荤珯杞欢涔嬪鐨勫敮涓€瑙傛祴鐐?*锛岀敤鏉ュ垎杈?    # "甯ф病鍥炴潵"锛堥摼璺?浠庣珯锛変笌"甯у洖鏉ヤ簡涓荤珯娌¤"锛堜富鏈猴級銆傛帴鍙ｅ悕浠庝笂闈㈤偅浠?    # device-identity.txt 閲屽彇锛屼笉鍦ㄨ繖閲岄噸澶嶈В鏋愰厤缃€斺€斾袱澶勫悇瑙ｆ瀽涓€娆★紝灏嗘潵鏀归厤缃?    # 灏变細鏈変竴澶勫繕鏀广€?    NIC_IFACE="$(sed -n 's/^interface=//p' "$ROUND_DIR/device-identity.txt" 2>/dev/null)"
+    # 网卡收发计数：轮前快照。**这是主站软件之外的唯一观测点**，用来分辨
+    # "帧没回来"（链路/从站）与"帧回来了主站没读"（主机）。接口名从上面那份
+    # device-identity.txt 里取，不在这里重复解析配置——两处各解析一次，将来改配置
+    # 就会有一处忘改。
+    NIC_IFACE="$(sed -n 's/^interface=//p' "$ROUND_DIR/device-identity.txt" 2>/dev/null)"
     if [ -n "$NIC_IFACE" ] && [ "$NIC_IFACE" != "unknown" ]; then
         python3 "$REPO/scripts/nic_counters.py" "$ROUND_DIR/nic-before.txt" \
             --interface "$NIC_IFACE" >/dev/null 2>&1 || true
     fi
 
-    # 鐜板満璁板綍妯℃澘銆傛帰鏌ョ殑缁撹缁忓父鏉ヨ嚜"娌＄湅鎳傜殑"閭ｅ嚑鏉★紝缁欏畠涓€涓浐瀹氱殑鍦版柟锛?    # 鍏嶅緱瀹冧滑鍙暀鍦ㄧ粓绔粴鍔ㄩ噷銆?    [ -f "$ROUND_DIR/notes.md" ] || cat > "$ROUND_DIR/notes.md" <<'NOTES'
-# 瑙傚療璁板綍
+    # 现场记录模板。探查的结论经常来自"没看懂的"那几条，给它一个固定的地方，
+    # 免得它们只留在终端滚动里。
+    [ -f "$ROUND_DIR/notes.md" ] || cat > "$ROUND_DIR/notes.md" <<'NOTES'
+# 观察记录
 
-## 鐜板満
+## 现场
 
-## 娌＄湅鎳傜殑
+## 没看懂的
 
 NOTES
 
-    echo "===== 绗?$round_index/$ROUNDS 杞?$TAG 寮€濮?$ROUND_AT ====="
+    echo "===== 第 $round_index/$ROUNDS 轮 $TAG 开始 $ROUND_AT ====="
 
-    # 鍒犳帀鏈疆鐨勬棫浜х墿锛岄伩鍏?璇诲埌浜嗕笂涓€杞殑 done"杩欑鍋囬€氳繃銆?    rm -f "/tmp/${TAG}_done" "/tmp/${TAG}_master.log" \
+    # 删掉本轮的旧产物，避免"读到了上一轮的 done"这种假通过。
+    rm -f "/tmp/${TAG}_done" "/tmp/${TAG}_master.log" \
           "/tmp/${TAG}_outcome.txt" "/tmp/${TAG}_client.log"
 
     TAG="$TAG" bash "$ROUND_SCRIPT" >/dev/null 2>&1
     EXIT_CODE=$?
     #
-    # 浠ュ崟杞剼鏈嚜宸卞啓涓嬬殑 _done 涓哄噯锛?? 鍙綔鍏滃簳銆?    # 鐞嗙敱锛氬崟杞剼鏈殑 finish() 涓€搴﹀彧 echo 涓?exit锛屼簬鏄?璺戞弧锛忔湁绌烘。锛忚涓荤珯涓柇锛?    # shutdown 娌″仠浣?鍥涚缁撳眬鍦?$? 閲屽叏鏄?0锛岃€?index.tsv 鐨?exit_code 鍒楀彇鐨勫氨鏄?$?
-    # 鈥斺€旀敹灏炬帀杞撮偅绉嶈疆娆′細鏄剧ず鎴愬共骞插噣鍑€鐨勪竴杞紙2026-10-08 瀹炴祴鍒颁竴娆★級銆?    # finish() 宸茬粡琛ヤ笂 exit锛涜繖閲屽啀浠?_done 涓哄噯锛屾槸鍥犱负閭ｄ釜鏂囦欢鏄?*鍒ゅ畾鍙戠敓鐨勫綋鍦?*
-    # 鍐欎笅鐨勶紝姣旇皟鐢ㄦ柟璇诲埌鐨?$? 鏇存帴杩戜簨瀹烇紝涔熻兘鎸′綇灏嗘潵鍐嶆湁浜烘紡鍐?exit銆?    # 鏈疆寮€濮嬫椂 _done 宸茶鍒犳帀锛屾墍浠ユ枃浠朵笉瀛樺湪灏辫鏄庤繖涓€杞病璧板埌鍒ゅ畾锛屾鏃剁敤 $?銆?    if [ -f "/tmp/${TAG}_done" ]; then
+    # 以单轮脚本自己写下的 _done 为准，$? 只作兜底。
+    # 理由：单轮脚本的 finish() 一度只 echo 不 exit，于是"跑满／有空档／被主站中断／
+    # shutdown 没停住"四种结局在 $? 里全是 0，而 index.tsv 的 exit_code 列取的就是 $?
+    # ——收尾掉轴那种轮次会显示成干干净净的一轮（2026-10-08 实测到一次）。
+    # finish() 已经补上 exit；这里再以 _done 为准，是因为那个文件是**判定发生的当场**
+    # 写下的，比调用方读到的 $? 更接近事实，也能挡住将来再有人漏写 exit。
+    # 本轮开始时 _done 已被删掉，所以文件不存在就说明这一轮没走到判定，此时用 $?。
+    if [ -f "/tmp/${TAG}_done" ]; then
         EXIT_CODE="$(cat "/tmp/${TAG}_done")"
     fi
-    echo "  鍗曡疆鑴氭湰閫€鍑虹爜=$EXIT_CODE锛堣鑴氭湰澶撮儴鐨勫惈涔夎〃锛?
+    echo "  单轮脚本退出码=$EXIT_CODE（见脚本头部的含义表）"
 
     for artifact in master.log outcome.txt client.log; do
         [ -f "/tmp/${TAG}_$artifact" ] && cp -f "/tmp/${TAG}_$artifact" "$ROUND_DIR/"
     done
     [ -f "/tmp/${TAG}_done" ] && cp -f "/tmp/${TAG}_done" "$ROUND_DIR/exit-code.txt"
 
-    # 缃戝崱鏀跺彂璁℃暟锛氳疆鍚庡揩鐓?+ 宸垎銆傚樊鍒嗘妸"杩欎竴杞湁娌℃湁甯ф病鍥炲埌缃戝崱"鍐欐垚涓€琛岋紝
-    # 鑰屽畠姝ｆ槸鍒嗚鲸涓绘満渚т笌閾捐矾渚х殑閭ｄ竴鍒€銆?    if [ -n "$NIC_IFACE" ] && [ "$NIC_IFACE" != "unknown" ]; then
+    # 网卡收发计数：轮后快照 + 差分。差分把"这一轮有没有帧没回到网卡"写成一行，
+    # 而它正是分辨主机侧与链路侧的那一刀。
+    if [ -n "$NIC_IFACE" ] && [ "$NIC_IFACE" != "unknown" ]; then
         python3 "$REPO/scripts/nic_counters.py" "$ROUND_DIR/nic-after.txt" \
             --interface "$NIC_IFACE" >/dev/null 2>&1 || true
         python3 "$REPO/scripts/nic_counters.py" --diff "$ROUND_DIR/nic-before.txt" \
             "$ROUND_DIR/nic-after.txt" > "$ROUND_DIR/nic-diff.txt" 2>&1 || true
     fi
 
-    # 寮傚父琛細鎶婁富绔欐棩蹇楅噷宸茬粡鏈夌殑鍧愭爣鍥哄畾鎴愪竴寮犲彲璺ㄨ疆褰掑苟鐨勮〃銆傚彧璇绘棩蹇楋紝鍥犳蹇笖
-    # 蹇呯劧鍙敤锛堟姤鍛婂彲鑳藉洜纾佺洏鎴栧穿婧冭€岀己澶憋級銆傛棩蹇椾笉鍦ㄥ氨璺宠繃锛屼笉璁╂淳鐢熸枃浠舵嫋鍨竴杞€?    if [ -f "/tmp/${TAG}_master.log" ]; then
+    # 异常表：把主站日志里已经有的坐标固定成一张可跨轮归并的表。只读日志，因此快且
+    # 必然可用（报告可能因磁盘或崩溃而缺失）。日志不在就跳过，不让派生文件拖垮一轮。
+    if [ -f "/tmp/${TAG}_master.log" ]; then
         python3 "$REPO/analysis/anomalies.py" "/tmp/${TAG}_master.log" \
             -o "$ROUND_DIR/anomalies.tsv" --quiet 2>>"$ROUND_DIR/notes.md" || true
     fi
 
-    # 瀹屾暣鎶ュ憡鏄鐩栧紡鐨勶細鍏堟妸杩欎竴杞搴旂殑褰掓。鏂囦欢鍚嶈涓嬫潵锛堥偅鏄畬鏁磋瘉鎹殑鍧愭爣锛夛紝
-    # 鍐嶅**褰撳墠**閭ｄ唤鎶ュ憡鍑烘憳瑕佲€斺€斾袱鑰呴兘灏忥紝鑳藉叆搴撱€?    ARCHIVE_NAME="-"
+    # 完整报告是覆盖式的：先把这一轮对应的归档文件名记下来（那是完整证据的坐标），
+    # 再对**当前**那份报告出摘要——两者都小，能入库。
+    ARCHIVE_NAME="-"
     if [ -d "$ARCHIVE_DIR" ]; then
         ARCHIVE_NAME="$(ls -t "$ARCHIVE_DIR" 2>/dev/null | head -1)"
     fi
@@ -163,20 +214,20 @@ NOTES
         ROW="$(python3 "$REPO/analysis/report_row.py" "$REPORT" "$TAG" 2>/dev/null)"
         printf '%s\n' "$ROW" > "$ROUND_DIR/row.tsv"
     else
-        echo "  杩欎竴杞病鏈夋姤鍛婏紙涓荤珯娌¤捣鏉ユ垨娌″啓锛? | tee "$ROUND_DIR/summary.txt"
+        echo "  这一轮没有报告（主站没起来或没写）" | tee "$ROUND_DIR/summary.txt"
     fi
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$SERIES" "$DEPLOYMENT" "$MODE" "$ROUND_AT" "$GAP" "$EXIT_CODE" "$ROW" >> "$INDEX"
-    echo "  璇佹嵁=$ROUND_DIR"
+    echo "  证据=$ROUND_DIR"
 
     if [ "$round_index" -lt "$ROUNDS" ]; then
-        echo "  杞棿绛夊緟 ${GAP}s锛?(date '+%H:%M:%S')锛?
+        echo "  轮间等待 ${GAP}s（$(date '+%H:%M:%S')）"
         sleep "$GAP"
     fi
     echo
 done
 
-echo "鍏ㄩ儴 $ROUNDS 杞粨鏉熴€傛眹鎬伙細$INDEX"
-echo "**娉ㄦ剰**锛氶€€鍑虹爜 0 鍙〃绀鸿疆娆¤窇瀹屼簡锛屼笉浠ｈ〃姣忚疆閮芥垚鍔熲€斺€旀垚璐ョ湅 index.tsv銆?
+echo "全部 $ROUNDS 轮结束。汇总：$INDEX"
+echo "**注意**：退出码 0 只表示轮次跑完了，不代表每轮都成功——成败看 index.tsv。"
 exit 0

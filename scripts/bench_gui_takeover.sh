@@ -37,6 +37,9 @@
 set -u
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# 构建目录跟随 CMakePresets.json 的 linux-debug（CI 也用同一个）。
+# 单数形式 $REPO/build 是旧台架树的习惯，两处不一致会让脚本去找不存在的二进制。
+BUILD=${BUILD:-$REPO/build/linux-debug}
 DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
 DUR=${DUR:-20}
 
@@ -61,7 +64,7 @@ echo "主站日志=$MASTER_LOG 界面日志=$GUI_LOG"
 
 ulimit -r unlimited
 setsid bash -c "cd $REPO; exec env EMASTER_OBSERVATION=1 \
-    $REPO/build/apps/master/emaster-master --deployment $DEPLOYMENT" \
+    $BUILD/apps/master/emaster-master --deployment $DEPLOYMENT" \
     > "$MASTER_LOG" 2>&1 &
 echo "主站已拉起（观测已开），等它进 RUNNING…"
 
