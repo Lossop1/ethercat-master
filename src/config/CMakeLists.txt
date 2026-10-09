@@ -3,12 +3,12 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}"
     COMMAND
         "${Python3_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/generate_error_recovery_config.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../gen/generate_error_recovery_config.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../config/error_recovery_policies"
         "${EMASTER_GENERATED_ERROR_RECOVERY}"
     DEPENDS
         ${EMASTER_ERROR_RECOVERY_POLICY_FILES}
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/generate_error_recovery_config.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../gen/generate_error_recovery_config.py"
     COMMENT "生成错误恢复策略配置"
     VERBATIM)
 

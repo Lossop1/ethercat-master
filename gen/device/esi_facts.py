@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
-from validation_common import EsiRuntimeConstraints, hex_value
+# validation_common 是校验与设备档两条链共用的解析基础，放在上一层 gen/。
+# 本文件被 derive_device_facts.py 以模块方式导入，所以这里自己保证可导入。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from validation_common import EsiRuntimeConstraints, hex_value  # noqa: E402
 
 
 def _integer_text(value: str, field: str) -> int:

@@ -22,7 +22,7 @@ jobs:
       # 配置一致性门槛。放在构建之前：跨层引用错误比编译失败更廉价，应当快速失败。
       # 悬空的 motion_profile_id 之类的错误不一定会让生成器报错，因此必须显式校验。
       - name: 校验配置
-        run: python3 tools/validate_project.py
+        run: python3 gen/validate_project.py
 
       # P9.1 的防回退检查。SOEM 访问被多个线程共用，安全性靠 SOEM 自带的锁成立
       # （见 session_internal.h 顶部说明）。新出现一个调用点就是新出现一个潜在的

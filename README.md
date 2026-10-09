@@ -31,7 +31,7 @@
 
 ```bash
 git submodule update --init --recursive
-python3 tools/validate_project.py
+python3 gen/validate_project.py
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DEMASTER_BUILD_HARDWARE_TOOLS=ON -DEMASTER_BUILD_TESTS=ON
 cmake --build build -j4
 ctest --test-dir build --output-on-failure
@@ -832,7 +832,7 @@ cmake -S . -B build && cmake --build build -j4
 
 ```text
 config/*.json
-  └─ CMake 配置期生成器（tools/generate_*.py）→ build/generated/*.c
+  └─ CMake 配置期生成器（gen/generate_*.py）→ build/generated/*.c
        └─ emaster-master 读取编译期配置 → 查 deployment_id → 构造 session plan
             └─ SOEM 扫描从站 → 校验身份、拓扑、PDO 与能力
                  └─ PRE-OP：读身份/换算/初始 CiA 402；选 PDO、写启动 SDO、配 DC
@@ -845,7 +845,7 @@ config/*.json
 | 步骤 | 主要源码 |
 | --- | --- |
 | 参数解析、部署查找、实时调度、回调装配、报告发布 | `apps/master/main.c`、`apps/master/console.c` |
-| JSON 到生成 C | `CMakeLists.txt`、`tools/generate_config_apply.py`、`generate_catalog_apply.py`、`generate_runtime_apply.py`、`generate_deployment_apply.py`、`generate_slave_catalog.py`（被前者 import）、`generate_error_recovery_config.py`、`generate_messages.py` |
+| JSON 到生成 C | `CMakeLists.txt`、`gen/generate_config_apply.py`、`generate_catalog_apply.py`、`generate_runtime_apply.py`、`generate_deployment_apply.py`、`generate_slave_catalog.py`（被前者 import）、`generate_error_recovery_config.py`、`generate_messages.py` |
 | 部署与轴计划校验 | `src/session/session_plan.c`、`src/config/`、`src/catalog/` |
 | SOEM 初始化、身份与 PDO/DC 配置 | `src/bus/soem/control_session.c`、`session_setup.c`、`soem_common.c` |
 | SAFE-OP 到 OP、起始位置与控制字初始值 | `session_start.c`、`cia_process_image.c` |

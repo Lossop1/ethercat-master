@@ -147,7 +147,7 @@ DC 方案的过程帧目标相位必须早于 Sync0，并通过 `dc_startup_cycl
 
 ## 提示资源
 
-`messages/zh_CN.json` 是当前中文提示的唯一正文来源。构建阶段由 `tools/generate_messages.py` 生成
+`messages/zh_CN.json` 是当前中文提示的唯一正文来源。构建阶段由 `gen/generate_messages.py` 生成
 只读 C 表，并校验每条 `printf` 格式参数；业务代码只引用消息 ID，不得嵌入操作者提示文本。
 
 ## 运行记录
