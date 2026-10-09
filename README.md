@@ -48,7 +48,14 @@
   | 4 | `orangepi-bench-quad-30deg` | 10 | `orangepi-bench-dec-30deg` |
   | 5 | `orangepi-bench-quint-30deg` | 11 | `orangepi-bench-undec-30deg` |
   | 6 | `orangepi-bench-sext-30deg` | 12 | `orangepi-bench-duodec-30deg` |
-  | 7 | `orangepi-bench-sept-30deg` | 单轴 | `orangepi-bench-single-30deg` |
+  | 7 | `orangepi-bench-sept-30deg` | **单轴** | **`orangepi-current-bench`** |
+
+  **单轴档不叫 `...-single-...`。** 实际的两份单轴部署是 `orangepi-current-bench`
+  （单轴 30°、护栏 2°）与 `orangepi-current-bench-idle`（只空转、**合法地没有运动方案**）。
+
+  **其余部署档**（不是按轴数排的）：`orangepi-bench-dual`、`orangepi-bench-dual-with-motion`、
+  `orangepi-bench-cst-smoke`、`orangepi-bench-non-30deg-2ms`（2 ms 周期）、
+  `orangepi-bench-single-freerun`（不用 DC，见 §11.5）。**完整清单看 `config/deployments/`（18 份）。**
 
   部署是**按位置**配的，所以**换同型号设备不用改命令**（见 §12.2）。
 
@@ -215,10 +222,20 @@ reports/_<SERIES>/
 | `extract_report.py <报告>` | 就地抽关键字段（不下载整个 JSON） |
 | `anomalies.py` | 主站日志 → `anomalies.tsv` |
 | `trace_window.py` | 把异常窗口读成逐拍表 |
-| `../nic_counters.py --diff` | 网卡收发计数差分 |
-| `../capture_identity.py` | 装置身份 + 主机上下文 |
+| `report_digest.py` | 报告摘要（比 summary 更短） |
+| `report_size.py` | 报告体积构成 |
+| `shutdown_dump.py` | 只看停机那一段 |
+| `ring_dump.py` | 现场环原样导出 |
+| `trace_tail.py` / `trace_busy_windows.py` | 尾部时序／繁忙窗口 |
+| `ab_compare.py` / `ab_verdict.py` | 两组对照的比较与判定 |
+| `inline_verdict.py` | 就地判定单份报告 |
+| `json_probe.py` | 不下载整份 JSON 就探字段 |
+| `panel_transcript.py` | 终端面板会话转录 |
+| `uprobe_offsets.py` | uprobe 偏移计算（开发用） |
 
-（都在 `scripts/analysis/` 下，后两条在 `scripts/` 下。）
+**`scripts/analysis/` 共 19 个脚本**，上面是常用的；其余看目录。
+另有两条在 `scripts/` 顶层：`nic_counters.py --diff`（网卡收发计数差分）、
+`capture_identity.py`（装置身份 + 主机上下文）。
 
 ### 7.1 字段住在哪一层（查过的，别猜）
 
@@ -270,6 +287,11 @@ python scripts/pi.py download <远端> <本地>
 
 都在 `build/tools/<目录>/` 下。
 
+> **`scripts/start_master.sh` 已过期，不要用。** 它的默认部署是 `orangepi-bench-dual`、
+> **不设 `EMASTER_OBSERVATION=1`**（观测口不建，报告的温度／电压／电流栏恒为「—」）、
+> **不设 `ulimit -r unlimited`**（实时优先级设不上），还引用一个已不存在的
+> `build/set_target_client`。**起主站用 §2 那串命令。**
+
 **`emaster-scan` 会把驱动器拉出 OP 再恢复**（它要发 INIT→PRE-OP 请求），**运行中不要用它**；**`emaster-disable` 会让电机失去保持力矩。**
 
 ## 10 单位换算（当前台架）
@@ -305,8 +327,24 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVER_VERBOSE=1 EMASTER_O
 ```
 
 - **这些是 OP（CSP）运行期间的 SDO 读数**，不是停机快照
-- 清单在设备配置的 `slow_telemetry`（`config/devices/cyberbeast_*.json`）
+- 清单在设备配置的 `slow_telemetry`（`config/devices/cyberbeast_isvd90rc_300b_100_70.json`），
+  共 12 项：`0x6078` 电流、`0x603F` 故障码、`0x6079` 母线电压、`0x200B:01` MOSFET 温度、
+  `0x200B:02` 电机温度、`0x200B:08` 实际转速、`0x200B:09` 转速指令、扩展伺服故障码、读回目标、
+  最大力矩、最大转速等
 - 加了这个开关还会打出每条读数的对象地址与 wkc，用来确认"到底读到没有"
+
+**主站真正认的环境变量只有这 8 个**（代码里查过的，别按猜的用）：
+
+| 变量 | 作用 |
+| --- | --- |
+| `EMASTER_OBSERVATION` | **建不建观测口，默认关** |
+| `EMASTER_OBSERVER_VERBOSE` | 观测线程每约 1 秒打一条全部 12 项读数 |
+| `EMASTER_FRAME_TIMEOUT_US` | 覆盖帧超时（默认周期/4 = 250 µs） |
+| `EMASTER_AUDIT_MAX_ACCESSES` | 审计访问记录容量上限 |
+| `EMASTER_SHUTDOWN_FAST` | 停机快模式 |
+| `EMASTER_SHUTDOWN_LEGACY_PROLOGUE` | 走旧的停机序言 |
+| `EMASTER_CMD_SERVER_VERBOSE` | 命令服务器详细日志 |
+| `EMASTER_NO_FIRST_MISMATCH_AL_READ` | 首次不符时不读 AL |
 
 ### 11.2 按阶段读指定对象
 
@@ -344,17 +382,25 @@ axis1.target_position.cyclic_operation=462644
 
 **译名依据只有 CiA 402 标准，没有厂商状态表佐证**（见第 II 部分 §19）。
 
-### 11.4 单轴档的护栏比多轴档紧得多 —— 先拿它验可疑的驱动器
+### 11.4 护栏松紧是逐运动方案写的，不按轴数分
 
-| 档 | `max_following_error_millidegrees` |
-| --- | --- |
-| 单轴 `orangepi-current-bench` | **2000（2°）** |
-| 多轴各档 | **50000（50°）** |
+限幅在 `config/motion_profiles/*.json` 的 `axes[].max_following_error_millidegrees`，**每一份单独写**：
+
+| 运动方案 | 限幅 |
+| --- | ---: |
+| `orangepi-bench.output-positive-36deg`（`orangepi-current-bench` 在用） | **2000（2°）** |
+| `orangepi-bench.dual-output-positive-36deg` | **2000（2°）** |
+| `orangepi-bench.test-*`（多轴各档） | **50000（50°）** |
+| `orangepi-bench.test-single-30deg`（**名字带 single，限幅仍是 50°**） | **50000（50°）** |
+
+**所以"单轴档更紧"是个想当然 —— 要查的是那一份方案写了多少，不是它有多少轴。**
 
 **后果**：同一根"收到目标却不执行"的轴 ——
 
-- 在多轴档上：一步不走也够不到 50°，**报告显示成功**
-- 在单轴档上：**0.4 秒就按 `FOLLOWING_ERROR` 中止**
+- 在 50° 的档上：一步不走也够不到 50°，**报告显示成功**
+- 在 2° 的档上：**0.4 秒就按 `FOLLOWING_ERROR` 中止**
+
+**要验可疑的驱动器，就用 2° 的那两份（`orangepi-current-bench`）。**
 
 ### 11.5 freerun（不用 DC）档：把同步从嫌疑里划掉
 
@@ -540,7 +586,7 @@ CSP 的最小产品入口必须把**位置目标输入**和**周期 PDO 发送**
 | | EtherCAT AL（ESC 层） | CiA 402（驱动器层） |
 | --- | --- | --- |
 | 载体 | 寄存器 `0x0120` / `0x0130` / `0x0134` | 对象 `0x6040` / `0x6041` / `0x603F` |
-| 状态 | INIT 1｜PRE-OP 2｜SAFE-OP 4｜OP 8 | 八个状态，见 `include/emaster/cia/controller.h:10-18` |
+| 状态 | INIT 1｜PRE-OP 2｜SAFE-OP 4｜OP 8 | 八个状态，见 `include/emaster/cia402/controller.h:8-19` |
 | 通道 | INIT 无邮箱无 PDO｜PRE-OP 有邮箱｜SAFE-OP 有输入无输出｜OP 双向 | 邮箱（PRE-OP 及以上）或 PDO（仅 OP） |
 | 谁管 | 主站的状态请求 | 驱动器的内部状态机 |
 
@@ -588,7 +634,7 @@ CSP 的最小产品入口必须把**位置目标输入**和**周期 PDO 发送**
 | `wkc_recovery` | **连续 5**、60 秒窗口内 50 | 短帧 |
 | `no_frame_recovery` | 同上 | 整帧未回 |
 | `deadline_recovery` | 连续 10 | 周期截止点错失 |
-| `al_state` / `cia402_fault` / `dc_late` | `enabled=false` | 未启用 |
+| `al_state_recovery` / `cia402_fault_recovery` / `dc_late_recovery` | `enabled=false` | 未启用（键名不能简写，配置校验按全名） |
 
 **判据是"连续"，不是"累计"。** 实测里"散落 2 次"跑完、"连续 5 次"中止，区别只在连续数上。**连续段是联合的**（整帧未回也计入连续），**窗口是分类的**（各推各的）—— 所以 `wkc_short_window_max` 可能小于 `wkc_max_consecutive`，那是两个口径，不是矛盾。
 
@@ -701,9 +747,12 @@ CSP 的最小产品入口必须把**位置目标输入**和**周期 PDO 发送**
 | --- | --- | --- |
 | **P0** 基础通信与控制 | 设备发现、PDO 映射、DC 同步、WKC 验证；CiA 402 到 OPERATIONAL ENABLED、CSP、位置目标接口、反馈；软限位、跟随误差、故障锁存、安全停机 | **完成** |
 | **P1** 核心监控与保护 | 电流 `6078h`／母线电压 `6079h`／温度 `200Bh` 监控、位置速度力矩反馈、跟随误差监控、WKC 错误、deadline 检测 | **完成** |
+| | 持续运行 | **实测过 900 秒量级**（2 轮跑满 911912 / 912757 拍、零截止期错失）；小时级见采集文档 |
 | | 碰撞／卡死／过载／过热／欠压过压／编码器故障检测；命令队列管理 | **未实现** |
 | **P2** 多模式 | CSP | **完成** |
-| | CSV／CST／混合／运行时切换 | 接口存在，**未真机验证** |
+| | CST | **有一份运行方案与一份冒烟运动方案，未真机验证** |
+| | CSV | **没有对应的运行方案**（`config/operation_profiles/` 里只有 csp 与 cst） |
+| | 混合模式／运行时切换 | **没有** |
 | **P3** 故障处理与恢复 | 正常停止 | **完成** |
 | | 快速停止／急停；故障日志、清除流程、自动重试、降级运行 | **未实现** |
 | **P4** 诊断 | 运行报告、命令服务器 | **完成** |
