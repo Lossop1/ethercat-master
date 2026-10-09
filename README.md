@@ -330,8 +330,7 @@ scp <user>@<host>:<remote-file> <local-directory>
 
 > **启动使用 §2 的入口。** `scripts/start_master.sh` 使用固定默认部署、
 > **不设 `EMASTER_OBSERVATION=1`**（观测口不建，报告的温度／电压／电流栏恒为「—」）、
-> **不设 `ulimit -r unlimited`**（实时优先级设不上），还引用一个已不存在的
-> `build/set_target_client`。**起主站用 §2 那串命令。**
+> **不设 `ulimit -r unlimited`**（实时优先级设不上）。**起主站用 §2 那串命令。**
 
 **`emaster-scan` 会把驱动器拉出 OP 再恢复**（它要发 INIT→PRE-OP 请求），**运行中不要用它**；**`emaster-disable` 会让电机失去保持力矩。**
 
