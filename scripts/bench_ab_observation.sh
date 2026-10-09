@@ -49,7 +49,7 @@ sys.exit(1)
 " 2>/dev/null)
 if [ -z "$REPORT_REL" ]; then echo "错误：读不出部署 $DEPLOY 的 run_report_path" >&2; exit 1; fi
 REPORT=$REPO/$REPORT_REL
-NEW=$REPO/build/tools/master/emaster-master
+NEW=$REPO/build/apps/master/emaster-master
 OLD=${OLD:-/tmp/emaster-old25-quint}
 DUR=${DUR:-40}
 OUT=${OUT:-/tmp/ab_out.txt}
@@ -152,7 +152,7 @@ start_master() {
 
 clean() {
     pkill -9 -f emaster-master 2>/dev/null
-    for _ in $(seq 1 10); do pgrep -f 'tools/master/emaster-master' >/dev/null || break; sleep 1; done
+    for _ in $(seq 1 10); do pgrep -f 'apps/master/emaster-master' >/dev/null || break; sleep 1; done
     rm -f /tmp/emaster-*.sock
 }
 
@@ -243,7 +243,7 @@ arm() {   # $1=标签 $2=二进制 $3=观测开关 $4=对抗(none|watch|stall|no
     # 最后死于下一臂的 pkill -9：停机路径和报告一起丢，驱动器停在使能态。
     # 所以不认文件，按进程名兜底重解析一次。
     if ! tr '\0' ' ' < "/proc/$MPID/cmdline" 2>/dev/null | grep -q emaster-master; then
-        local REAL; REAL=$(pgrep -f 'tools/master/emaster-master' | head -1)
+        local REAL; REAL=$(pgrep -f 'apps/master/emaster-master' | head -1)
         echo "** ab.pid=$MPID 不是主站或已消失，按进程名重解析为 ${REAL:-无}"
         MPID=${REAL:-$MPID}
     fi

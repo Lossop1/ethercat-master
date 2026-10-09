@@ -40,7 +40,7 @@
  *                       dc_prepare.c / preop_probe.c / session_observer.c
  *   多线程共用          soem_common.c（薄封装，线程由调用方决定）
  *
- *   独立进程（不属于任何会话）：tools/diagnose_slave/main.c。它自己 ecx_init 一份
+ *   独立进程（不属于任何会话）：apps/diagnose_slave/main.c。它自己 ecx_init 一份
  *   自己的 context，扫完就 ecx_close 退出，进程存活期间不与周期线程共存——所以
  *   既不共用 context 也不共用套接字，本段要串行化的那个竞争在这里根本不存在。
  *   之所以仍要登记：这条约束的可执行检查查的是**名单**（多一个调用点就要过一遍

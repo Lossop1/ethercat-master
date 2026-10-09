@@ -214,7 +214,7 @@ static bool reply_head(const emaster_observation_server_t *server, int fd)
  *
  * 形状与命令通道的 status 响应一致（顶层 key=value 以空格分隔、'|' 分段、轴段 "aN:"
  * 前缀、段内 ',' 分隔），字段名也一致（pos/vel/torque/status/target_pos）。因此
- * tools/status_client 能直接解析——同一份解析器、同一个显示，只是数据来源从"边读边
+ * apps/status_client 能直接解析——同一份解析器、同一个显示，只是数据来源从"边读边
  * 格式化"换成了"一次原子快照"。
  *
  * 刻意**不**提供 state=/enabled=/completed=：帧是一份数据快照，不是控制状态报告，

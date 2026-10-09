@@ -14,7 +14,7 @@
  *
  * 这个文件存在的意义是把"周期线程为了观测要多做的事"限制在一处、且只有一件事：
  * 组一帧、调一次 emaster_observation_ring_publish()。环形缓冲本身的不变式（读者
- * 不会撕裂、不会阻塞写者）由 src/bus/observation/ 负责，并由 tools/observation_selftest
+ * 不会撕裂、不会阻塞写者）由 src/bus/observation/ 负责，并由 apps/observation_selftest
  * 在无硬件条件下证明；这里只负责把会话里的值搬进帧，并如实记录搬一次要多久。
  *
  * 开关关闭时整条路径只有一次指针判空，没有时钟调用、没有组帧。

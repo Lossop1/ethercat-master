@@ -61,7 +61,7 @@ echo "主站日志=$MASTER_LOG 界面日志=$GUI_LOG"
 
 ulimit -r unlimited
 setsid bash -c "cd $REPO; exec env EMASTER_OBSERVATION=1 \
-    $REPO/build/tools/master/emaster-master --deployment $DEPLOYMENT" \
+    $REPO/build/apps/master/emaster-master --deployment $DEPLOYMENT" \
     > "$MASTER_LOG" 2>&1 &
 echo "主站已拉起（观测已开），等它进 RUNNING…"
 

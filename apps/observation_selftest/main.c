@@ -21,7 +21,7 @@
  *
  * 编译与运行（本机与 Pi 都适用）：
  *   cmake --build build --target observation-selftest
- *   ./build/tools/observation_selftest/observation-selftest
+ *   ./build/apps/observation_selftest/observation-selftest
  */
 #define _POSIX_C_SOURCE 200809L
 

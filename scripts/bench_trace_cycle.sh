@@ -44,7 +44,7 @@ set -u
 
 T=/sys/kernel/debug/tracing
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BIN=$REPO/build/tools/master/emaster-master
+BIN=$REPO/build/apps/master/emaster-master
 TAG=${TAG:-trace}
 TRACE=/tmp/${TAG}_trace.txt
 RUNLOG=/tmp/${TAG}_run.txt

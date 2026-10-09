@@ -18,7 +18,7 @@ HOST = "192.168.137.54"
 USER = "orangepi"
 PASSWORD = "orangepi"
 
-DEFAULT_BINARY = str(Path(__file__).resolve().parents[1] / "build/tools/fingerprint/emaster-fingerprint")
+DEFAULT_BINARY = str(Path(__file__).resolve().parents[1] / "build/apps/fingerprint/emaster-fingerprint")
 DEFAULT_DEPLOYMENT = "orangepi-current-bench-idle"
 DEFAULT_OUTPUT = "/tmp/fingerprint-capture.json"
 CONFIRM_TOKEN = "PRE-OP"

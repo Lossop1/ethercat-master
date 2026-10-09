@@ -80,9 +80,9 @@ rm -f /tmp/emaster-*.sock
 # 不写成 "$OBS_PREFIX ./build/..."：OBS_PREFIX 为空时会展开成一个空参数，主站会把
 # 它当成可执行文件名（P12.11 在 gui_e2e 上踩过这个）。
 if [ "$OBSERVATION" = "1" ]; then
-    env EMASTER_OBSERVATION=1 ./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+    env EMASTER_OBSERVATION=1 ./build/apps/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
 else
-    ./build/tools/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
+    ./build/apps/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
 fi
 MASTER_PID=$!
 echo "主站 pid=$MASTER_PID"

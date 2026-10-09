@@ -37,7 +37,7 @@ cmake --build build -j4
 ctest --test-dir build --output-on-failure
 ```
 
-主站产物为 `build/tools/master/emaster-master`，测试脚本使用这个路径。也可使用 `cmake --preset linux-release` 和 `cmake --build --preset linux-release`，但产物在 `build/linux-release/`，**测试脚本不会自动使用该目录**。
+主站产物为 `build/apps/master/emaster-master`，测试脚本使用这个路径。也可使用 `cmake --preset linux-release` 和 `cmake --build --preset linux-release`，但产物在 `build/linux-release/`，**测试脚本不会自动使用该目录**。
 
 不访问硬件的离线构建：
 
@@ -82,7 +82,7 @@ sudo env REPO="$PWD" DEPLOYMENT=<deployment-id> IDLE=60 OBSERVATION=1 TAG=first_
 
 | 组件 | 位置 | 干什么 |
 | --- | --- | --- |
-| 主站 | `build/tools/master/emaster-master` | 跑 1 ms 周期，收发过程数据 |
+| 主站 | `build/apps/master/emaster-master` | 跑 1 ms 周期，收发过程数据 |
 | 命令口 | `/tmp/emaster-<部署>.sock` | AF_UNIX，发目标、查状态 |
 | 观测口 | `/tmp/emaster-<部署>-obs.sock` | AF_UNIX，只读；**要 `EMASTER_OBSERVATION=1` 才存在** |
 | 单轮测试 | `scripts/bench_idle.sh`、`scripts/bench_reciprocate_30deg.sh` | 跑一轮，产物落 `/tmp/<TAG>_*` |
@@ -116,7 +116,7 @@ sudo env REPO="$PWD" DEPLOYMENT=<deployment-id> IDLE=60 OBSERVATION=1 TAG=first_
 ```bash
 cd /path/to/ethercat-master
 sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
-  ./build/tools/master/emaster-master --deployment <部署ID>'
+  ./build/apps/master/emaster-master --deployment <部署ID>'
 ```
 
 **`EMASTER_OBSERVATION=1` 不是可选项**：不开的话观测口根本不建，报告里温度／母线电压／电流那几栏恒为「—」，事后无法回答「那一刻电压是多少」。
@@ -327,7 +327,7 @@ scp <user>@<host>:<remote-file> <local-directory>
 | `emaster-dc-prepare` | PRE-OP DC 准备（不改状态） |
 | `emaster-target-probe` | 目标源探针 |
 
-都在 `build/tools/<目录>/` 下。
+都在 `build/apps/<目录>/` 下。
 
 > **启动使用 §2 的入口。** `scripts/start_master.sh` 使用固定默认部署、
 > **不设 `EMASTER_OBSERVATION=1`**（观测口不建，报告的温度／电压／电流栏恒为「—」）、
@@ -361,7 +361,7 @@ scp <user>@<host>:<remote-file> <local-directory>
 
 ```bash
 sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVER_VERBOSE=1 EMASTER_OBSERVATION=1 \
-  ./build/tools/master/emaster-master --deployment <部署ID>'
+  ./build/apps/master/emaster-master --deployment <部署ID>'
 ```
 
 观测线程每约 1 秒在 stderr 打一条，含**全部 12 项**慢速遥测（当前值 + 单位）：
@@ -488,7 +488,7 @@ sudo env DEPLOYMENT=<freerun-deployment-id> DURATION=40 TRAVERSE=5 DEGREES=30 \
 | `src/motion/` | 基于各轴真实换算因子的相对轨迹、速度轨迹和位置目标转换 |
 | `src/bus/soem/` | **SOEM 集成边界**；周期交换、配置/停机及观测 SDO 分属对应路径，不能将其描述为全部串行 |
 | `src/audit/` | 保存访问事实、连续同值合并、退出后序列化 |
-| `tools/master/`、`src/messages/` | 入口、信号处理、报告发布和中文展示 |
+| `apps/master/`、`src/messages/` | 入口、信号处理、报告发布和中文展示 |
 
 `src/cyclic/` 提供总线无关的时序、直方图和滑窗逻辑；`src/safety/` 提供条件汇总与决策，当前由 `session_supervisor.c` 接入控制循环。库中存在的能力是否适用于具体部署，仍需检查调用路径和配置。
 
@@ -548,7 +548,7 @@ PDO 审计游标按实际字段数量分配，每个字段直接查找上次记�
 
 CSP 的最小产品入口必须把**位置目标输入**和**周期 PDO 发送**分开。应用层通过 `emaster_control_session_callbacks_t.position_target_source` 提交完整轴集合的目标位置，主站周期线程只接受明确的当前目标并检查已读回的软件位置范围；**目标单位是已按当前从站换算完成的原始位置计数**，单位换算、绝对零点和轨迹限制由独立的上层命令或轨迹模块负责。
 
-位置目标来源回调只提供当前周期的完整目标快照，返回 `HOLD` 时保持上一目标，返回 `UPDATED` 时由主站检查所有轴的已读回软件位置范围后写入下一帧 CSP PDO。回调为空时使用部署引用的固定运动方案；`tools/master/main.c` 安装外部目标回调，未收到目标时保持初始位置，不自动运行固定轨迹。
+位置目标来源回调只提供当前周期的完整目标快照，返回 `HOLD` 时保持上一目标，返回 `UPDATED` 时由主站检查所有轴的已读回软件位置范围后写入下一帧 CSP PDO。回调为空时使用部署引用的固定运动方案；`apps/master/main.c` 安装外部目标回调，未收到目标时保持初始位置，不自动运行固定轨迹。
 
 这个回调契约不包含外部发送序号或客户端时间戳。命令服务器在主机接收目标时记录本机单调时间，入口回调用它检查目标年龄；这不能识别客户端发送前的排队延迟或重放目标。多轴协调器的 sequence 是主站内部周期号，也不能证明外部命令顺序。
 
@@ -632,7 +632,7 @@ CSP 的最小产品入口必须把**位置目标输入**和**周期 PDO 发送**
 | `error_recovery_policies/` | 3 | 容错阈值 |
 | `messages/zh_CN.json` | 1 | 中文文案 |
 
-轴数来自部署、硬件换算会读回、恢复阈值来自策略；`tools/master/main.c` 同时包含 200 ms 默认超时、2°缺省限值和无运动配置时 6400 counts 兜底。外部保护限值取第一轴的预期换算后统一用于全轴，详见 §28。
+轴数来自部署、硬件换算会读回、恢复阈值来自策略；`apps/master/main.c` 同时包含 200 ms 默认超时、2°缺省限值和无运动配置时 6400 counts 兜底。外部保护限值取第一轴的预期换算后统一用于全轴，详见 §28。
 
 ## 21 观测通道
 
@@ -844,7 +844,7 @@ config/*.json
 
 | 步骤 | 主要源码 |
 | --- | --- |
-| 参数解析、部署查找、实时调度、回调装配、报告发布 | `tools/master/main.c`、`tools/master/console.c` |
+| 参数解析、部署查找、实时调度、回调装配、报告发布 | `apps/master/main.c`、`apps/master/console.c` |
 | JSON 到生成 C | `CMakeLists.txt`、`tools/generate_config_apply.py`、`generate_catalog_apply.py`、`generate_runtime_apply.py`、`generate_deployment_apply.py`、`generate_slave_catalog.py`（被前者 import）、`generate_error_recovery_config.py`、`generate_messages.py` |
 | 部署与轴计划校验 | `src/session/session_plan.c`、`src/config/`、`src/catalog/` |
 | SOEM 初始化、身份与 PDO/DC 配置 | `src/bus/soem/control_session.c`、`session_setup.c`、`soem_common.c` |
@@ -868,7 +868,7 @@ CLOCK_MONOTONIC 绝对截止点唤醒
 
 主要实现位于 `session_control.c`（周期控制总编排）、`session_exchange.c`（定时和 SOEM 交换）、`cia_process_image.c`（轴 PDO）、`src/cia402/controller.c`（状态机）、`src/multiaxis/coordinator.c`（全轴一致性）、`src/motion/`（相对位置/速度轨迹）和 `session_target.c`（运行时目标验证）。`cycle_clock.c` 负责绝对时基与 DC 参考相位修正。截止点已错过时不补发旧帧；恢复行为需结合选定策略和实际检查路径判断。周期内 ESC 错误计数器 FPRD 诊断读有抽样和预算限制，它不是邮箱 SDO。
 
-控制生命周期与数据源必须分清：配置运动方案时由 `src/motion/` 生成目标；外部控制时 `tools/master/main.c` 的 `position_target_source()` 从互斥锁保护的目标缓冲取完整快照。`session_target.c` 在所有轴通过检查后才提交目标，随后 PDO 编码才对总线生效。命令“成功”只代表已接收/进入处理，不等于驱动器已到位；应继续看反馈、following error 与逐轴结果。
+控制生命周期与数据源必须分清：配置运动方案时由 `src/motion/` 生成目标；外部控制时 `apps/master/main.c` 的 `position_target_source()` 从互斥锁保护的目标缓冲取完整快照。`session_target.c` 在所有轴通过检查后才提交目标，随后 PDO 编码才对总线生效。命令“成功”只代表已接收/进入处理，不等于驱动器已到位；应继续看反馈、following error 与逐轴结果。
 
 ### 外部命令与观测数据
 

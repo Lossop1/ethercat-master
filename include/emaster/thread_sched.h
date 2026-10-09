@@ -12,7 +12,7 @@
  * 让当前线程退出实时调度：**除了控制周期线程，主站里没有第二个线程该是实时的。**
  *
  * 为什么非要显式做一次。主线程在进 OP 之前把自己升成 SCHED_FIFO、绑上核
- * （tools/master/main.c 的 install_rt_primitives），而 Linux 上 pthread_create
+ * （apps/master/main.c 的 install_rt_primitives），而 Linux 上 pthread_create
  * 新建的线程**默认继承创建者的调度策略与优先级**——glibc 的默认属性是
  * PTHREAD_INHERIT_SCHED，亲和掩码同理继承。于是观测线程、命令监听线程、观测服务
  * 线程全都跟着变成了 SCHED_FIFO、掩码 {11}，没有一个例外；而它们各自的设计声明

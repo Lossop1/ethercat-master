@@ -79,7 +79,7 @@ set -u
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 DEPLOY=${DEPLOY:-orangepi-bench-quint-30deg}
 BUILD=${BUILD:-$REPO/build}
-MASTER_BIN=${MASTER_BIN:-$BUILD/tools/master/emaster-master}
+MASTER_BIN=${MASTER_BIN:-$BUILD/apps/master/emaster-master}
 DUR=${DUR:-60}                 # 每个 GUI 臂跑多久
 ROUNDS=${ROUNDS:-1}
 # drive 臂由界面端发起的动作：经典的 30° 往返，每趟想要 3 秒（实际由点动速度定，
@@ -257,7 +257,7 @@ missing_fields() {   # $1=报告文件
 clean() {
     pkill -9 -f emaster-master 2>/dev/null
     pkill -9 -f socket_bridge.py 2>/dev/null
-    for _ in $(seq 1 10); do pgrep -f 'tools/master/emaster-master' >/dev/null || break; sleep 1; done
+    for _ in $(seq 1 10); do pgrep -f 'apps/master/emaster-master' >/dev/null || break; sleep 1; done
     rm -f /tmp/emaster-*.sock
 }
 
@@ -307,7 +307,7 @@ stop_master() {
     # 会被读成"主站已自行退出"，而主站其实还在跑，最后死于下一臂的 pkill -9——
     # 停机路径和报告一起丢，驱动器停在使能态。
     if ! tr '\0' ' ' < "/proc/$MPID/cmdline" 2>/dev/null | grep -q emaster-master; then
-        local REAL; REAL=$(pgrep -f 'tools/master/emaster-master' | head -1)
+        local REAL; REAL=$(pgrep -f 'apps/master/emaster-master' | head -1)
         say "** gui_e2e.pid=$MPID 不是主站或已消失，按进程名重解析为 ${REAL:-无}"
         MPID=${REAL:-$MPID}
     fi

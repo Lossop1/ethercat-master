@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """观测通道参考客户端。
 
-存在的意义有两个，且都不是"给人看状态"（那是 tools/status_client 的活）：
+存在的意义有两个，且都不是"给人看状态"（那是 apps/status_client 的活）：
 
 1. **协议的可执行规格。** 主站侧的线格式写在 include/emaster/observation/wire.h 里，
    但"这份布局到底对不对"只有真的解一遍才知道。这个脚本按文档解 DUMP 的二进制流，

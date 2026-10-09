@@ -45,7 +45,7 @@ echo ""
 
 # ulimit -r 必须在 sudo 里的同一个 shell 提：非交互 bash 默认 0，主站拿不到 SCHED_FIFO
 # 会拒绝进 OP（部署声明 realtime.required=true）。
-sudo bash -c "ulimit -r unlimited; exec ./tools/master/emaster-master --deployment '$DEPLOYMENT'" 2>"$LOG" &
+sudo bash -c "ulimit -r unlimited; exec ./apps/master/emaster-master --deployment '$DEPLOYMENT'" 2>"$LOG" &
 MASTER_PID=$!
 
 for i in $(seq 1 40); do
