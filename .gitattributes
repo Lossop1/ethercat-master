@@ -4,6 +4,7 @@
 *.pdf binary
 *.png binary
 *.zip binary
+*.pcap binary
 
 # Vendor inputs are immutable evidence; do not normalize their bytes.
 # 整个目录按字节保真，而不是逐个文件打补丁：只要有一个厂商文件被判成文本，

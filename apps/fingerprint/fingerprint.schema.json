@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Lossop1/ethercat-master/schemas/fingerprint.schema.json",
+  "$id": "https://github.com/Lossop1/ethercat-master/apps/fingerprint/fingerprint.schema.json",
   "title": "EtherCAT 物理网络指纹",
   "type": "object",
   "additionalProperties": false,

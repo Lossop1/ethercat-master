@@ -102,7 +102,7 @@ sudo env REPO="$PWD" DEPLOYMENT=orangepi-bench-duodec-30deg \
   DURATION=60 TRAVERSE=5 DEGREES=30 RATE=100 WAVE=triangle \
   ONLY_AXIS=0 OBSERVATION=1 SETTLE_TICKS=10 REPORT_INTERVAL=10 \
   bash scripts/bench_series.sh
-python3 analysis/series_verdict.py reports/_f4_motion60_v1_20261009a
+python3 analysis/series_verdict.py evidence/_f4_motion60_v1_20261009a
 ```
 
 后续按 D 表改变时长/轮数并新建 SERIES。F5 每个轴独立命名并显式设置 `ONLY_AXIS`；F6 显式设置 `OBSERVATION`。故障注入、单轴保持和长时容量目前不能直接由 `series_verdict.py` 完成最终判断，须按 C 节逐项复核。
@@ -127,7 +127,7 @@ python3 analysis/series_verdict.py reports/_f4_motion60_v1_20261009a
 
 当前工作副本能看到多个 `evidence_*.txt`，但未发现对应系列的 `index.tsv`。下方“33 系列、122 轮、约 85 分钟”保留为**历史记录者的汇总**，本次没有原始数据链可完整重新计算；不能表述为本次审计确认的总量。
 
-`reports/_t4motion10/evidence_T4_motion.txt` 记录的是 DURATION=40 s、10 轮、GAP=20 s，包含启动/收尾的总周期约 57–58 s/轮，不能误写为每轮 60 s 运动。该组有一次 WKC 异常，因此即使历史记录写“10/10 通过”，也不满足新方案的无异常稳定性门槛。
+`evidence/_t4motion10/evidence_T4_motion.txt` 记录的是 DURATION=40 s、10 轮、GAP=20 s，包含启动/收尾的总周期约 57–58 s/轮，不能误写为每轮 60 s 运动。该组有一次 WKC 异常，因此即使历史记录写“10/10 通过”，也不满足新方案的无异常稳定性门槛。
 
 | 现有问题 | 纳入本方案 |
 | --- | --- |
@@ -229,12 +229,12 @@ sudo env DEPLOYMENT=orangepi-bench-duodec-30deg SERIES=<系列名> ROUNDS=3 GAP=
   MODE=idle IDLE=900 OBSERVATION=1 bash scripts/bench_series.sh
 ```
 
-**`SERIES` 决定证据目录 `reports/_<SERIES>/`。换个名字就不会覆盖上一批。**
+**`SERIES` 决定证据目录 `evidence/_<SERIES>/`。换个名字就不会覆盖上一批。**
 
 ## 3.2 每一轮的产物
 
 ```
-reports/_<SERIES>/
+evidence/_<SERIES>/
   index.tsv                  一行一轮（32 列）
   r01_<TAG>/
     condition.txt           本轮施加的条件（轴数/时长/节拍/间隔/是否运动）

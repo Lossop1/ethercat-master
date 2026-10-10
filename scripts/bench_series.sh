@@ -14,7 +14,7 @@
 #
 # 参数（环境变量）：
 #   DEPLOYMENT  必填。部署 ID。没有默认值：写一个默认部署等于把某一个台架写进工具里。
-#   SERIES      必填。系列名，决定证据目录 reports/_<SERIES>/。
+#   SERIES      必填。系列名，决定证据目录 evidence/_<SERIES>/。
 #   ROUNDS      轮数，默认 6。
 #   GAP         轮间间隔秒数，默认 60。**这个值本身是变量**：背靠背重启会不会让驱动器
 #               来不及就绪，是待查的问题之一，所以间隔要能调、并且记进 index.tsv。
@@ -22,7 +22,7 @@
 #   其余（DURATION／TRAVERSE／DEGREES／RATE／ONLY_AXIS／IDLE／OBSERVATION …）
 #               原样传给单轮脚本，各自有各自文档，这里不重复也不校验。
 #
-# 产物：reports/_<SERIES>/
+# 产物：evidence/_<SERIES>/
 #         index.tsv            每轮一行（表头来自 report_row.py --header）
 #         r<NN>_<TAG>/master.log      主站日志
 #         r<NN>_<TAG>/outcome.txt     单轮脚本的全程输出
@@ -54,7 +54,7 @@ fail() { echo "错误：$1" >&2; exit 1; }
 DEPLOYMENT="${DEPLOYMENT:-${EMASTER_DEPLOYMENT:-}}"
 [ -n "$DEPLOYMENT" ] || fail "没有给 DEPLOYMENT（也不要用默认值——默认值等于把某个台架写进工具里）"
 SERIES="${SERIES:-}"
-[ -n "$SERIES" ] || fail "没有给 SERIES（它决定证据目录 reports/_<SERIES>/）"
+[ -n "$SERIES" ] || fail "没有给 SERIES（它决定证据目录 evidence/_<SERIES>/）"
 ROUNDS="${ROUNDS:-6}"
 GAP="${GAP:-60}"
 MODE="${MODE:-reciprocate}"
@@ -87,7 +87,7 @@ REPORT="$REPO/$REPORT_REL"
 REPORT_DIR="$(dirname "$REPORT")"
 ARCHIVE_DIR="$REPORT_DIR/archive"
 
-EVIDENCE="$REPO/reports/_$SERIES"
+EVIDENCE="$REPO/evidence/_$SERIES"
 mkdir -p "$EVIDENCE"
 INDEX="$EVIDENCE/index.tsv"
 if [ ! -f "$INDEX" ]; then

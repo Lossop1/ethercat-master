@@ -7,7 +7,7 @@
 **两条边界，先讲清楚：**
 
 - **本软件不是经过认证的功能安全系统。** 电气 STO、急停、机械约束、断电措施和安全测试区域仍是外部强制要求。详见 §23。
-- **测试条件、判据和结果见 [`wholetest/采集.md`](wholetest/采集.md)。** 本文件说明**当前怎么用**和**当前怎么实现**。
+- **测试条件、判据和结果见 [`docs/test-plan.md`](docs/test-plan.md)。** 本文件说明**当前怎么用**和**当前怎么实现**。
 
 ---
 
@@ -15,7 +15,7 @@
 
 ## 阅读导航与构建入口
 
-本文负责当前实现与使用说明；[测试文档](wholetest/采集.md) 负责测试条件、判据和结果。
+本文负责当前实现与使用说明；[测试文档](docs/test-plan.md) 负责测试条件、判据和结果。
 
 - 初次部署：本节 → §1–2 前提与启动 → §3–4 界面 → §10 单位。
 - 接入控制器：下方命令接口 → §16 位置入口 → §17 两层状态 → §21 观测。
@@ -225,7 +225,7 @@ sudo env DEPLOYMENT=<deployment-id> SERIES=<系列名> ROUNDS=6 GAP=60 \
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `DEPLOYMENT` | **必填** | 没有默认值：写默认部署等于把某个测试环境写进工具里 |
-| `SERIES` | **必填** | 决定证据目录 `reports/_<SERIES>/`；**换个名字就不会覆盖上一批** |
+| `SERIES` | **必填** | 决定证据目录 `evidence/_<SERIES>/`；**换个名字就不会覆盖上一批** |
 | `ROUNDS` | 6 | 轮数 |
 | `GAP` | 60 | 轮间间隔（秒）。**这个值本身是变量** |
 | `MODE` | reciprocate | `idle` 或 `reciprocate` |
@@ -233,7 +233,7 @@ sudo env DEPLOYMENT=<deployment-id> SERIES=<系列名> ROUNDS=6 GAP=60 \
 其余参数原样传给单轮脚本，这里不重复也不校验。
 
 ```text
-reports/_<SERIES>/
+evidence/_<SERIES>/
   index.tsv                  一行一轮（表头 = 本脚本的列 + report_row.py 的列）
   r01_<TAG>/
     condition.txt            本轮施加的条件
@@ -261,7 +261,7 @@ reports/_<SERIES>/
 | --- | --- |
 | `report_summary.py <报告>` | **人读**：跑了多久、故障形态、故障点逐轴 AL、停机收尾 |
 | `report_row.py <报告> [标签]` | **机读**：一份报告压成 TSV 一行；`--header` 打印列名 |
-| `series_index.py reports/_<系列>` | 按每轮 `report-name.txt` **从归档重建整张表** |
+| `series_index.py evidence/_<系列>` | 按每轮 `report-name.txt` **从归档重建整张表** |
 | `series_verdict.py` | 按容错策略给出每一轮的判定 |
 | `extract_report.py <报告>` | 就地抽关键字段（不下载整个 JSON） |
 | `anomalies.py` | 主站日志 → `anomalies.tsv` |
@@ -511,7 +511,7 @@ sudo env DEPLOYMENT=<freerun-deployment-id> DURATION=40 TRAVERSE=5 DEGREES=30 \
 | `SAFE_STOP` | 安全停机 |
 | `FINAL_DIAGNOSTIC` | 退出 OP 后走邮箱读诊断 |
 
-各阶段的验收步骤与证据要求见 [测试文档](wholetest/采集.md) 的正式测试矩阵。
+各阶段的验收步骤与证据要求见 [测试文档](docs/test-plan.md) 的正式测试矩阵。
 
 ## 14 总线内部结构
 
@@ -809,13 +809,31 @@ freerun 运行方案选择 `strategy:"sm"`，不配置 DC/Sync0，相应 DC 推�
 ## 26 构建、目录与产物
 
 ```text
-build/      构建产物（CMake）
-runtime/    日常运行记录（报告按 run_report_path 落这里）
-reports/    采集证据（脚本收进来的，入 git）
-tmp/        临时调查
-records/    装置指纹
-docs/       厂商资料
-wholetest/  采集记录
+产品
+  src/              实现，按功能分模块（bus/ 下再分 soem/session/observe/io/internal）
+  include/emaster/  公共头，与 src/<模块> 一一对应
+  apps/             可执行程序（主站、指纹、扫描、诊断、客户端…）
+  config/           配置输入：人改的 JSON，9 个族
+  config-runtime/   配置的运行时形态：构建期由 gen/ 生成，主站启动时读它
+
+构建期与工具
+  gen/              生成器与校验器（CMake 与 CI 调用，人不会去敲）
+  tools/            Python 工具：客户端、控制台、GUI、观测、桥
+  scripts/          shell 台架脚本
+  analysis/         读报告
+  checks/           验证项目性质（CI 用）
+  cmake/  CMakeLists.txt  CMakePresets.json
+
+验证
+  tests/            离线单元测试（CTest）
+
+记录与资料
+  evidence/         入库证据（脚本收进来的 evidence_*.txt）与 fingerprints/ 装置指纹
+  runtime/          运行期落点：报告按 run_report_path 落这里，不入库
+  docs/             厂商资料 lz-joint/、测试文档 test-plan.md、归档与 time-and-space.txt
+
+产物
+  build/            构建产物（CMake）
 ```
 
 ```bash
@@ -929,6 +947,6 @@ SIGINT / stop / shutdown / 应用 stop callback
 | 文件 | 内容 |
 | --- | --- |
 | `README.md` | 本文件：使用说明 + 项目实现 |
-| [`wholetest/采集.md`](wholetest/采集.md) | 最终测试方案、执行判据、测试采集与待解决问题 |
+| [`docs/test-plan.md`](docs/test-plan.md) | 最终测试方案、执行判据、测试采集与待解决问题 |
 
 厂商资料的版本、限值和来源须与实际设备固件对应；仓库中的配置值本身不构成厂商保证。

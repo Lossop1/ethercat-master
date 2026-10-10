@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """由证据目录重建 index.tsv 与各轮的 row.tsv。
 
-用法：python3 analysis/series_index.py reports/_<系列>
+用法：python3 analysis/series_index.py evidence/_<系列>
 
 为什么要有这一件。bench_series.sh 在每轮结束时写一行到 index.tsv，用的是**当时那份**
 report_row.py——工具本身有 bug 时（2026-09-29 就发生过：两个字段取错了层，列里出现

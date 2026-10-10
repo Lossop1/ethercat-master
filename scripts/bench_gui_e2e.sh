@@ -70,7 +70,7 @@
 # 在真主站上通了，再四臂各 60 秒：**每一臂都收到帧（obs 60458 帧、drive 60186 帧，
 # 跳号都是 0），逐臂判定器判绿**；A/B 四项计数全 0 且都不劣于同轮 solo 基线；
 # drive 臂五轴 30° 往返全部到位（最低一根曾到过 +30.132°）；每臂都有序停机。
-# 证据在 reports/_gui/evidence_e2e.txt（**每次跑都覆盖，本脚本不归档旧的那份**）。
+# 证据在 evidence/_gui/evidence_e2e.txt（**每次跑都覆盖，本脚本不归档旧的那份**）。
 # 要留下这一轮的，跑完先自己 cp 一份出去。**那份文件是 root 属主的**（脚本以 root 跑），
 # 于是之后用 orangepi 身份 `git reset --hard` 会被这个路径挡住（"权限不够"，且 reset
 # 会停在那里只做了一半）。取下来之后 `sudo rm` 或 `sudo chown` 一下再同步。
@@ -89,7 +89,7 @@ RECIP_TRAVERSE=${RECIP_TRAVERSE:-3}
 ARMS=${ARMS:-solo bridge obs}
 CMD_PORT=${CMD_PORT:-5001}
 OBS_PORT=${OBS_PORT:-5002}
-EVIDENCE_DIR=${EVIDENCE_DIR:-$REPO/reports/_gui}
+EVIDENCE_DIR=${EVIDENCE_DIR:-$REPO/evidence/_gui}
 EVIDENCE=$EVIDENCE_DIR/evidence_e2e.txt
 RUN_LOG=/tmp/gui_e2e_run.txt
 # 逐臂存档报告的地方。可覆盖**是为了让判据那一段能被离线检查**（checks/

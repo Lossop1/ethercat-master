@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""整个系列的判据：把 reports/_<SERIES>/index.tsv 读成一句话 + 一个退出码。
+"""整个系列的判据：把 evidence/_<SERIES>/index.tsv 读成一句话 + 一个退出码。
 
 用法：
-    python3 analysis/series_verdict.py reports/_duodec25b [--strict]
+    python3 analysis/series_verdict.py evidence/_duodec25b [--strict]
 
 为什么要有它。index.tsv 已经把一轮蒸馏成一行 28 列，但那只是**数据**，不是**判定**：
 "这轮到底行不行"要读的人自己在脑子里过一遍。四组系列跑下来，人眼阅卷错了两次 ——
@@ -285,7 +285,7 @@ def judge(row, sdir, displacements, policy):
 def main():
     parser = argparse.ArgumentParser(
         description="读一个系列的 index.tsv，给出每轮判定与总结论")
-    parser.add_argument("path", help="系列目录（reports/_<SERIES>）或其中的 index.tsv")
+    parser.add_argument("path", help="系列目录（evidence/_<SERIES>）或其中的 index.tsv")
     parser.add_argument("--strict", action="store_true",
                         help="把 WARN 也当不过（默认只有 FAIL 影响退出码）")
     args = parser.parse_args()
