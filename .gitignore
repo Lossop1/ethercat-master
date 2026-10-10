@@ -13,8 +13,13 @@ compile_commands.json
 # 仅作为本地旧项目归档保留，构建只使用 external/SOEM。
 /SOEM-master.zip
 
-# 供应商原始资料属于本地受控输入，当前没有再分发授权记录。
-/docs/lz-joint/
+# 供应商资料（docs/lz-joint/）已入库。原因不是"参考资料该留档"，而是它是活依赖：
+# config/devices/cyberbeast_isvd90rc_300b_100_70.json 的 esi 字段直接指向
+# docs/lz-joint/ECAT_CIA402.xml，gen/device/derive_device_facts.py 要读它，
+# README 的对象编号权威链也引 ds402.eds。已跟踪的配置指向未跟踪的文件，新 clone
+# 拉下来就跑不通设备档那条链。
+# 原先排除的理由是"没有再分发授权记录"—— 这条已由项目方确认解除，若日后重新收紧，
+# 要连同上面那三处引用一起处理，不能只把目录加回 .gitignore。
 
 # 台架产物的落点：报告本体（可达 265 MB）、归档与原始日志都不进仓库。
 # 用 "_*/*" 而不是 "_*/"：写成后者的形式会把目录自身排除掉，
