@@ -56,6 +56,7 @@
   },
   "$defs": {
     "uint32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "uint16": {"type": "integer", "minimum": 0, "maximum": 65535},
     "sdo_read": {
       "type": "object",
       "additionalProperties": false,
@@ -189,6 +190,8 @@
         "state": {"type": "integer", "minimum": 0, "maximum": 65535},
         "has_dc": {"type": "boolean"},
         "has_coe": {"type": "boolean"},
+        "mbx_rl": {"$ref": "#/$defs/uint16",
+                   "description": "邮箱读写长度（SOEM 的 slave->mbx_rl）。生产者自 2026-09 起写它，更早的指纹没有这个字段，故不列入 required。"},
         "target_profile_id": {"type": "string", "minLength": 1},
         "target_profile_match": {"const": true},
         "target_pdo_match": {"const": true},

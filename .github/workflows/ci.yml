@@ -95,6 +95,14 @@ jobs:
       - name: 削旧检查的判别力（离线，期望不通过）
         run: python3 checks/report_archive_check.py --mutate
 
+      # 装置指纹的 schema 在 2026-10 之前没有任何东西在执行：没有代码读它，也没有工具
+      # import jsonschema。它就在那种状态下漂移了 —— 生产者后来加了 mbx_rl 字段，
+      # schema 没跟着声明，于是"按 schema 合格"对两份入库指纹并不成立。
+      # 这条的变异对照是内建的（不像上面几条要 --mutate）：它太便宜，
+      # 没有理由让它依赖"记得加那个参数"。
+      - name: 装置指纹符合 schema（离线）
+        run: python3 checks/fingerprint_schema_check.py
+
       # 控制台引擎与按键层的离线回归，外加启动窗口那条检查的对抗性对照。
       # 对照单独跑一次是有意的：它证明"主站还在启动"那段窗口的检查抓得住
       # 裸下标（2026-09-18 面板一帧就死、主站没人看着跑到两根轴进故障那个）。
