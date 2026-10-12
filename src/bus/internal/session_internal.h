@@ -165,6 +165,14 @@ typedef struct {
      * 前一份现场"，晚 50 ms 读到的已经是掉出之后的状态，因果就分不出来了。
      */
     volatile bool first_mismatch_detail_wanted;
+    /*
+     * 首次不符补读的有界放宽窗口（单调纳秒；0 = 未放宽）。补读很可能落在退出路径上：
+     * 主站中止时先清 observer_running、再 join，而那一刻正是唯一一次能读到故障现场的
+     * 机会——所以这一次补读不被 observer_running 挡住，改由本字段给的预算封顶。
+     * 窗口外的一切读数仍照原样被 observer_running 拦下。见 session_observer_thread.c 的
+     * observer_read_permitted / observer_service_first_mismatch。
+     */
+    volatile uint64_t observer_final_read_deadline_ns;
     /* 观测线程是否已经跑完线程函数。只负责"先看一眼"——真正回收线程仍然是 pthread_join，
      * 所以这里不需要比 running 更强的同步。有了它，停机序言才能把 join 拆成
      * "置标志 → 每周期看一眼 → 回收"三段，中间照常发帧。 */

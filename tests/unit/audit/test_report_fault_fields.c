@@ -339,12 +339,13 @@ int main(int argc, char **argv)
 
     /* ── 停机来源与归档保留份数 ────────────────────────────────────────── */
     printf("结果级字段\n");
-    /* 是 10 而不是 6/8：6 早被那批游离提交占用（带 tracking_error 的那种形状），
+    /* 是 11 而不是 6/8：6 早被那批游离提交占用（带 tracking_error 的那种形状），
      * 同一版本号下并存两种形状正是这次要避开的。见 report_sections.c 里那段注释。
      * 升到 10 的理由：多了分类层，报告怎么被解读变了——旧脚本以为 status_code 就是
-     * 结论，而它现在只是输入。 */
-    check(strstr(text, "\"schema_version\":10") != NULL,
-          "schema_version 是 10（加了分类层就要升版本）");
+     * 结论，而它现在只是输入。升到 11 的理由：逐轴多了首次不符当下的 1C32/1C33
+     * 计数器（first_mismatch_sm2/sm3），旧报告里这一层不存在。 */
+    check(strstr(text, "\"schema_version\":11") != NULL,
+          "schema_version 是 11（加了首次不符的同步计数器就要升版本）");
     check(strstr(text,
                  "\"error_class\":\"DRIVE_FAULT\",\"error_class_text\":\"驱动器自报故障\","
                  "\"error_class_evidence_no_frame\":false,"

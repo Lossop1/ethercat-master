@@ -52,6 +52,13 @@
 #define OBSERVER_SYNC_PROBE_INTERVAL 50U
 
 /*
+ * 首次不符现场补读的总预算。12 轴 × 2 个对象 × 4 个子索引 = 96 次邮箱往返，实测单次
+ * 约 2.7 ms，合起来约 260 ms；留出余量。它只在中止路径上花，且是"读得到故障现场"
+ * 与"停机多花 0.3 秒"之间的取舍——读不到就永远只能是猜测。
+ */
+#define OBSERVER_FIRST_MISMATCH_BUDGET_MS 400U
+
+/*
  * P11.3: 观测线程的栈尺寸，必须显式指定，不能吃默认的 8 MB。
  *
  * 交接段把"建观测线程"切成单独一片塞进 OP 请求循环之后，该片实测 558/598/726/859 µs
@@ -135,6 +142,22 @@ static void observer_note_stop(emaster_soem_session_t *session, int site)
     }
 }
 
+/*
+ * 邮箱读是否放行。正常情况由 observer_running 说；首次不符补读那一次是例外——
+ * 主站中止路径会先清 observer_running 再 join，而那一刻正是唯一一次能读到故障现场
+ * 的机会，所以这一次改由观察窗口（observer_final_read_deadline_ns）封顶。
+ * 两处判断（读入口、读返回后）共用本函数，免得放宽只做了一半。
+ */
+static bool observer_read_permitted(emaster_soem_session_t *session)
+{
+    if (session->observer_running)
+    {
+        return true;
+    }
+    return session->observer_final_read_deadline_ns != 0U &&
+           observer_now_ns() < session->observer_final_read_deadline_ns;
+}
+
 static int observer_sdo_read(emaster_soem_session_t *session, uint16_t slave, uint16_t index,
                              uint8_t subindex, int *size, void *value)
 {
@@ -143,7 +166,7 @@ static int observer_sdo_read(emaster_soem_session_t *session, uint16_t slave, ui
     uint64_t duration_ns;
     int wkc;
 
-    if (!session->observer_running)
+    if (!observer_read_permitted(session))
     {
         /* 在读入口发现：标志落在两次读之间（上一次读返回后没有被立刻看到）。 */
         observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_BETWEEN);
@@ -162,7 +185,7 @@ static int observer_sdo_read(emaster_soem_session_t *session, uint16_t slave, ui
     }
     session->report->observer_stop.read_count++;
     session->report->observer_stop.read_last_ns = duration_ns;
-    if (!session->observer_running)
+    if (!observer_read_permitted(session))
     {
         /*
          * 读返回时才发现：标志是在这次邮箱往返期间落下的。这一条与"读入口发现"必须
@@ -494,6 +517,67 @@ static bool observer_record_sync_probe(uint64_t *first_error_exchange,
     return recorded;
 }
 
+/*
+ * 首次 WKC 不符的故障现场补读：逐轴 AL + 逐轴 1C32/1C33 计数器，一次做完、同一坐标。
+ *
+ * 触发条件只有第一次：周期线程那次有界广播读没读齐（或状态不一致）时会置
+ * first_mismatch_detail_wanted；而这个标志在报告里只有一处落点
+ * （session_exchange.c 的 record_first_mismatch_scene 只认首次不符），所以最多服务一次。
+ *
+ * AL 先读、计数器后读：AL 便宜且判**性质**（还在 OP / 已掉 SAFE-OP），计数器贵且判**量级**。
+ * 预算不够时先丢的是量级，不是性质。
+ *
+ * 本函数**允许在 observer_running 已清之后运行**：中止路径先停观测线程再 join，而那正是
+ * 唯一一次能读到故障现场的时刻。放宽由 observer_final_read_deadline_ns 单独给，且整体
+ * 有界（OBSERVER_FIRST_MISMATCH_BUDGET_MS）；窗口一过，后续读数照旧被 observer_running 拦下。
+ */
+static void observer_service_first_mismatch(emaster_soem_session_t *session)
+{
+    if (!session->first_mismatch_detail_wanted)
+    {
+        return;
+    }
+    session->first_mismatch_detail_wanted = false;
+    session->observer_final_read_deadline_ns =
+        observer_now_ns() + (uint64_t)OBSERVER_FIRST_MISMATCH_BUDGET_MS * UINT64_C(1000000);
+
+    ecx_readstate(&session->context);
+    for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
+    {
+        emaster_control_session_axis_result_t *result = &session->axes[axis];
+        const uint16_t slave_position = emaster_soem_session_axis_slave(session, axis);
+        const ec_slavet *slave = &session->context.slavelist[slave_position];
+        observer_sync_probe_t sm2_probe;
+        observer_sync_probe_t sm3_probe;
+
+        result->first_mismatch_al_read = true;
+        result->first_mismatch_al_state = slave->state;
+        result->first_mismatch_al_status_code = slave->ALstatuscode;
+
+        memset(&sm2_probe, 0, sizeof(sm2_probe));
+        memset(&sm3_probe, 0, sizeof(sm3_probe));
+        if (observer_read_sync_counters(session, slave_position, UINT16_C(0x1C32), &sm2_probe))
+        {
+            result->first_mismatch_sm2.read_succeeded = true;
+            result->first_mismatch_sm2.sm_event_missed = sm2_probe.sm_event_missed;
+            result->first_mismatch_sm2.cycle_time_too_small = sm2_probe.cycle_time_too_small;
+            result->first_mismatch_sm2.shift_time_too_short = sm2_probe.shift_time_too_short;
+            result->first_mismatch_sm2.sync_error = sm2_probe.sync_error;
+        }
+        if (observer_read_sync_counters(session, slave_position, UINT16_C(0x1C33), &sm3_probe))
+        {
+            result->first_mismatch_sm3.read_succeeded = true;
+            result->first_mismatch_sm3.sm_event_missed = sm3_probe.sm_event_missed;
+            result->first_mismatch_sm3.cycle_time_too_small = sm3_probe.cycle_time_too_small;
+            result->first_mismatch_sm3.shift_time_too_short = sm3_probe.shift_time_too_short;
+            result->first_mismatch_sm3.sync_error = sm3_probe.sync_error;
+        }
+    }
+    session->observer_final_read_deadline_ns = 0U;
+    printf("[P4.3] 首次不符现场：逐轴 AL 与 1C32/1C33 计数器已由观测线程补读\n");
+    fflush(stdout);
+}
+
 /* 50ms 睡眠同样要可中断，否则 join 还要多等一个完整睡眠周期。 */
 static void observer_sleep(emaster_soem_session_t *session, const struct timespec *interval)
 {
@@ -577,41 +661,20 @@ static void *observer_thread_func(void *arg)
         uint64_t iteration_start_ns;
         uint64_t iteration_ns;
 
+        /*
+         * 先服务未决的首次不符补读，**再**判停止。
+         *
+         * 顺序是判据的一部分：主站中止时会先清 observer_running、再 join，若把停止检查
+         * 放在前面，这个标志就永远等不到消费者——2026-10-12 第一轮 12 轴全是 al_read=false
+         * 正是这么丢的。补读自己带预算，所以放在停止检查之前不会让 join 变成无界等待。
+         */
+        observer_service_first_mismatch(session);
+
         if (!session->observer_running)
         {
             /* 循环顶发现：睡眠片与读入口都没先看到它，说明标志落在两次检查之间。 */
             observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_BETWEEN);
             break;
-        }
-
-        /*
-         * 首次 WKC 不符的逐轴 AL 详情补读。
-         *
-         * 周期线程那一刻只发了一次有界广播读（见 session_exchange.c 与
-         * session_internal.h 的 first_mismatch_detail_wanted）；读不齐或状态不一致时
-         * 由这里补完整读。**放在周期外是刻意的**：完整读在"刚丢过帧"的网卡上会退化成
-         * 每从站一次 2 ms 的 FPRD，落在周期里就把一次丢帧放大成 3 ms 帧间隔、进而掉轴
-         * ——2026-10-12 的 A/B 实测：带那次读 6 轮掉 2 轮，不带 6 轮不掉。
-         *
-         * 写 axes[] 的 first_mismatch_al_* 是既有做法：本线程同样在写 sm2_/sm3_ 探针字段，
-         * 而那些字段与这里的三个一样，只在 join 之后被读。
-         */
-        if (session->first_mismatch_detail_wanted)
-        {
-            session->first_mismatch_detail_wanted = false;
-            ecx_readstate(&session->context);
-            for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
-            {
-                emaster_control_session_axis_result_t *result = &session->axes[axis];
-                const ec_slavet *slave = &session->context.slavelist[
-                    emaster_soem_session_axis_slave(session, axis)];
-
-                result->first_mismatch_al_read = true;
-                result->first_mismatch_al_state = slave->state;
-                result->first_mismatch_al_status_code = slave->ALstatuscode;
-            }
-            printf("[P4.3] 首次不符的逐轴 AL 详情已由观测线程补读\n");
-            fflush(stdout);
         }
 
         iteration_start_ns = observer_now_ns();

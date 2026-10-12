@@ -577,6 +577,15 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->first_mismatch_al_state,
         (unsigned int)axis->first_mismatch_al_status_code) >= 0);
     /*
+     * 与上面同一时刻、同一批读到的 1C32/1C33 计数器：驱动器自己数到的同步违例。
+     * 它们与 sm2_diagnostic/sm3_diagnostic 的区别只在坐标（这里是首次不符当下，
+     * 那两处是停机之后），所以用同一个写函数，读者按字段名区分来源。
+     */
+    REQUIRE_WRITE(fputs(",\"first_mismatch_sm2\":", stream) != EOF);
+    REQUIRE_WRITE(write_sync_diagnostic(stream, &axis->first_mismatch_sm2));
+    REQUIRE_WRITE(fputs(",\"first_mismatch_sm3\":", stream) != EOF);
+    REQUIRE_WRITE(write_sync_diagnostic(stream, &axis->first_mismatch_sm3));
+    /*
      * 解码结论：本轴到底报的是哪个 AL 码、哪个 0x603F，以及是从哪个坐标选来的。
      *
      * 为什么还要 origin：AL 码在报告里有好几个坐标（首次不符、停机进/出、停机前言），
@@ -1334,8 +1343,13 @@ bool emaster_run_report_write(FILE *stream,
      * 升版而不是"就这么加"：这一层改变的是**读者怎么解读整份报告**——以前同一个
      * status_code 就是结论，现在它是输入，结论在 error_class 里。发同一个版本号会
      * 让分析脚本以为两份报告可比，而其实一份有分类一份没有。
+     *
+     * 11：逐轴多出 first_mismatch_sm2/first_mismatch_sm3——首次不符当下读到的
+     * 1C32/1C33 计数器。它回答的是"驱动器自己在这个时刻已经数到几次同步违例"，而
+     * 已有的 sm2_/sm3_diagnostic 在停机后读，混了退出期事件。有了它，0x001A 才能和
+     * 子机制对上；没有它的旧报告里这一层根本不存在，不可比。
      */
-REQUIRE_WRITE(fputs("{\"schema_version\":10,\"generated_at_utc\":", stream) != EOF);
+REQUIRE_WRITE(fputs("{\"schema_version\":11,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));

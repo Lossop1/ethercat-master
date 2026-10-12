@@ -296,12 +296,21 @@ typedef struct
     /*
      * 第一个 WKC 不符当下的 AL 快照，回答"驱动器此刻还在不在 OP"。更进一步的问法是
      * 驱动器自己的 SM2 事件丢失计数此刻是多少（帧异常在前则接近 0，驱动器监督在前则
-     * 已接近阈值），但那只能走邮箱读 1C32:11，而在周期里发邮箱本身就是推出 OP 的
-     * 原因之一（见 session_exchange.c 现场函数的说明），故不在此处取。
+     * 已接近阈值）。那个读数走邮箱读 1C32/1C33，而在周期里发邮箱本身就是推出 OP 的
+     * 原因之一（见 session_exchange.c 现场函数的说明），所以它和上面的 al_* 同一批、
+     * 由观测线程在周期外补读，落在下面两个字段里。
      */
     bool first_mismatch_al_read;
     uint16_t first_mismatch_al_state;
     uint16_t first_mismatch_al_status_code;
+    /*
+     * 与上面同一时刻、同一批读到的 1C32/1C33 计数器。与 sm2_diagnostic/sm3_diagnostic
+     * 的区别只在坐标：那两个在停机后读，混了退出与状态转换期间的事件；这两个读在
+     * 首次不符当下，是"驱动器自己数到的同步违例"唯一一次能和 AL 码对齐的读数。
+     * read_succeeded = false 表示这次没读到，而不是读到零。
+     */
+    emaster_sync_diagnostic_t first_mismatch_sm2;
+    emaster_sync_diagnostic_t first_mismatch_sm3;
     /*
      * 报告里那一个"这一轴到底是什么 AL 码"的结论，以及它是从哪个坐标选来的。
      *
