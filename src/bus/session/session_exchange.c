@@ -50,6 +50,16 @@
 #define EMASTER_ERROR_COUNTER_MIN_TIMEOUT_US 50
 
 /*
+ * 首次不符时那次 AL 状态广播读的超时上限。
+ *
+ * 为什么不是 EC_TIMEOUTRET（2000 µs）：A/B 实测（各 6 轮，只差这一件事）里，
+ * 原来那次读把一次 1 ms 的丢帧放大成 3.000 ms 的帧间隔，6 轮掉 2 轮轴；
+ * 跳过它之后 6 轮一次不掉，而两组的丢帧次数相同。放大器是这次读，不是链路。
+ * 200 µs 是"够一次广播往返、又不吃掉周期预算"的量级：健康周期收包 p50 约 50 µs。
+ */
+#define EMASTER_FIRST_MISMATCH_AL_TIMEOUT_US 200
+
+/*
  * P8.2 的额度算法，P11.3 起由周期内的诊断读与启动阶段的交接读共用。
  *
  * 从"周期长度 − 收包超时"里按轴数除出来，量不够下限就返回 0（表示不该读）。
@@ -301,19 +311,48 @@ static void record_first_mismatch_scene(emaster_soem_session_t *session)
                session->exchange);
         return;
     }
-    ecx_readstate(&session->context);
-    for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
+    /*
+     * 这里**不调 ecx_readstate**。它在广播读凑不齐 slavecount 时会退化成每从站一次
+     * FPRD、每次吃 EC_TIMEOUTRET（2000 µs），而"刚丢过帧"正是凑不齐的时候。
+     *
+     * 改发一次有界广播读，只走 ecx_readstate 的那条便宜路径：
+     *   读齐 + 无错误位 + 全部同一状态 → 当场填逐轴字段，这一份就是"第一时刻"的现场；
+     *   否则 → 置标志交给观测线程补完整读，周期这一拍不再为诊断停留。
+     * 为什么不能整个挪给观测线程：本函数上面那段注释写着"真正有判别力的是前一份
+     * 现场"——晚 50 ms 读到的已经是掉出之后的状态，因果就分不出来了。
+     */
     {
-        emaster_control_session_axis_result_t *result = &session->axes[axis];
-        const ec_slavet *slave = &session->context.slavelist[
-            emaster_soem_session_axis_slave(session, axis)];
+        uint16_t brd_value = 0U;
+        const int brd_wkc = ecx_BRD(&session->context.port, 0, ECT_REG_ALSTAT,
+                                    (uint16_t)sizeof(brd_value), &brd_value,
+                                    EMASTER_FIRST_MISMATCH_AL_TIMEOUT_US);
+        const uint16_t brd_raw = etohs(brd_value);
+        const uint16_t brd_state = (uint16_t)(brd_raw & UINT16_C(0x000F));
+        const bool all_present = brd_wkc >= (int)session->context.slavecount;
+        const bool no_error = (brd_raw & EC_STATE_ERROR) == 0U;
+        const bool uniform = (brd_state == EC_STATE_INIT || brd_state == EC_STATE_PRE_OP ||
+                              brd_state == EC_STATE_SAFE_OP || brd_state == EC_STATE_OPERATIONAL);
 
-        result->first_mismatch_al_read = true;
-        result->first_mismatch_al_state = slave->state;
-        result->first_mismatch_al_status_code = slave->ALstatuscode;
-        printf("[WKC] 首次不符 交换号=%" PRIu64 " 轴%zu: AL state=%u, status_code=0x%04X\n",
-               session->exchange, axis + 1U, (unsigned int)slave->state,
-               (unsigned int)slave->ALstatuscode);
+        if (all_present && no_error && uniform)
+        {
+            for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
+            {
+                emaster_control_session_axis_result_t *result = &session->axes[axis];
+                result->first_mismatch_al_read = true;
+                result->first_mismatch_al_state = brd_state;
+                result->first_mismatch_al_status_code = 0x0000U;
+            }
+            printf("[WKC] 首次不符 交换号=%" PRIu64 "：广播读齐（wkc=%d），全部 AL state=%u 且无错误位\n",
+                   session->exchange, brd_wkc, (unsigned int)brd_state);
+        }
+        else
+        {
+            session->first_mismatch_detail_wanted = true;
+            printf("[WKC] 首次不符 交换号=%" PRIu64 "：广播读不齐（wkc=%d/%u）或状态不一致"
+                   "（state=%u err=%d），逐轴详情交给观测线程\n",
+                   session->exchange, brd_wkc, (unsigned int)session->context.slavecount,
+                   (unsigned int)brd_state, no_error ? 0 : 1);
+        }
     }
 }
 

@@ -583,6 +583,37 @@ static void *observer_thread_func(void *arg)
             observer_note_stop(session, EMASTER_OBSERVER_STOP_SITE_BETWEEN);
             break;
         }
+
+        /*
+         * 首次 WKC 不符的逐轴 AL 详情补读。
+         *
+         * 周期线程那一刻只发了一次有界广播读（见 session_exchange.c 与
+         * session_internal.h 的 first_mismatch_detail_wanted）；读不齐或状态不一致时
+         * 由这里补完整读。**放在周期外是刻意的**：完整读在"刚丢过帧"的网卡上会退化成
+         * 每从站一次 2 ms 的 FPRD，落在周期里就把一次丢帧放大成 3 ms 帧间隔、进而掉轴
+         * ——2026-10-12 的 A/B 实测：带那次读 6 轮掉 2 轮，不带 6 轮不掉。
+         *
+         * 写 axes[] 的 first_mismatch_al_* 是既有做法：本线程同样在写 sm2_/sm3_ 探针字段，
+         * 而那些字段与这里的三个一样，只在 join 之后被读。
+         */
+        if (session->first_mismatch_detail_wanted)
+        {
+            session->first_mismatch_detail_wanted = false;
+            ecx_readstate(&session->context);
+            for (size_t axis = 0U; axis < session->plan->axis_count; ++axis)
+            {
+                emaster_control_session_axis_result_t *result = &session->axes[axis];
+                const ec_slavet *slave = &session->context.slavelist[
+                    emaster_soem_session_axis_slave(session, axis)];
+
+                result->first_mismatch_al_read = true;
+                result->first_mismatch_al_state = slave->state;
+                result->first_mismatch_al_status_code = slave->ALstatuscode;
+            }
+            printf("[P4.3] 首次不符的逐轴 AL 详情已由观测线程补读\n");
+            fflush(stdout);
+        }
+
         iteration_start_ns = observer_now_ns();
         /*
          * 同步诊断探针只在驱动器已经在 OP 里之后才读：进入 OP 之前 DC 同步还没跑，

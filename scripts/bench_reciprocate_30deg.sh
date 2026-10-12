@@ -85,16 +85,20 @@ START_EPOCH=$(date +%s)
 
 # 报告路径从部署配置里读，避免换部署时忘了同步（四轴用的就是另一个路径）。
 # 按 deployment_id 找文件，不能按文件名猜：文件名用下划线，ID 用连字符。
-REPORT_REL=$(DEPLOYMENT="$DEPLOYMENT" python3 -c "
+DEPLOY_FIELDS=$(DEPLOYMENT="$DEPLOYMENT" python3 -c "
 import json, os, glob, sys
 target = os.environ['DEPLOYMENT']
 for path in sorted(glob.glob('${REPO}/config/deployments/*.json')):
     with open(path) as handle:
-        if json.load(handle).get('deployment_id') == target:
-            print(json.load(open(path))['run_report_path'])
+        doc = json.load(handle)
+        if doc.get('deployment_id') == target:
+            print(doc['run_report_path'])
+            print(doc.get('ethercat_interface', ''))
             sys.exit(0)
 sys.exit(1)
 " 2>/dev/null)
+REPORT_REL=$(printf '%s\n' "$DEPLOY_FIELDS" | sed -n 1p)
+NIC_IFACE=$(printf '%s\n' "$DEPLOY_FIELDS" | sed -n 2p)
 if [ -z "$REPORT_REL" ]; then
     echo "错误：读不出部署 $DEPLOYMENT 的 run_report_path" >&2
     exit 1
@@ -134,6 +138,28 @@ echo "主站日志=$LOG 客户端日志=$CLIENT_LOG"
 pkill -9 -f emaster-master 2>/dev/null
 sleep 2
 rm -f /tmp/emaster-*.sock
+
+#
+# 起主站前先把总线上所有从站真正停用。
+#
+# 为什么必须有这一步：主站自己的"禁用"只走 PDO，而 PDO 只在 OP 下有效。上一轮
+# 只要有轴掉出 OP，那条禁用就到不了它，驱动器保持上一次收到的"使能"、功率级继续
+# 带电。下一轮主站做配置时这些轴不配合，于是整轮起不来——**一次掉轴会连锁毁掉
+# 后面每一轮**，而这正是 2026-10-12 实测到的形状（第 1 轮掉 7 台，第 2 轮起全部
+# "身份或 PDO 与部署配置不一致"；手动停用之后 12 台立刻恢复正常）。
+#
+# 本工具走**邮箱 SDO** 往 0x6040 写 Disable Voltage，邮箱在 PRE-OP 下仍可用，
+# 所以它到得了那些已经掉出 OP 的轴。这也意味着：**它会立刻卸掉电机的保持转矩**，
+# 带重力负载或抱闸未抱时不要跑（见 apps/disable_drives/main.c 的文件头）。
+#
+DISABLE_BIN="$BUILD/apps/disable_drives/emaster-disable"
+if [ -n "$NIC_IFACE" ] && [ -x "$DISABLE_BIN" ]; then
+    echo "=== 起主站前停用所有从站（$NIC_IFACE）==="
+    "$DISABLE_BIN" "$NIC_IFACE" 2>&1 | tail -3
+    echo "=== 停用结束 ==="
+else
+    echo "注意：没有网卡名或找不到 $DISABLE_BIN，跳过起主站前的停用"
+fi
 
 # OBS_PREFIX 为空时下面那行就是原样的命令行；为 "env EMASTER_OBSERVATION=1" 时
 # 由 env 把开关递进主站的环境。不写成 "$OBS_PREFIX ./build/..." 是因为空字符串会
