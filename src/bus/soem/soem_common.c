@@ -25,6 +25,21 @@ void emaster_soem_sdo_context_init(
     reader->audit = audit;
     reader->phase = phase;
     reader->exchange = exchange;
+    /* 默认沿用 SOEM 的全长邮箱超时；需要收紧的调用者用 set_timeout。 */
+    reader->timeout_us = EC_TIMEOUTRXM;
+}
+
+void emaster_soem_sdo_set_timeout(emaster_soem_sdo_reader_context_t *reader, int us)
+{
+    if (reader == NULL)
+    {
+        return;
+    }
+    /*
+     * 只允许收紧，不允许放宽：放宽的后果是一个不可达的从站能把调用方卡到
+     * 比 SOEM 默认更久，那不是任何调用者想要的。非法值一律退回默认。
+     */
+    reader->timeout_us = (us > 0 && us <= EC_TIMEOUTRXM) ? us : EC_TIMEOUTRXM;
 }
 
 static void record_sdo(emaster_soem_sdo_reader_context_t *reader,
@@ -54,7 +69,7 @@ static bool write_integer(emaster_soem_sdo_reader_context_t *reader,
 {
     bool succeeded = reader != NULL && reader->context != NULL && raw != NULL &&
                      ecx_SDOwrite(reader->context, reader->slave, index, subindex,
-                                  FALSE, (int)size, raw, EC_TIMEOUTRXM) > 0;
+                                  FALSE, (int)size, raw, reader->timeout_us) > 0;
 
     record_sdo(reader, EMASTER_AUDIT_DIRECTION_WRITE, value_kind, index, subindex,
                raw, size, succeeded, unsigned_value, signed_value);
@@ -338,7 +353,7 @@ static bool read_integer(emaster_soem_sdo_reader_context_t *reader, uint16_t ind
         return false;
     }
     return ecx_SDOread(reader->context, reader->slave, index, subindex, FALSE, &actual_size,
-                       value, EC_TIMEOUTRXM) > 0 &&
+                       value, reader->timeout_us) > 0 &&
            actual_size == size;
 }
 

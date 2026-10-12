@@ -38,6 +38,19 @@ static uint64_t prologue_mark_ns(const emaster_soem_session_t *session, uint64_t
  * 环境变量开关：只认写明的几种真值。不能用"首字母是 o 就是 on"这种写法——off 也会命中，
  * 而这条开关唯一的用途就是对照实验，静默地把 off 当成 on 会让整批对照作废。
  */
+/*
+ * 停机时"逐台核对失能"那一段的邮箱超时（µs）。
+ *
+ * 为什么必须收紧而不能用 SOEM 默认的 EC_TIMEOUTRXM（700 ms）：**读失败不是立刻
+ * 失败，是先等满超时才失败。** 这一段要逐台做三次收发（读 6041 → 写 6040 →
+ * 再读 6041），12 台若都不可达就是 12 × 3 × 700 ms ≈ 25 秒的停机停顿。
+ *
+ * 30 ms 与观测线程的 OBSERVER_MAILBOX_TIMEOUT_US 同一个量级，理由也一样：
+ * 正常邮箱往返约 3 ms，30 ms 有十倍裕量。超过 30 ms 还不回话的从站，
+ * 就是真的够不到——把"够不到"如实记成 unverified，比拿 25 秒换同一个答案好。
+ */
+#define EMASTER_SHUTDOWN_DISABLE_TIMEOUT_US 30000
+
 bool emaster_soem_env_flag_enabled(const char *name)
 {
     const char *value = getenv(name);
@@ -1009,6 +1022,13 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
             emaster_soem_sdo_context_init(&sdo, &session->context, (uint16_t)(axis_index + 1U),
                                           &session->report->audit,
                                           EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC, session->exchange);
+            /*
+             * 收紧这一段的邮箱超时。**读失败不是立刻失败，是先等满超时才失败**，
+             * 而 SOEM 默认的 EC_TIMEOUTRXM 是 700 ms —— 12 台 x 3 次操作，若都不
+             * 可达就是 25 秒。禁用是安全动作，该尝试；但不该拿 25 秒去换一个
+             * 已知读不到的答案。30 ms 与观测线程同一个量级（正常往返约 3 ms）。
+             */
+            emaster_soem_sdo_set_timeout(&sdo, EMASTER_SHUTDOWN_DISABLE_TIMEOUT_US);
             axis_result->shutdown_statusword_before_read = emaster_soem_read_u16(
                 &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword_before);
             axis_result->shutdown_disable_written = emaster_soem_write_u16(

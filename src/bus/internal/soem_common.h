@@ -18,7 +18,22 @@ typedef struct
     emaster_run_audit_t *audit;
     emaster_audit_phase_t phase;
     uint64_t exchange;
+    /*
+     * 本次邮箱访问的等待上限（µs）。emaster_soem_sdo_context_init 默认填
+     * EC_TIMEOUTRXM（700 ms），调用者可用 emaster_soem_sdo_set_timeout 收紧。
+     *
+     * 为什么必须能改：**读失败不是立刻失败，是先等满这个超时才失败。**
+     * 一个不可达的从站，12 台 x 3 次操作就能让停机卡 25 秒。观测线程早就因为
+     * 这个理由自己调 ecx_SDOread(..., 30000) 绕开了这个函数（见
+     * session_observer_thread.c 顶部注释），但那等于把同一件事做了两遍。
+     * 停机时的失能核对是第二个需要收紧的调用者：它宁可"30 ms 读不到算读不到"，
+     * 也不能拿 25 秒去换一个已知读不到的答案。
+     */
+    int timeout_us;
 } emaster_soem_sdo_reader_context_t;
+
+/* 收紧本上下文的邮箱超时。us <= 0 或大于 EC_TIMEOUTRXM 时按 EC_TIMEOUTRXM 处理。 */
+void emaster_soem_sdo_set_timeout(emaster_soem_sdo_reader_context_t *reader, int us);
 
 /* 建立一次从站邮箱访问上下文；审计指针可以为空，供非控制诊断工具复用。 */
 void emaster_soem_sdo_context_init(
