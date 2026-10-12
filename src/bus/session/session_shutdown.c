@@ -976,6 +976,76 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
      * 报告中的 read_succeeded=false 分不清"没尝试"和"读失败"，SM 同步计数器
      * （1C32/1C33）就是这样一轮都没读到。邮箱在 SAFE-OP 下仍然可用，会话还在就能读。
      */
+    /*
+     * ===== 第一段：禁用。**不设任何前置条件**，只要会话还在就逐台尝试。 =====
+     *
+     * 为什么要和下面的诊断读分开设门槛。原先这两件事共用一个条件
+     * （diagnostic_preop_reached || safe_op_reached），而那个条件只在"到过 OP 且成功
+     * 切回 PRE-OP"时才成立——**于是最需要禁用的那些轴，恰好是被它挡住的轴**：
+     *   · 会话从没到过 OP（启动阶段就失败）
+     *   · 到过 OP 但切不回 PRE-OP，safe_op 也没到（掉轴的典型形状）
+     *   · 以 WKC 不符结束的会话
+     * 2026-09-14 的证据文件把最后这条写成"第二条待修路径"：WKC 不符连续 5 次触发策略
+     * 锁存 → 会话以 WKC_MISMATCH 结束 → 停机路径因"通信不可用"整段跳过 → **驱动器一个
+     * 停用帧都收不到**。2026-10-12 台架复现：一轮掉 7 台之后实测 7 台的 0x6041 仍是
+     * 0x1237（Operation enabled），而主站报告写的是"安全停机完成"。
+     *
+     * 用户的要求说得很直白：**系统说关，就得是真的关**。所以这一段没有条件——
+     * 发不出去是发不出去（那会如实记进 shutdown_disable_written=false），
+     * 但"没到某个 AL 状态"不能成为不尝试的理由。
+     */
+    if (session->context_open) {
+        size_t still_enabled = 0U;
+        size_t disable_attempted = 0U;
+        size_t disable_unreadable = 0U;
+
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+            emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
+            emaster_soem_sdo_reader_context_t sdo;
+
+            emaster_soem_sdo_context_init(&sdo, &session->context, (uint16_t)(axis_index + 1U),
+                                          &session->report->audit,
+                                          EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC, session->exchange);
+            axis_result->shutdown_statusword_before_read = emaster_soem_read_u16(
+                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword_before);
+            axis_result->shutdown_disable_written = emaster_soem_write_u16(
+                &sdo, UINT16_C(0x6040), UINT8_C(0), UINT16_C(0x0000));
+            axis_result->shutdown_statusword_read = emaster_soem_read_u16(
+                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword);
+
+            if (axis_result->shutdown_disable_written) {
+                ++disable_attempted;
+            }
+            if (!axis_result->shutdown_statusword_read) {
+                ++disable_unreadable;
+            } else if ((axis_result->shutdown_statusword & UINT16_C(0x0004)) != 0U) {
+                ++still_enabled;
+            }
+        }
+        /*
+         * 把核对结果说出来。这是"说关"与"真的关"之间那一步：只看写调用的返回值不够，
+         * 写成功而驱动器没照做才是真正要抓的形状；读不回来也要算未证实，不能当通过。
+         */
+        session->report->shutdown_disable_attempted_count = disable_attempted;
+        session->report->shutdown_disable_verified_count =
+            session->plan->axis_count - still_enabled - disable_unreadable;
+        session->report->shutdown_still_enabled_count = still_enabled;
+        session->report->shutdown_enable_unverified_count = disable_unreadable;
+        if (still_enabled > 0U || disable_unreadable > 0U) {
+            printf("[SHUTDOWN] ！失能未全部证实：仍使能=%zu 台，读不回=%zu 台"
+                   "（共 %zu 台，写入尝试 %zu 台）\n",
+                   still_enabled, disable_unreadable, session->plan->axis_count,
+                   disable_attempted);
+        } else {
+            printf("[SHUTDOWN] 失能已逐台证实：%zu/%zu 台 0x6041 的 bit2=0\n",
+                   session->plan->axis_count, session->plan->axis_count);
+        }
+        fflush(stdout);
+    }
+    /*
+     * ===== 第二段：其余停机诊断读。保留原门槛——读不到就是读不到。 =====
+     * 禁用已在上一段做过，这里不再重复。
+     */
     if (session->report->diagnostic_preop_reached || session->report->safe_op_reached) {
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
@@ -985,36 +1055,14 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
                                           &session->report->audit,
                                           EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC, session->exchange);
             /*
-             * **权威的禁用走邮箱，不走 PDO。而且它排在这一段的最前面。**
+             * 禁用（读 6041 → 写 6040=0 → 再读 6041）已在本函数上面的第一段做过，
+             * 而且那一段**不设门槛**。这里只做诊断读。
              *
-             * 一、为什么走邮箱。安全停机那条路（本文件上面的周期交换）把控制字 0x0000
-             * 放进了 PDO —— 而 PDO 只在 OP 下有效。从站一旦掉出 OP，"禁用"就到不了它，
-             * 驱动器保持着最后一次收到的"使能"，功率级继续带电。2026-10-08 实测：ESC 的
-             * AL 状态已是 INIT，而 12 台驱动器的 0x6041 全是 0x1237（Operation enabled +
-             * Voltage enabled）—— 操作员几个月来反复报告的"主站说退出了 OP，但电机明显
-             * 还在保持"就是这一条。**这是一条安全缺陷。**
-             *
-             * 一条基本道理：**不能用周期通道去送"停止周期通道"的命令。** 那条命令必须在
-             * 通道坏掉之后仍然送得到，而邮箱正是这样一条通道（PRE-OP 下仍可用，只有
-             * INIT 才关闭）。
-             *
-             * 二、为什么排在最前。这一段之后还有一批 SDO 读（0x6060/0x6061/0x60F4、驱动
-             * 诊断、1C32/1C33、换算、配置诊断），12 台 x 十来次邮箱往返。2026-10-08 实测：
-             * 环上最后两席（第 11、12 台）的邮箱操作在这条队列的**末端全部失败**
-             * （statusword_before_read=false），于是那次禁用根本没发出去，**那两台在会话
-             * 结束后一直是使能的**（独立扫描实测 0x1237），要人手动再禁一次。
-             * **禁用是这一段里最不能失败的一条，所以它必须排在前面。**
-             *
-             * 顺序是「读状态字 -> 写禁用 -> 再读状态字」。前一次读留下"我们动手之前它
-             * 是不是已经使能着"，后一次读是**写入生效的证据** —— 只看写调用的返回值不
-             * 够：写成功而驱动器没照做，是这里真正要抓的形状。
+             * 两段分开的理由写在第一段的注释里：原先共用一个门槛，而那个门槛只在
+             * "到过 OP 且成功切回 PRE-OP"时成立，于是最需要禁用的轴恰好被挡住。
+             * 禁用的权威通道仍是邮箱（PDO 只在 OP 下有效，不能用周期通道去送
+             * "停止周期通道"的命令），顺序仍是"读状态字 → 写禁用 → 再读状态字"。
              */
-            axis_result->shutdown_statusword_before_read = emaster_soem_read_u16(
-                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword_before);
-            axis_result->shutdown_disable_written = emaster_soem_write_u16(
-                &sdo, UINT16_C(0x6040), UINT8_C(0), UINT16_C(0x0000));
-            axis_result->shutdown_statusword_read = emaster_soem_read_u16(
-                &sdo, UINT16_C(0x6041), UINT8_C(0), &axis_result->shutdown_statusword);
             axis_result->mode_command_sdo_read = emaster_soem_read_i8(
                 &sdo, UINT16_C(0x6060), UINT8_C(0), &axis_result->mode_command_sdo);
             axis_result->mode_display_sdo_read = emaster_soem_read_i8(

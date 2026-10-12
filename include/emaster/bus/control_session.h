@@ -983,6 +983,29 @@ typedef struct
     bool restore_init_succeeded;
     bool diagnostic_preop_reached;
     /*
+     * 停机时"失能是否真的做到了"的四个计数。它们回答的是用户那句要求：
+     * **系统说关，就得是真的关。**
+     *
+     * 为什么不能只看 safe_state_reached：那个布尔说的是**主站视角**（安全停机帧
+     * 发出去了、状态字读到了"未使能"），而 PDO 只在 OP 下有效——掉出 OP 的轴收不到
+     * 任何停用帧，却仍然是"安全停机完成"。2026-10-08 与 2026-10-12 两次实测都抓到
+     * 这个形状：报告写安全停机完成，独立扫描读 0x6041 却是 0x1237（Operation enabled）。
+     *
+     * 所以停机时逐台走邮箱「读 6041 → 写 6040=0 → 再读 6041」，这四个数就是那次核对：
+     *   attempted  —— 写调用发出去了几台
+     *   verified   —— 读回来确认 bit2=0 的有几台（**这才是"真的关"**）
+     *   still_enabled —— 读回来仍然 bit2=1 的有几台（写成功而驱动器没照做，最该抓的形状）
+     *   unverified —— 读不回来的有几台（没证实，不能当通过）
+     * 不变式：verified + still_enabled + unverified == 轴数。
+     *
+     * 这一段不设任何前置条件（原先与停机诊断共用一个门槛，而那个门槛只在"到过 OP
+     * 且成功切回 PRE-OP"时成立——最需要禁用的轴恰好被它挡住）。
+     */
+    size_t shutdown_disable_attempted_count;
+    size_t shutdown_disable_verified_count;
+    size_t shutdown_still_enabled_count;
+    size_t shutdown_enable_unverified_count;
+    /*
      * 停机序言里停止 SDO 观测线程（pthread_join）的耗时。该窗口内不发送任何过程
      * 数据，超过驱动器的同步容差即触发 AL 0x1A 掉出 OP（2026-09-14 台架证据）。
      * 记录成数值才能判断"序言阻塞"这个解释是否留有裕量。

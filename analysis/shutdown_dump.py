@@ -42,6 +42,32 @@ def first_mismatch(index, axis):
         row.get("al_state"), row.get("al_status_code") or 0)
 
 
+def dump_disable(report):
+    """停机时"真的失能了吗"。用户的要求是"系统说关就得是真的关"。
+
+    不要用 safe_state_reached 代替它：那个说的是主站视角（安全停机帧发出去了），
+    而 PDO 只在 OP 下有效——掉出 OP 的轴收不到停用帧，却仍然显示"安全状态到达"。
+    这里印的是逐台走邮箱核对 0x6041 的结果。
+    """
+    block = report.get("shutdown_disable")
+    if not block:
+        print("  失能核对：报告里没有这一段（schema_version 8 及以前）")
+        return
+    attempted = block.get("attempted", "?")
+    verified = block.get("verified", "?")
+    enabled = block.get("still_enabled", "?")
+    unverified = block.get("unverified", "?")
+    verdict = "真的关了" if enabled == 0 and unverified == 0 else "**没有全部证实**"
+    print("  失能核对：%s  写入尝试 %s 台 / 已证实 %s 台 / 仍使能 %s 台 / 读不回 %s 台"
+          % (verdict, attempted, verified, enabled, unverified))
+    if enabled:
+        print("            ！仍使能的轴：%s" % " ".join(
+            "#%d" % (index + 1)
+            for index, axis in enumerate(report.get("axes") or [])
+            if axis.get("shutdown_statusword_read")
+            and (axis.get("shutdown_statusword") or 0) & 0x0004))
+
+
 def dump_prologue(report):
     block = report.get("shutdown_prologue") or {}
     if not block:
@@ -186,6 +212,7 @@ def main():
                 for index, axis in enumerate(axes)))
             print("            首帧不符 %s" % " ".join(
                 first_mismatch(index, axis) for index, axis in enumerate(axes)))
+        dump_disable(report)
         dump_prologue(report)
         dump_cycles(report)
         dump_attempts(report)

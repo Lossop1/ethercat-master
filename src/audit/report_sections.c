@@ -1255,7 +1255,8 @@ bool emaster_run_report_write(FILE *stream,
      * 过程映像的值，主站永远知道自己写了什么。这一列是切开这两种情形唯一的读数
      * （layering-plan P12.41）。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":8,\"generated_at_utc\":", stream) != EOF);
+    /* 9：新增 shutdown_disable 块——停机时逐台核对"真的失能了吗"的结论。 */
+REQUIRE_WRITE(fputs("{\"schema_version\":9,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1537,13 +1538,25 @@ bool emaster_run_report_write(FILE *stream,
         ",\"audit\":{\"omitted_pdo_samples\":%" PRIu64
         ",\"omitted_final_samples\":%" PRIu64
         ",\"access_count\":%zu,\"cyclic_capacity\":%zu,\"final_capacity\":%zu},"
-        "\"diagnostic_preop_reached\":%s,",
+        "\"diagnostic_preop_reached\":%s,"
+        /*
+         * 停机时"失能是否真的做到了"。用户的要求是"系统说关就得是真的关"，
+         * 而这四个数就是那次逐台核对的结论——verified 才是"真的关"，
+         * still_enabled 是"写了但没照做"，unverified 是"没证实"。
+         * 不要拿 safe_state_reached 代替它：那个说的是主站视角。
+         */
+        "\"shutdown_disable\":{\"attempted\":%zu,\"verified\":%zu,"
+        "\"still_enabled\":%zu,\"unverified\":%zu},",
         report->audit.omitted_pdo_samples,
         report->audit.omitted_final_samples,
         report->audit.access_count,
         report->audit.sealed_capacity,
         report->audit.final_capacity,
-        report->diagnostic_preop_reached ? "true" : "false") >= 0);
+        report->diagnostic_preop_reached ? "true" : "false",
+        report->shutdown_disable_attempted_count,
+        report->shutdown_disable_verified_count,
+        report->shutdown_still_enabled_count,
+        report->shutdown_enable_unverified_count) >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
         "\"dc\":{\"required\":%s,\"configured\":%s,\"startup_stable\":%s,"
