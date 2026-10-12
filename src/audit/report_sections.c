@@ -2,6 +2,11 @@
 
 #include "json_writer.h"
 
+/* 解码表。审计层负责"写出来"，不负责"怎么解"——那两件事都在 diagnostics 叶子里。 */
+#include "emaster/diagnostics/al_status.h"
+#include "emaster/diagnostics/cia402_error.h"
+#include "emaster/diagnostics/error_class.h"
+
 #include <inttypes.h>
 
 #define REQUIRE_WRITE(expression) do { if (!(expression)) return false; } while (0)
@@ -357,6 +362,34 @@ static bool write_timing(FILE *stream, const emaster_cyclic_timing_stats_t *timi
     return true;
 }
 
+/*
+ * 逐轴解码文本。origin 为 NONE（这个坐标压根没读回来）时印"未读到"，**不许**印
+ * describe(0) 给出的"无错误/无故障"——"没读到"与"驱动器报 0"在数字上是同一个 0，
+ * 意思却相反。报告里把这两者印成同一句话，就等于把本次专门拆开的两种情形又合
+ * 回去，而它们指向完全不同的排查方向（一个是通信没回来，一个是驱动器真的没事）。
+ */
+static const char *axis_al_status_text(const emaster_control_session_axis_result_t *axis,
+                                       char *buffer, size_t capacity)
+{
+    if (axis->al_status_code_origin == EMASTER_AL_ORIGIN_NONE)
+    {
+        return "未读到";
+    }
+    (void)emaster_al_status_describe(axis->al_status_code_decoded, buffer, capacity);
+    return buffer;
+}
+
+static const char *axis_drive_error_text(const emaster_control_session_axis_result_t *axis,
+                                         char *buffer, size_t capacity)
+{
+    if (axis->drive_error_code_origin == EMASTER_DRIVE_ORIGIN_NONE)
+    {
+        return "未读到";
+    }
+    (void)emaster_cia402_error_describe(axis->drive_error_code_decoded, buffer, capacity);
+    return buffer;
+}
+
 static bool write_axis(FILE *stream,
                        const emaster_session_axis_plan_t *axis_plan,
                        const emaster_control_session_axis_result_t *axis)
@@ -543,6 +576,43 @@ static bool write_axis(FILE *stream,
         axis->first_mismatch_al_read ? "true" : "false",
         (unsigned int)axis->first_mismatch_al_state,
         (unsigned int)axis->first_mismatch_al_status_code) >= 0);
+    /*
+     * 解码结论：本轴到底报的是哪个 AL 码、哪个 0x603F，以及是从哪个坐标选来的。
+     *
+     * 为什么还要 origin：AL 码在报告里有好几个坐标（首次不符、停机进/出、停机前言），
+     * 各自读到的码可以不同，而"选了哪一个"此前只存在于取值的那一行代码里——报告
+     * 记不住，事后就没法复核判据。origin 就是那个判据的落点。
+     *
+     * origin 取值（见 emaster_al_origin_t / emaster_drive_error_origin_t）：
+     *   AL：0 无 / 1 first_mismatch / 2 shutdown_entry / 3 shutdown_pre_stop
+     *       / 4 shutdown_exit / 5 shutdown
+     *   驱动：0 无 / 1 runtime / 2 shutdown / 3 safeop
+     *
+     * 这几个键是**平铺**的，不是嵌在一个 "decode" 对象里：报告里凡嵌 {} 的地方，
+     * extract_report.py 一类靠 [^}]* 的抽取器都会提前截断（见上文过程映像那段）。
+     *
+     * 文本在这里现解，报告里不留中间字符串：码表只有一个调用者，多存一份就可能
+     * 与码表漂开。codes 是 uint16，但 JSON 里当数字写，与既有 error_code 一致。
+     */
+    {
+        char al_text[128];
+        char drive_text[128];
+        REQUIRE_WRITE(fprintf(
+            stream,
+            ",\"al_status_code_decoded\":%u,\"al_status_code_origin\":%u,\"al_status_code_text\":",
+            (unsigned int)axis->al_status_code_decoded,
+            (unsigned int)axis->al_status_code_origin) >= 0);
+        REQUIRE_WRITE(emaster_json_string(
+            stream, axis_al_status_text(axis, al_text, sizeof(al_text))));
+        REQUIRE_WRITE(fprintf(
+            stream,
+            ",\"drive_error_code_decoded\":%u,\"drive_error_code_origin\":%u,"
+            "\"drive_error_code_text\":",
+            (unsigned int)axis->drive_error_code_decoded,
+            (unsigned int)axis->drive_error_code_origin) >= 0);
+        REQUIRE_WRITE(emaster_json_string(
+            stream, axis_drive_error_text(axis, drive_text, sizeof(drive_text))));
+    }
     /*
      * P12.17: 这一轴被判故障的坐标。recorded 为假时后四个字段无意义（不是 0 号
      * 交换），所以显式给出记录标志，不靠读者去猜 0 的含义。
@@ -1256,7 +1326,16 @@ bool emaster_run_report_write(FILE *stream,
      * （layering-plan P12.41）。
      */
     /* 9：新增 shutdown_disable 块——停机时逐台核对"真的失能了吗"的结论。 */
-REQUIRE_WRITE(fputs("{\"schema_version\":9,\"generated_at_utc\":", stream) != EOF);
+    /*
+     * 10：新增分类层。逐轴多出 al_status_code_decoded/origin/text 与
+     * drive_error_code_decoded/origin/text（选了哪个码、从哪个坐标选来、它叫什么），
+     * 结果级多出 error_class 一组（类别键、中文、两个证据位、两个轴号）。
+     *
+     * 升版而不是"就这么加"：这一层改变的是**读者怎么解读整份报告**——以前同一个
+     * status_code 就是结论，现在它是输入，结论在 error_class 里。发同一个版本号会
+     * 让分析脚本以为两份报告可比，而其实一份有分类一份没有。
+     */
+REQUIRE_WRITE(fputs("{\"schema_version\":10,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1320,7 +1399,7 @@ REQUIRE_WRITE(fputs("{\"schema_version\":9,\"generated_at_utc\":", stream) != EO
         "\"sync0_disabled\":%s,"
         "\"restore_init_succeeded\":%s,"
         "\"shutdown_observer_join_ns\":%" PRIu64
-        ",\"shutdown_prologue_gap_ns\":%" PRIu64 "},",
+        ",\"shutdown_prologue_gap_ns\":%" PRIu64 ",",
         (unsigned int)report->status, (unsigned int)report->state, report->io_map_size,
         (unsigned int)report->expected_wkc, report->actual_wkc,
         report->cycle_count, report->process_data_exchange_count,
@@ -1354,6 +1433,34 @@ REQUIRE_WRITE(fputs("{\"schema_version\":9,\"generated_at_utc\":", stream) != EO
         report->restore_init_succeeded ? "true" : "false",
         report->shutdown_observer_join_ns,
         report->shutdown_prologue_gap_ns) >= 0);
+    /*
+     * 本次事故的分类结论——"这一轮到底出了什么事"，与上面的 status_code（"哪一步
+     * 失败了"）是两层。status_code 一个值可能装四种真的事故（WKC_MISMATCH 就是），
+     * 要分开看只能靠这一组。
+     *
+     * 六个证据位随类别一起写，是因为同类别证据不同正是要能分开的东西：一次"整帧
+     * 缺失"是环尾还是整条链路，看 evidence_no_frame 与 silent_axes；一次同步事故
+     * 是靠 AL 码还是靠 SYNC0 迟到看出来的，看 sync_axes 是否为 0 而 evidence_sync
+     * 为真。first_*_axis 给到具体轴号：只说"5 根不应答"分不出"尾部连号"与"散在
+     * 几根"，而这两种指向完全不同的排查方向。
+     *
+     * 键名与 emaster_error_class_* 字段一一对应，读的人不用猜。
+     */
+    REQUIRE_WRITE(fputs("\"error_class\":", stream) != EOF);
+    REQUIRE_WRITE(emaster_json_string(stream, emaster_error_class_key(report->error_class)));
+    REQUIRE_WRITE(fputs(",\"error_class_text\":", stream) != EOF);
+    REQUIRE_WRITE(emaster_json_string(stream, emaster_error_class_text(report->error_class)));
+    REQUIRE_WRITE(fprintf(
+        stream,
+        ",\"error_class_evidence_no_frame\":%s,\"error_class_evidence_sync\":%s,"
+        "\"error_class_silent_axes\":%u,\"error_class_sync_axes\":%u,"
+        "\"error_class_first_silent_axis\":%u,\"error_class_first_sync_axis\":%u},",
+        report->error_class_evidence_no_frame ? "true" : "false",
+        report->error_class_evidence_sync ? "true" : "false",
+        report->error_class_silent_axes,
+        report->error_class_sync_axes,
+        report->error_class_first_silent_axis,
+        report->error_class_first_sync_axis) >= 0);
     REQUIRE_WRITE(fputs("\"first_cycle_failure\":", stream) != EOF);
     REQUIRE_WRITE(write_cycle_failure(stream, &report->first_cycle_failure));
     REQUIRE_WRITE(fputs(",\"first_runtime_failure\":", stream) != EOF);

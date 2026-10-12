@@ -343,6 +343,17 @@ static void print_probe_summary(const emaster_probe_ramp_t *ramp,
             (unsigned long long)report->cycle_count, report->actual_wkc,
             (unsigned int)report->expected_wkc);
     /*
+     * 与主程序印同一行（同一条 message key）。目标探针是第二个报告生产者，两个
+     * 工具用同一个键，控制台与报告才不会各说各的。
+     *
+     * 报告在调用本函数之前就已发布，分类字段此刻已经是最终值。
+     */
+    fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_ERROR_CLASS_LINE),
+            emaster_error_class_key(report->error_class),
+            emaster_error_class_text(report->error_class),
+            (unsigned long long)report->wkc_no_frame_count,
+            report->error_class_silent_axes, report->error_class_sync_axes);
+    /*
      * 目标写入成功不等于驱动器执行。回调分支没有跟随误差判定，因此必须显式暴露
      * 安全门原因、最终控制字和 PDO 中的目标值，才能区分「主站没发」和「驱动器没动」。
      */

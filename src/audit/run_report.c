@@ -289,7 +289,7 @@ static bool report_stem(const char *path, char *buffer, size_t capacity)
 }
 
 bool emaster_run_report_publish(const emaster_session_plan_t *plan,
-                                const emaster_control_session_report_t *report,
+                                emaster_control_session_report_t *report,
                                 const char *path,
                                 uint32_t archive_keep)
 {
@@ -298,6 +298,13 @@ bool emaster_run_report_publish(const emaster_session_plan_t *plan,
     char timestamp[32];
     FILE *stream;
     bool written;
+
+    /*
+     * 分类放在**路径检查之前**：即使这次因为路径非法/写盘失败根本没发布出去，
+     * 调用方手上那份报告也已经带上了分类——控制台与日志读的是同一份内存。
+     * （report 为 NULL 时它自己直接返回。）
+     */
+    emaster_run_report_classify(report);
 
     if (plan == NULL || report == NULL || path == NULL ||
         strlen(path) >= sizeof(temporary_path) - 32U ||

@@ -289,12 +289,71 @@ int main(int argc, char **argv)
               "轴 3 的那个 955 仍原样印出——判据是 read，不是值看起来像不像真的");
     }
 
+    /* ── 解码层：AL 码与 0x603F 选了哪个、从哪来、叫什么 ───────────────── */
+    /*
+     * schema_version 10 加的这一层。要钉住的是两件事：
+     *   1. 四个键**平铺**在同一层（下面整段连起来断言，嵌一层 {} 就断）；
+     *   2. "读到 0x0000"与"从没读到"印得不一样 —— 与慢速遥测那条约定同源（P11.8），
+     *      只不过这次的 0 更毒：0x0000 的意思是"驱动器报无故障"，而"没读到"什么
+     *      也没说，两者在数字上完全一样。
+     */
+    printf("解码层\n");
+    if (!axis_section(text, 1U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 1 的对象分界（解码层）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"al_status_code_decoded\":0,\"al_status_code_origin\":0,"
+                     "\"al_status_code_text\":\"未读到\","
+                     "\"drive_error_code_decoded\":0,\"drive_error_code_origin\":0,"
+                     "\"drive_error_code_text\":\"未读到\"") != NULL,
+              "轴 1 两个坐标都没读回来：origin=0 且文本印'未读到'，"
+              "四个键平铺在同一层（有嵌套就断在这里）");
+    }
+    if (!axis_section(text, 2U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 2 的对象分界（解码层）");
+    }
+    else
+    {
+        /* 0x2310 = 8976。夹具里这一轴的 0x603F 是运行期读到的。 */
+        check(strstr(section,
+                     "\"drive_error_code_decoded\":8976,\"drive_error_code_origin\":1,"
+                     "\"drive_error_code_text\":\"过电流\"") != NULL,
+              "轴 2 读到了 0x603F=0x2310，文本解成'过电流'（origin=1 表示来自运行期轮询）");
+    }
+    if (!axis_section(text, 3U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 3 的对象分界（解码层）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"drive_error_code_decoded\":0,\"drive_error_code_origin\":1,"
+                     "\"drive_error_code_text\":\"无故障\"") != NULL,
+              "轴 3 **读到了 0x0000**：origin=1 且文本'无故障'——"
+              "与轴 1 的'未读到'必须分得开，这正是这一层存在的理由");
+    }
+
     /* ── 停机来源与归档保留份数 ────────────────────────────────────────── */
     printf("结果级字段\n");
-    /* 是 8 而不是 6：6 早被那批游离提交占用（带 tracking_error 的那种形状），
-     * 同一版本号下并存两种形状正是这次要避开的。见 report_sections.c 里那段注释。 */
-    check(strstr(text, "\"schema_version\":8") != NULL,
-          "schema_version 是 8（加了字段就要升版本；6 被游离提交占着）");
+    /* 是 10 而不是 6/8：6 早被那批游离提交占用（带 tracking_error 的那种形状），
+     * 同一版本号下并存两种形状正是这次要避开的。见 report_sections.c 里那段注释。
+     * 升到 10 的理由：多了分类层，报告怎么被解读变了——旧脚本以为 status_code 就是
+     * 结论，而它现在只是输入。 */
+    check(strstr(text, "\"schema_version\":10") != NULL,
+          "schema_version 是 10（加了分类层就要升版本）");
+    check(strstr(text,
+                 "\"error_class\":\"DRIVE_FAULT\",\"error_class_text\":\"驱动器自报故障\","
+                 "\"error_class_evidence_no_frame\":false,"
+                 "\"error_class_evidence_sync\":false,"
+                 "\"error_class_silent_axes\":0,\"error_class_sync_axes\":0,") != NULL,
+          "结果里带上了类别与证据位（夹具是 DRIVE_FAULT，两条通信证据都为假）");
+    check(strstr(text, "\"error_class_first_silent_axis\":0,") != NULL &&
+              strstr(text, "\"error_class_first_sync_axis\":0") != NULL,
+          "两个'第一根'轴号也落盘（没有时取 0）");
     check(strstr(text, "\"stop_requested\":true") != NULL,
           "result 里有 stop_requested");
     check(strstr(text, "\"stop_source\":2") != NULL,

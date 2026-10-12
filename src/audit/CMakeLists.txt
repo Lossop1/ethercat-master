@@ -10,8 +10,16 @@ target_include_directories(
 emaster_enable_strict_warnings(emaster_run_audit)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_library(emaster_run_report STATIC run_report.c report_sections.c json_writer.c)
+    add_library(
+        emaster_run_report
+        STATIC
+            run_report.c
+            report_error_class.c
+            report_sections.c
+            json_writer.c)
     add_library(emaster::run_report ALIAS emaster_run_report)
+
+    target_link_libraries(emaster_run_report PUBLIC emaster::diagnostics)
 
     target_compile_features(emaster_run_report PUBLIC c_std_11)
     target_include_directories(

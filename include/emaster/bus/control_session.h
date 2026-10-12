@@ -4,6 +4,7 @@
 #include "emaster/audit/run_audit.h"
 #include "emaster/cia402/controller.h"
 #include "emaster/cyclic/timing.h"
+#include "emaster/diagnostics/error_class.h"
 #include "emaster/motion/relative_position.h"
 #include "emaster/motion/position_target.h"
 #include "emaster/session/session_plan.h"
@@ -122,6 +123,29 @@ typedef struct
     uint16_t requested_assign_activate;
     uint16_t observed_assign_activate;
 } emaster_dc_axis_result_t;
+
+/*
+ * 逐轴 al_status_code_decoded 是从哪一个坐标选出来的（见该字段处的说明）。
+ * "无" 表示四个坐标都没有可信读数——不是"轴没问题"。
+ */
+typedef enum
+{
+    EMASTER_AL_ORIGIN_NONE = 0,
+    EMASTER_AL_ORIGIN_FIRST_MISMATCH,      /* 首次计数不符时那次广播读 */
+    EMASTER_AL_ORIGIN_SHUTDOWN_ENTRY,      /* 刚进入停机 */
+    EMASTER_AL_ORIGIN_SHUTDOWN_PRE_STOP,   /* 发出第一个安全停机帧之前 */
+    EMASTER_AL_ORIGIN_SHUTDOWN,            /* 退出周期后、切诊断状态前 */
+    EMASTER_AL_ORIGIN_SHUTDOWN_EXIT        /* 已广播全体回 INIT 之后 */
+} emaster_al_origin_t;
+
+/* 逐轴 drive_error_code_decoded 的来源。 */
+typedef enum
+{
+    EMASTER_DRIVE_ORIGIN_NONE = 0,
+    EMASTER_DRIVE_ORIGIN_RUNTIME,   /* 运行期观测线程的慢速轮询 */
+    EMASTER_DRIVE_ORIGIN_SHUTDOWN,  /* 停机终态诊断 */
+    EMASTER_DRIVE_ORIGIN_SAFEOP     /* SAFE-OP 模式读回时的诊断 */
+} emaster_drive_error_origin_t;
 
 /*
  * 驱动故障对象来自供应商对象字典。read_succeeded 为 false 时，其余数值不得用于
@@ -278,6 +302,25 @@ typedef struct
     bool first_mismatch_al_read;
     uint16_t first_mismatch_al_state;
     uint16_t first_mismatch_al_status_code;
+    /*
+     * 报告里那一个"这一轴到底是什么 AL 码"的结论，以及它是从哪个坐标选来的。
+     *
+     * 为什么要有 origin。整个会话会在四个时刻各读一次逐轴 AL（首次计数不符、停机入口、
+     * 安全停机前、请求回 INIT 之后），它们不一定都读得到。分类器要判"哪几轴不应答"
+     * 就得知道"这个 0 是轴不应答，还是这一次压根没读到"——没有 origin，这两件事在报告里
+     * 长得一模一样，而 0 恰好又是两种情形的同一个编码。这正是仓库里反复踩的那个坑。
+     *
+     * 只存"选了哪一个 + 从哪来"：文本在写出报告时用 emaster_al_status_describe() 解码，
+     * 于是码表在本文件之外只有一个调用者，报告结构里也不留字符串。
+     */
+    uint16_t al_status_code_decoded;
+    uint8_t al_status_code_origin;   /* emaster_al_origin_t */
+    /*
+     * 0x603F（CiA 402 error code）的结论与来源。读数可能来自运行期观测线程的慢速
+     * 轮询、停机终态诊断，或 SAFE-OP 时的读回；三者何者先有可信读数就取谁。
+     */
+    uint16_t drive_error_code_decoded;
+    uint8_t drive_error_code_origin; /* emaster_drive_error_origin_t */
     emaster_position_scale_t position_scale;
     /* P4.4: 错误计数器（0x0300-0x030F），周期内 FPRD 读取 */
     bool error_counters_read;
@@ -373,6 +416,19 @@ typedef struct
     /* 退出周期后、切换诊断状态前的 AL 快照，不冒充故障发生瞬间的状态。 */
     uint16_t shutdown_al_state;
     uint16_t shutdown_al_status_code;
+    /*
+     * 四个 AL 坐标各自的**读取伴随位**。
+     *
+     * 没有它，state==0 有两种读法：轴不应答，或这一段压根没跑到（字段留在零初始化
+     * 值上）。控制台文本分得开（"AL没读回来(state=0)"是照着当前这一段的读数打的），
+     * 但**报告里分不开**——而 0 恰好是两种情形的同一个编码。分类器要判"哪几轴不应答"
+     * 就必须有这一位，否则会把"没读到"判成"不应答"。位在各自那次 ecx_readstate()
+     * 之后立刻置真，语义是"这一次读过，值是该轴的回答或缺席"。
+     */
+    bool shutdown_al_read;
+    bool shutdown_entry_al_read;
+    bool shutdown_pre_stop_al_read;
+    bool shutdown_exit_al_read;
     /*
      * 停机序言的两个附加 AL 坐标：刚进入停机（应力来自周期运行）与发出第一个安全
      * 停机帧之前（应力来自序言阻塞）。只靠第三个坐标无法区分"周期运行中掉出 OP"和
@@ -896,6 +952,24 @@ typedef struct
 typedef struct
 {
     emaster_control_session_status_t status;
+    /*
+     * 会话的**诊断分类**，在发布报告时由审计侧派生一次（emaster_run_report_classify）。
+     * 与 status 分工不同：那个是控制流判决（31 值，冻结、只追加），这个是"到底出了
+     * 什么事"的人读桶——一个 status 可能落到多个类（WKC_MISMATCH 就是四个）。
+     * 会话本身不写它；总线层不解释分类，只如实填 AL 读数与计数器。
+     */
+    emaster_error_class_t error_class;
+    /*
+     * 分类所依据的两项证据，独立于最终落成哪一类，所以"同类别但证据不同"仍分得开。
+     * 例如"整帧缺失 + 同步码"的混合事故会落成 LINK_DROPPED，而 evidence_sync 照样为真。
+     */
+    bool error_class_evidence_no_frame;
+    bool error_class_evidence_sync;
+    unsigned error_class_silent_axes;   /* 有可信 AL 读数、且完全不应答的轴数 */
+    unsigned error_class_sync_axes;     /* 报同步类 AL 码的轴数（0 而 evidence_sync 为真
+                                         *  表示同步证据只来自 SYNC0 连续迟到那一支） */
+    unsigned error_class_first_silent_axis; /* 1 基轴号；0 = 无 */
+    unsigned error_class_first_sync_axis;   /* 1 基轴号；0 = 无 */
     emaster_control_state_t state;
     char interface_name[128];
     /*

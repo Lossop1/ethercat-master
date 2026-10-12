@@ -32,8 +32,21 @@ bool emaster_run_report_resolve_path(const char *path, char *buffer, size_t capa
  * 翻倍占用；内容此后不再修改，链接在语义上是准确的。
  */
 bool emaster_run_report_publish(const emaster_session_plan_t *plan,
-                                const emaster_control_session_report_t *report,
+                                emaster_control_session_report_t *report,
                                 const char *path,
                                 uint32_t archive_keep);
+
+/*
+ * 给报告补上错误分类字段（master 级的 error_class 与逐轴的解码结果）。
+ *
+ * 由 publish() 自己调，调用方**不需要**单独调。公开它只是为了测试能直接喂一份
+ * 构造好的报告进来，不必真写文件。
+ *
+ * 参数是非 const 的：本函数就是要在报告上写字段。publish 的 report 参数去 const
+ * 也是这个原因——它以前不改报告，那个 const 在说谎。
+ *
+ * 幂等：重复调用结果相同（它只读原始读数，不改任何被当作输入的字段）。
+ */
+void emaster_run_report_classify(emaster_control_session_report_t *report);
 
 #endif

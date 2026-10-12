@@ -162,6 +162,16 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
             (unsigned long long)report->cycle_count, result_text(report->stop_requested),
             result_text(report->safe_output_sent), result_text(report->safe_state_reached),
             result_text(report->sync0_disabled), result_text(report->restore_init_succeeded));
+    /*
+     * 分类行紧跟在汇总行后面：汇总行给的是"走到哪一步"，这一行给的是"出了什么事"。
+     * 两句都印，是因为它们答的问题不同——一次 WKC 不符在汇总行里只能看出"最后交换
+     * 的 WKC 不对"，分不出是环尾丢站、短帧还是驱动器同步错，而那三种的排查方向相反。
+     */
+    fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_ERROR_CLASS_LINE),
+            emaster_error_class_key(report->error_class),
+            emaster_error_class_text(report->error_class),
+            (unsigned long long)report->wkc_no_frame_count,
+            report->error_class_silent_axes, report->error_class_sync_axes);
     if (report->first_cycle_failure.present) {
         const emaster_cycle_failure_t *failure = &report->first_cycle_failure;
         fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FIRST_FAILURE_LINE),

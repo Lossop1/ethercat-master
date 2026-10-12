@@ -98,11 +98,13 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
         {
             session->axes[axis_index].shutdown_entry_al_state = slave->state;
             session->axes[axis_index].shutdown_entry_al_status_code = slave->ALstatuscode;
+            session->axes[axis_index].shutdown_entry_al_read = true;
         }
         else
         {
             session->axes[axis_index].shutdown_pre_stop_al_state = slave->state;
             session->axes[axis_index].shutdown_pre_stop_al_status_code = slave->ALstatuscode;
+            session->axes[axis_index].shutdown_pre_stop_al_read = true;
         }
     }
     /*
@@ -959,6 +961,7 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
             session->axes[axis_index].shutdown_al_status_code =
                 session->context.slavelist[
                     emaster_soem_session_axis_slave(session, axis_index)].ALstatuscode;
+            session->axes[axis_index].shutdown_al_read = true;
         }
         session->context.slavelist[0].state = EC_STATE_PRE_OP;
         session->report->diagnostic_preop_reached =
@@ -1132,6 +1135,7 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
 
             session->axes[axis_index].shutdown_exit_al_state = slave->state;
             session->axes[axis_index].shutdown_exit_al_status_code = slave->ALstatuscode;
+            session->axes[axis_index].shutdown_exit_al_read = true;
             if (slave->state == 0U)
             {
                 ++exit_unreadable;

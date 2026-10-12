@@ -174,6 +174,7 @@ configure_file(
     @ONLY)
 
 add_subdirectory(src/protocol)
+add_subdirectory(src/diagnostics)
 add_subdirectory(src/catalog)
 add_subdirectory(src/config)
 add_subdirectory(src/messages)

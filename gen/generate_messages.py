@@ -87,6 +87,7 @@ MESSAGE_KEYS = [
     "control_session_scale_line",
     "control_session_motion_line",
     "control_session_summary_line",
+    "control_session_error_class_line",
     "control_session_match",
     "control_session_mismatch",
     "control_session_not_configured",
@@ -153,6 +154,7 @@ MESSAGE_FORMATS = {
     "control_session_scale_line": ("u", "s", "u", "u", "u", "u"),
     "control_session_motion_line": ("u", "s", "d", "d", "d", "u", "s", "d", "u", "u"),
     "control_session_summary_line": ("s", "s", "s", "s", "s", "u", "d", "u", "s", "s", "s", "s", "s"),
+    "control_session_error_class_line": ("s", "s", "u", "u", "u"),
     "control_session_report_saved": ("s",),
     "control_session_report_failed": ("s",),
 }
