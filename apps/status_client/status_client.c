@@ -95,7 +95,8 @@ static int connect_to_master(const char *socket_path)
     }
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1U);
+    /* 长度上面已经卡过，memcpy 不会越界；addr 已清零，末尾留着 NUL。 */
+    memcpy(addr.sun_path, socket_path, strlen(socket_path));
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
         perror("connect");

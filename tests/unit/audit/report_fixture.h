@@ -239,8 +239,16 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->report.status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;
     fixture->report.stop_requested = true;
     fixture->report.stop_source = EMASTER_STOP_SOURCE_COMMAND;
-    (void)snprintf(fixture->report.report_path, sizeof(fixture->report.report_path),
-                   "%s", report_path);
+    /*
+     * 不用 snprintf：report_path 是 const char*，编译器不知道它多长，会对每一次调用
+     * 报"可能截断"。夹具里传的都是短字面量，照容量卡一刀就够；末尾的 NUL 由上面的
+     * memset 留下。
+     */
+    const size_t path_length = strlen(report_path);
+    const size_t kept_length = path_length < sizeof(fixture->report.report_path)
+                                   ? path_length
+                                   : sizeof(fixture->report.report_path) - 1U;
+    memcpy(fixture->report.report_path, report_path, kept_length);
 }
 
 #endif /* EMASTER_TESTS_AUDIT_REPORT_FIXTURE_H */

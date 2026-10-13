@@ -324,7 +324,9 @@ static void *listen_thread(void *arg)
             }
             pthread_mutex_unlock(&server->mutex);
             const char *error_msg = "ERROR|Command queue full\n";
-            write(current_client_fd, error_msg, strlen(error_msg));
+            /* 客户端可能在这之前就断了，这条响应是尽力而为；写不出去不改判定。 */
+            const ssize_t told_client = write(current_client_fd, error_msg, strlen(error_msg));
+            (void)told_client;
             /* 这一条不跟开关走：队列满说明周期线程没在取命令，是故障线索。 */
             fprintf(stderr, "警告：命令队列已满，丢弃命令\n");
         }
