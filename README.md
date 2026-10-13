@@ -125,8 +125,11 @@ build/apps/diagnose_slave/emaster-scan <网卡> > scan.txt
 python3 gen/emaster_config.py init-site --device <设备档 ID> \
   --interface <网卡> --from-scan scan.txt
 
-# 6 写每轴换算与限幅
-$EDITOR config/motion_profiles/<你的>.json
+# 6 只有要跑内置的固定轨迹才做这两条：写运动方案，再把它挂到部署上
+#   每轴的 axis_id 见 config/topologies/<拓扑>.json，required_mode_id 要等于模式
+$EDITOR config/motion_profiles/<运动方案 ID>.json
+python3 gen/emaster_config.py init-site --device <设备档 ID> \
+  --interface <网卡> --from-scan scan.txt --motion <运动方案 ID> --force
 
 # 7 生成 config-runtime/*.flat
 python3 gen/emaster_config.py build
@@ -136,9 +139,13 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
   ./build/apps/master/emaster-master --config-dir config-runtime'
 ```
 
-第 2 步的"设备档 ID"和第 5 步那条命令，第 2 步会打印出来，照抄。
+每一步都会打印它下一步该跑的命令，照抄即可。设备档 ID 由第 2 步打印。
 
-**第 3 步是唯一推不出来的地方。** 第 2 步会打印一张待确认清单，逐条处理它。
+**第 3、6 步要人给值。** 第 3 步按第 2 步打印的待确认清单逐条处理。第 6 步的换算与限幅
+推不出来，只能自己填；第 5 步的输出会写明部署上挂没挂运动方案。
+
+**不挂运动方案也能起主站。** 挂上才跑内置固定轨迹。要让应用自己给位置目标，就不挂，
+改用命令接口的 `set_external_target`（见第 5 节，提交的是原始位置计数，不是角度）。
 
 **第 4 步只在主站没在跑的时候做。** `emaster-scan` 会驱动总线并把从站还原到 INIT；主站在跑时执行会打断它。
 
@@ -148,15 +155,17 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
 | --- | --- | --- |
 | 2 | `config/devices/`、`config/device_policies/` | 退出码非 0，并打印冲突的 PDO 集合。原因：ESI 里既没有默认分配（`#x1C12`/`#x1C13` 的 `DefaultData`），也没有 `Sm="2"`/`Sm="3"` 标记 |
 | 4 | `scan.txt` | 报"一台从站都没扫到"。查网卡名写错、从站没上电、环没接好 |
-| 5 | `config/topologies/`、`config/operation_profiles/`、`config/deployments/` | 报"第 N 台不是 <设备档>"。总线上的型号和版本跟设备档对不上，点名到台。报"厂商没声明 DC"：ESI 里没有 `<Dc><OpMode>` 段，补 ESI，不要自己编同步参数 |
-| 7 | `config-runtime/*.flat` | 校验失败会逐个指名字段 |
+| 5 | `config/topologies/`、`config/operation_profiles/`、`config/deployments/`、`config/motion_profiles/`（空目录） | 报"第 N 台不是 <设备档>"。总线上的型号和版本跟设备档对不上，点名到台。报"厂商没声明 DC"：ESI 里没有 `<Dc><OpMode>` 段，补 ESI，不要自己编同步参数 |
+| 6 | 部署里的 `motion_profile_id` | 报"没有 config/motion_profiles/<ID>.json，部署挂不到它上面"。这份方案得先写出来 |
+| 7 | `config-runtime/*.flat` | 校验失败会逐个指名字段。告警"运动方案 <ID> 没有被任何部署引用"表示它不会生效，照告警里那条命令挂上 |
 
 `init-site` 的 `assign_activate` 取自 ESI，不猜。填错会把从站的同步生成配成另一套，主机这边只看到 DC 对不上。
 
-第 2、5、7 步可以重复执行：
+第 2、5、6、7 步可以重复执行：
 
 - 改了策略档，必须重跑第 2 步。只有它会合并策略档。
 - 改了设备档或现场参数，必须重跑第 5 步。
+- 改了运动方案，必须重跑第 6 步那两条。只写文件不挂到部署上，它不会生效。
 - 任何配置改动，都必须重跑第 7 步并重启主站。
 
 轴数来自部署档，硬件换算在主站启动时读回，恢复阈值来自错误恢复策略。

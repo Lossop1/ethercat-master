@@ -512,6 +512,24 @@ def init_site(args: argparse.Namespace) -> int:
     deployment_path = config / "deployments" / f"{deployment_id}.json"
     _refuse_if_exists([topology_path, operation_path, deployment_path], args.force)
 
+    # 挂运动方案这件事必须给人说清楚，因为它挂不上时是安静的：方案照旧进
+    # runtime.flat，部署那一行写 motion_profile_id_present=false，主站照常起、
+    # 照常空转，只是那份方案永远不生效。所以这里两件事都做——建目录，让
+    # "写每轴换算与限幅"那一步有地方落笔；挂不上就当场拒绝，而不是留一份
+    # 引用了不存在 ID 的部署等 build 去炸。
+    (config / "motion_profiles").mkdir(parents=True, exist_ok=True)
+    if args.motion is not None and not (
+        config / "motion_profiles" / f"{args.motion}.json"
+    ).is_file():
+        raise SystemExit(
+            f"没有 config/motion_profiles/{args.motion}.json，部署挂不到它上面。\n"
+            f"先写这份运动方案，再带上 --motion {args.motion} --force 重跑本命令：\n"
+            f"  · 每轴的 axis_id 见 config/topologies/{topology_id}.json；\n"
+            f"  · required_mode_id 必须是 {args.mode}（运行方案选的就是它）；\n"
+            f"  · 轴集合必须覆盖拓扑里的全部轴。\n"
+            "字段语义见 config/README.md『运行方案』一节。"
+        )
+
     topology = {
         "schema_version": 1,
         "topology_id": topology_id,
@@ -544,6 +562,7 @@ def init_site(args: argparse.Namespace) -> int:
         "ethercat_interface": args.interface,
         "management_interface": None,
         "operation_profile_ids": [operation_id],
+        "motion_profile_id": args.motion,
         "run_report_path": f"runtime/reports/{deployment_id}-latest.json",
         "error_recovery_policy_id": "default",
         "external_target_timeout_ms": 200,
@@ -566,6 +585,12 @@ def init_site(args: argparse.Namespace) -> int:
                 f"{operation_id}     {args.mode} / {_cycle_text(args.cycle_ns)} / DC",
             ),
             ("部署", f"{deployment_id}     {args.interface}"),
+            (
+                "运动方案",
+                f"{args.motion}     挂在部署上，主站按它跑固定轨迹"
+                if args.motion is not None
+                else "未挂 —— 只空转；要动就由客户端提交外部目标",
+            ),
         ],
     )
     _print_notes(
@@ -683,6 +708,11 @@ def main() -> int:
     site.add_argument("--cycle-ns", type=int, default=DEFAULT_CYCLE_NS, help="周期，缺省 1 ms")
     site.add_argument("--mode", default="csp", help="运行模式，缺省 csp")
     site.add_argument("--pdo-set", help="用哪套 PDO 方案，缺省设备档的参照方案")
+    site.add_argument(
+        "--motion",
+        help="部署要跑的那份运动方案的 ID（config/motion_profiles/<ID>.json）；"
+        "不给就只有空转或外部目标",
+    )
     site.add_argument("--force", action="store_true", help="已存在时覆盖")
     site.add_argument("--config", default="config", help="配置源目录，缺省 config")
     site.set_defaults(handler=init_site)

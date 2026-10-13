@@ -45,8 +45,10 @@ python gen/emaster_config.py add-device esi/<你的型号>/<文件>.xml
      --esi esi/<型号>/<文件>.xml --output config/devices/<型号>.json
    ```
 
-接着写 `config/motion_profiles/`（每轴换算与限幅）、跑 `init-site` 出拓扑与部署，
-再 `gen/emaster_config.py build` 生成扁平文件。**不需要重新编译主站。**
+接着跑 `init-site` 出拓扑与部署，再 `gen/emaster_config.py build` 生成扁平文件。
+**不需要重新编译主站。** 要跑主站内置的固定轨迹，就在 `init-site` 之后照它打印的轴 ID
+写 `config/motion_profiles/<ID>.json`，再带 `--motion <ID> --force` 重跑一次 `init-site`
+把它挂到部署上 —— 只写文件不挂上去，它不会生效。
 
 ## 生效 PDO 是怎么定下来的
 

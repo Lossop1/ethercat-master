@@ -24,7 +24,7 @@
 | `topologies/` | 按总线顺序排列的逻辑从站及其设备配置 | `profile_id` | 主机名、网卡名、阶段安全授权 |
 | `operation_profiles/` | 设备 PDO 方案上的同步、周期和模式候选 | `device_profile_id`、`pdo_set_id` | 主机名、网卡名、未批准默认值 |
 | `motion_profiles/` | 一次完整运动的轨迹、坐标、每轴目标和安全边界 | 拓扑轴 ID、运行模式 ID | 网卡名、PDO 字节偏移、隐式默认值 |
-| `deployments/` | 某台主机使用哪个物理接口运行哪个拓扑及已批准方案 | `topology_id`、`operation_profile_ids` | 设备协议细节、放宽工具能力的开关 |
+| `deployments/` | 某台主机使用哪个物理接口运行哪个拓扑及已批准方案 | `topology_id`、`operation_profile_ids`、`motion_profile_id` | 设备协议细节、放宽工具能力的开关 |
 | `messages/` | 面向操作者的本地化提示资源 | 消息 ID | EtherCAT 行为参数 |
 
 JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字段时必须同时更新校验器和本文件。
@@ -174,6 +174,12 @@ DC 方案的过程帧目标相位必须早于 Sync0，并通过 `dc_startup_cycl
 部署引用的那套方案就是实际生效的那套：主程序按它配置 DC、模式和周期，并执行 CiA 402 运行使能。
 PRE-OP 指纹工具不会读取它来提高状态。目标位置由启动时的 `6064` 初始化，变化目标由部署引用的
 `motion_profile_id` 决定；未被部署引用的方案不会被加载，也就不会生效。
+
+`deployments/*.json` 里的 `motion_profile_id` 由 `init-site --motion <ID>` 写入，不给就是 `null`。
+这一项挂不上是**安静**的：方案照样进 `runtime.flat`，部署那一行写
+`motion_profile_id_present=false`，主站照常起、照常空转，编进去的换算与限幅一次都用不上。
+所以生成器两处都拦 —— `init-site --motion` 引用了还没写的方案时就地拒绝，`build` 对
+"写了方案却没有部署引用它"报告警。
 
 产品运行时的位置目标不应通过修改 JSON 作为实时命令。应用层应通过控制会话的位置目标来源
 回调提交完整轴集合；回调输入使用当前周期反馈，输出已完成换算的目标计数。回调没有规定输入
