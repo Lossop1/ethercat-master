@@ -32,7 +32,7 @@ python gen/emaster_config.py build
 ```
 
 四族扁平文件写到 `config-runtime/`，主站 `--config-dir config-runtime` 读它。
-完整流程见 `gen/device/README.md` 与 `README.md` 的"换一款电机"一节。
+完整流程见 `gen/device/README.md` 与 `README.md` 的"快速上手"一节。
 
 ## 为什么不入库
 

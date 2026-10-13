@@ -42,7 +42,7 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BUILD=${BUILD:-$REPO/build/linux-debug}
 DEPLOYMENT=${DEPLOYMENT:-}
 if [ -z "$DEPLOYMENT" ]; then
-  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 的“配置模型”一节）" >&2
   exit 2
 fi
 WAIT=${WAIT:-75}

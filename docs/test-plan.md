@@ -17,7 +17,7 @@
 正式系列以台架自己的部署为基准（下文记作 `<你的部署ID>`）：12 轴、1 ms、DC、CSP、30°输出轴往返、单程 5 s、100 Hz 客户端、triangle、全部轴运动、观测开启、轮间 60 s。保持测试沿用同一部署但不发运动目标。先确认实际拓扑及各轴换算与部署匹配；12 轴并非其它台架可直接照搬的条件。
 
 `<你的部署ID>` 不是仓库里的常量 —— 交付时六族配置是空的，这一份由你在现场用
-`python gen/emaster_config.py init-site` 生成（见 `README.md` §20）。换台架就换一份，
+`python gen/emaster_config.py init-site` 生成（见 `README.md` 的"配置模型"一节）。换台架就换一份，
 所以本文的命令里出现的都是这个占位符，不是某个具体名字。
 
 每个系列记录以下内容，任一改变均创建新 SERIES，禁止混合统计：
@@ -104,7 +104,7 @@ python3 checks/pdo_assignment_check.py
 从交给它们的文件里读，不写死型号，所以换个 `--config-dir` 就是换一套判据：
 
 ```bash
-# 用客户自己的配置生成一套 flat（先跑 add-device / init-site，见 README 第 20 节）
+# 用客户自己的配置生成一套 flat（先跑 add-device / init-site，见 README 的"配置模型"一节）
 python3 gen/emaster_config.py build --config config --out /tmp/customer-runtime
 
 # 不改一行 C、不重编，同一个可执行文件读两套
@@ -331,6 +331,128 @@ evidence/_<SERIES>/
 **连续段是联合的**（整帧未回也计入连续），**窗口是分类的**（各推各的）—— 所以
 `wkc_short_window_max` 可能小于 `wkc_max_consecutive`，那不是矛盾，是两个口径。
 
+## 3.4 脚本变量
+
+**`bench_idle.sh`**
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `DEPLOYMENT` | 必填 | 部署 ID。没有默认值 |
+| `IDLE` | 45 | 空转时长（秒） |
+| `TAG` | idle1 | 产物文件名后缀 |
+| `OBSERVATION` | 1 | 是否让主站开观测通道 |
+| `BUILD` | `$REPO/build/linux-debug` | 主站二进制的目录。在 Pi 上必须改成 `$REPO/build` |
+
+空转只使能保持，不发任何运动指令。**电机不会动，这是设计如此。** 它用来把主站单独放在总线上观察稳定性。改线、扩轴、换设备之后先跑它。
+
+主站若在空转窗口内死掉，脚本退出码为 2。
+
+**`bench_reciprocate_30deg.sh`**
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `DEPLOYMENT` | 必填 | 部署 ID |
+| `DURATION` | 600 | 往返总时长（秒） |
+| `TRAVERSE` | 3 | **单程**耗时（秒）。30 度／5 s = 6 度/秒 |
+| `DEGREES` | 30 | 单轴位移（输出轴度数） |
+| `RATE` | 100 | 目标更新频率（Hz） |
+| `WAVE` | triangle | `triangle` 或 `sine` |
+| `ONLY_AXIS` | 0 | 0 = 全部一起动；N = 只动第 N 根，其余轴保持在起点 |
+| `SETTLE_TICKS` | 10 | 客户端退出后的保持窗口（0.5 s/拍），**在 shutdown 之前** |
+| `REPORT_INTERVAL` | 10 | 客户端打印采样间隔（秒） |
+| `TAG` | recip30 | 产物文件名后缀 |
+
+退出码：0 = 跑满且命令流连续；1 = 命令流出现过 200 ms 空档；2 = **主站中途中断了命令流**；3 = 命令口 shutdown 没让主站退出。
+
+产物：`/tmp/<TAG>_outcome.txt`（全程输出）、`_done`（退出码）、`_master.log`、`_client.log`。报告在部署配置的 `run_report_path`。
+
+**`bench_series.sh`**
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `DEPLOYMENT` | 必填 | 没有默认值。写默认部署等于把某个测试环境烘进工具 |
+| `SERIES` | 必填 | 决定证据目录 `evidence/_<SERIES>/` |
+| `ROUNDS` | 6 | 轮数 |
+| `GAP` | 60 | 轮间间隔（秒） |
+| `MODE` | reciprocate | `idle` 或 `reciprocate` |
+
+其余变量原样传给单轮脚本，本脚本不重复也不校验。
+
+**退出码 0 只表示轮次跑完了，不代表每轮都成功。** 成败看 `index.tsv`。
+
+## 3.5 报告读取工具
+
+`analysis/` 下共 19 个脚本。常用的是：
+
+| 工具 | 用途 |
+| --- | --- |
+| `report_summary.py <报告>` | **人读**：跑了多久、故障形态、故障点逐轴 AL、停机收尾 |
+| `report_row.py <报告> [标签]` | **机读**：一份报告压成 TSV 一行；`--header` 打印列名 |
+| `series_index.py evidence/_<系列>` | 按每轮 `report-name.txt` **从归档重建整张表** |
+| `series_verdict.py` | 按容错策略给出每一轮的判定 |
+| `extract_report.py <报告>` | 就地抽关键字段（不下载整个 JSON） |
+| `anomalies.py` | 主站日志 → `anomalies.tsv` |
+| `trace_window.py` | 把异常窗口读成逐拍表 |
+| `report_digest.py` | 报告摘要（比 summary 更短） |
+| `report_size.py` | 报告体积构成 |
+| `shutdown_dump.py` | 只看停机那一段 |
+| `ring_dump.py` | 现场环原样导出 |
+| `trace_tail.py` / `trace_busy_windows.py` | 尾部时序／繁忙窗口 |
+| `ab_compare.py` / `ab_verdict.py` | 两组对照的比较与判定 |
+| `inline_verdict.py` | 就地判定单份报告 |
+| `json_probe.py` | 不下载整份 JSON 就探字段 |
+| `panel_transcript.py` | 终端面板会话转录 |
+| `uprobe_offsets.py` | uprobe 偏移计算（开发用） |
+
+另有两条在 `scripts/` 顶层：`nic_counters.py --diff`（网卡收发计数差分）、`capture_identity.py`（装置身份 + 主机上下文）。
+
+`analysis/`、`scripts/`、`checks/`、`tests/`、`evidence/`、`runtime/` 都在开发仓里，不随产品交付。交付树里只有主站、工具和文档。
+
+## 3.6 报告字段层级
+
+**取错层不会报错，只会安静地退化成 `-`。**
+
+| 层 | 字段 |
+| --- | --- |
+| `result` | `cycle_count` `expected_wkc` `actual_wkc` `op_reached` `all_axes_enabled_reached` `motion_completed` `wkc_error_count` `wkc_no_frame_count` |
+| `process_data_delivery` | `over_budget_cycle_count` `frame_interval_gap_count` `tail_max_receive_ns` `tail_max_receive_ok_ns` `tail_max_error_counter_ns` `error_counter_read_fail_count` `first_mismatch_exchange` |
+| `axes[].timing` | **`wkc_mismatch_count`**、**`deadline_missed_count`**（逐轴各一份，取首轴） |
+| `axes[].runtime` | `max_observed_following_error_counts` `target_position_readback` `rx_error_counter` 等 |
+| `axes[].shutdown_al_entry` | `state`（数"在 OP"用） |
+| `axes[].startup_cia402` | 主站接手时驱动器的状态字与禁用写 |
+| `axes[].shutdown_cia402` | 主站退出后驱动器的状态字与禁用写 |
+
+`report_row.py` 里缺字段填 `-` 而不是 0：**0 是"量到的是 0"，`-` 是"这份报告里没有"。**
+
+## 3.7 报告读法陷阱
+
+1. **`wkc_no_frame` 与 `wkc_mismatch` 的计数口径不同。** 前者记录未取得有效回帧，后者记录过程数据 WKC 与预期不符。计数可帮助区分整帧缺失与非预期 WKC，但不能单独定位到链路、主机调度或某个从站。非预期 WKC 也不能直接等同于从站掉出 OP。
+2. **`AL state=0` 不是"在 INIT"。** SOEM 的 `ecx_readstate` 先把缓冲清零再读，所以 0 只可能是**这一站没应答**。8 = OP、20 = SAFE-OP 加错误位、1 = INIT、**0 = 没读回来**。
+3. **收尾那句 `OP=通过` 走地址 0 广播，只照见环上最后一站。** 判"哪几根不在 OP"要看逐轴快照（`shutdown_al_entry`）。
+4. **按 `index.tsv` 的表头读取字段，不按固定列号统计。** 可运行 `series_index.py` 从关联报告重建索引，并核对时间字段的单位。
+
+## 3.8 按阶段读指定对象
+
+**审计段记录的是主站真的读过的对象。** 所以必须按阶段取，不能把停机后的读数当作运行期的值。
+
+```bash
+sudo python3 analysis/extract_report.py runtime/reports/<部署>-latest.json |
+  grep -E '^axis[0-9]+\.(status_word|mode_display|target_position)\.'
+```
+
+```text
+axis1.status_word.cyclic_operation=4663
+axis1.status_word.cyclic_operation.hex=0x1237
+axis1.mode_display.cyclic_operation=8
+axis1.target_position.cyclic_operation=462644
+```
+
+键的形状是 `axis<N>.<对象名>.<阶段>=<十进制>`，另有 `.hex=<原始十六进制>`。
+
+**为什么必须按阶段看**：`0x1237` 与 `0x1233` 的 bit2 不同，分别对应 Operation enabled 与 Switched on 的标准状态掩码。只看停机后的状态字不能推断运行期间是否使能。
+
+**读法边界**：某个对象没有 `cyclic_operation` 这一项，说明**这份二进制在 OP 期间没有读它**，**不是"值没变"**。
+
 ---
 
 # 4 采集总账
@@ -382,7 +504,7 @@ evidence/_<SERIES>/
 `migration/11`、`chronyd`、`gnome-shell`、`python3`；
 `interrupts_on_rt_core = 351,802,032`，其中 `IPI1` 占 **52.7%**；网卡的 95.9 M 次中断
 **全在 CPU 0**；`irqbalance` 未安装；网卡 32 个队列只用了一个。
-`docs/realtime/baseline.md` 的 7 条主机要求里，**4 条明显未满足**。
+`README.md` 第 2 节的 7 条主机要求里，**4 条明显未满足**。
 
 ## T2 启动边界 —— 完成（9 轮，全干净）
 
