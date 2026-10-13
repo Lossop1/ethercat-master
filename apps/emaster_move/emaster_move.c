@@ -53,9 +53,15 @@ static int send_command(const char *command, char *response, size_t response_siz
         return -1;
     }
 
+    if (strlen(g_socket_path) >= sizeof(addr.sun_path))
+    {
+        fprintf(stderr, "错误：套接字路径过长：%s\n", g_socket_path);
+        close(sock_fd);
+        return -1;
+    }
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path) - 1U);
 
     if (connect(sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
