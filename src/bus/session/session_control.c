@@ -1182,7 +1182,9 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                  * 分辨率的两段都要给：只给分子，encoder_motor_revolutions
                                  * 不是 1 的设备（编码器不直接装在电机轴上）在客户端会被算错，
                                  * 而算错的是一个把角度折成脉冲的系数，看不出来。
-                                 * 注意：rated_torque 字段可能不在 position_scale 中，暂时输出0 */
+                                 * torque 是保留字段，恒为 0：额定力矩目前没有数据源
+                                 * （ESI、设备档、运动方案里都没有这个数），而凭空造一个
+                                 * 会让客户端拿它把千分比折成牛米。保留位置、不编值。 */
                                 written = snprintf(response.message + offset,
                                                    sizeof(response.message) - (size_t)offset,
                                                    "|a%u:bus=%u,enc=%u/%u,gear=%u/%u,torque=0",

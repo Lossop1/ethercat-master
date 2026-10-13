@@ -188,6 +188,8 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
 # OK|axes=<轴数>,max_step=<单步上限计数>|a1:bus=<轴号>,enc=<增量数>/<电机转数>,gear=<M>/<S>,torque=0|a2:...
 ```
 
+`torque` 是保留字段，恒为 `0`。额定力矩在设备描述和配置里都没有数据源，所以不填猜测值。
+
 **停止：Ctrl+C。** 主站注册了 SIGINT 和 SIGTERM，两者走**和命令口 `shutdown` 完全相同**的安全停机路径：安全输出 → 停用各轴 → 回 INIT。它不是掐断。
 
 换部署前先经命令口发 `shutdown`，或向核实过的主站 PID 发 SIGTERM，等它退出并检查逐轴停用证据。**不要把 SIGKILL 当正常停机。**
