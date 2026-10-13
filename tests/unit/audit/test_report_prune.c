@@ -136,6 +136,8 @@ static bool path_exists(const char *path)
 static report_fixture_t fixture;
 
 static char scratch_root[sizeof(SCRATCH_TEMPLATE)];
+/* mkdtemp 成功之前 scratch_root 还是模板本身，不能拿去删。 */
+static bool scratch_ready;
 
 /*
  * 拆掉这棵临时树。挂在 atexit 上而不是写在末尾：中途那几处 return 2 也得走到这里，
@@ -144,11 +146,10 @@ static char scratch_root[sizeof(SCRATCH_TEMPLATE)];
  */
 static void remove_scratch(void)
 {
-    char path[sizeof(scratch_root) + 128U];
+    char path[sizeof(scratch_root) + 64U];
     DIR *dir;
-    struct dirent *entry;
 
-    if (scratch_root[0] == '\0')
+    if (!scratch_ready)
     {
         return;
     }
@@ -156,18 +157,24 @@ static void remove_scratch(void)
     dir = opendir(path);
     if (dir != NULL)
     {
+        struct dirent *entry;
+
+        /*
+         * 名字直接交给 unlinkat，不是先拼成路径：d_name 最长 255 字节，拼路径就得按
+         * 这个上限留缓冲，编译器会为"可能截断"报一条。
+         *
+         * 这里**不能**照抄上面 count_prefixed 那个跳过点开头条目的过滤：那个过滤器
+         * 是"削旧不许碰隐藏文件"的判据，拆树时照抄的话 .hidden 留着，rmdir 会失败。
+         */
         while ((entry = readdir(dir)) != NULL)
         {
-            if (entry->d_name[0] == '.')
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             {
                 continue;
             }
-            (void)snprintf(path, sizeof(path), "%s/archive/%s", scratch_root,
-                           entry->d_name);
-            (void)unlink(path);
+            (void)unlinkat(dirfd(dir), entry->d_name, 0);
         }
         (void)closedir(dir);
-        (void)snprintf(path, sizeof(path), "%s/archive", scratch_root);
         (void)rmdir(path);
     }
     (void)snprintf(path, sizeof(path), "%s/bench-latest.json", scratch_root);
@@ -187,11 +194,13 @@ int main(void)
     unsigned int index;
     size_t deleted;
 
+    (void)memcpy(scratch_root, SCRATCH_TEMPLATE, sizeof(SCRATCH_TEMPLATE));
     if (mkdtemp(scratch_root) == NULL)
     {
         printf("  [不符] 造不出临时目录\n");
         return 2;
     }
+    scratch_ready = true;
     if (atexit(remove_scratch) != 0)
     {
         printf("  [不符] 注册不了退出清理\n");
