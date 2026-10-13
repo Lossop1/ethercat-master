@@ -185,7 +185,7 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< status | grep -o 'state=[0
 
 ```bash
 sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
-# OK|axes=8,max_step=63715|a1:bus=1,enc=16384,gear=28/1,torque=0|a2:...
+# OK|axes=<轴数>,max_step=<单步上限计数>|a1:bus=<轴号>,enc=<每转计数>,gear=<M>/<S>,torque=0|a2:...
 ```
 
 **停止：Ctrl+C。** 主站注册了 SIGINT 和 SIGTERM，两者走**和命令口 `shutdown` 完全相同**的安全停机路径：安全输出 → 停用各轴 → 回 INIT。它不是掐断。
@@ -341,7 +341,7 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 绝对位置目标 = 确认的起点位置计数 + 相对位移计数
 ```
 
-例：编码器 16384 counts/电机转、齿轮比 28:1，对应 458752 counts/输出轴转，约 1274.31 counts/度。25:1 对应约 1137.78 counts/度。
+例：编码器 4096 counts/电机转、齿轮比 10:1，对应 40960 counts/输出轴转，约 113.78 counts/度。换一组数，结果就不同。
 
 还须核对正方向、机械零点和整数舍入。**原始位置零点不是自动校准出的机械零点。**
 
