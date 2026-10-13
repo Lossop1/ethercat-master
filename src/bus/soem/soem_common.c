@@ -138,6 +138,16 @@ static bool assignment_failed(emaster_soem_sdo_reader_context_t *reader,
 {
     ec_errort error;
 
+    /*
+     * 七个调用点都在已经判过 result 非空的函数里，这一句永远不成立。留着它是因为
+     * cppcheck 不跨函数推：它只看得到本函数无条件解引用空指针可能（nullPointer-
+     * RedundantCheck / ctunullpointer），而 CI 的静态分析带 --error-exitcode=1。
+     * 加一句判空比加一条抑制更省事，也不设"以后可以关掉分析器"的先例。
+     */
+    if (result == NULL)
+    {
+        return false;
+    }
     result->failed_index = index;
     result->failed_subindex = subindex;
     /*
