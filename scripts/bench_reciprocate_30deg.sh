@@ -7,7 +7,7 @@
 #
 # 必须在 root 下运行（主站需要 mlockall + SCHED_FIFO，套接字由 root 创建）。
 # ulimit -r 由脚本自己提（见下方 set -u 之后），所以调用式可以就是一行、不带引号：
-#   sudo DEPLOYMENT=orangepi-bench-non-30deg DURATION=60 TAG=r1 \
+#   sudo DEPLOYMENT=<你的部署ID> DURATION=60 TAG=r1 \
 #        bash /home/orangepi/ethercat-master/scripts/bench_reciprocate_30deg.sh
 # 要放后台就套 nohup：sudo nohup bash <脚本> >/dev/null 2>&1 &
 #
@@ -15,7 +15,7 @@
 # /tmp/<TAG>_outcome.txt，结束时写 /tmp/<TAG>_done 记录退出码，用 tail 观察。
 #
 # 参数（环境变量）：
-#   DEPLOYMENT  部署 ID，默认 orangepi-bench-quint-30deg（台架现有 5 个从站）
+#   DEPLOYMENT  部署 ID（必须给：由现场 init-site 生成，仓库里没有默认值）
 #   DURATION    往返总时长（秒），默认 600
 #   TRAVERSE    单程耗时（秒），默认 3
 #   DEGREES     单轴位移（输出轴度数），默认 30
@@ -57,7 +57,11 @@ if [ "$(ulimit -r)" != "unlimited" ]; then
     exit 64
 fi
 
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
+DEPLOYMENT=${DEPLOYMENT:-}
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 DURATION=${DURATION:-600}
 TRAVERSE=${TRAVERSE:-3}
 DEGREES=${DEGREES:-30}

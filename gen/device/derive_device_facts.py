@@ -8,7 +8,7 @@
 
 本脚本产出什么
     只产出"换一台电机就会变、而人不需要做任何决定"的字段：
-    身份、协议能力、PDO 集合的 module_ident / 字节数 / 映射条目。
+    身份、协议能力、PDO 集合的选择方式 / 字节数 / 映射条目。
     它不产出任何工程决策 —— 选哪套 PDO、停机判据用哪个掩码、读哪些遥测、
     换算期望值 —— 那些由人写在策略档里，本脚本一个字都不碰。
 
@@ -16,6 +16,11 @@
     src/cia402/process_image.c:141 按字符串名把运行方案要的字段和设备档
     的 PDO 条目对起来。那些名字不是厂商起的，是 CiA 402 / CiA 301 规定的对象
     索引决定的，所以可以由索引查表得到。下表属于标准，不属于任何台架。
+
+生效 PDO 怎么选
+    ESI 用 <Module> 声明 PDO 的设备是模块化的，一个模块一套方案，运行期靠
+    0xF030 选；直接把 PDO 挂在 <Device> 下的设备没有模块，只能靠厂默认分配
+    与 Sm 属性互相印证出唯一一套。两条规则不必都成立，但必须一致。
 """
 
 from __future__ import annotations
@@ -90,17 +95,89 @@ def _direction(module: dict[str, Any], key: str) -> dict[str, Any]:
     }
 
 
+def _selected_direction(pdos: list[dict[str, Any]]) -> dict[str, Any]:
+    """把若干张生效映射表按分配顺序拼成一个方向，字节数是它们的和。"""
+    byte_lengths = []
+    for pdo in pdos:
+        if pdo["byte_length"] is None:
+            raise SystemExit(f"PDO {pdo['index']} 的位宽不是整字节，无法推导字节数")
+        byte_lengths.append(int(pdo["byte_length"]))
+    return {
+        "bytes": sum(byte_lengths),
+        "mappings": [{"index": pdo["index"], "entries": _entries(pdo)} for pdo in pdos],
+    }
+
+
+def _device_pdo_set(facts: dict[str, Any]) -> dict[str, Any]:
+    """非模块化设备：ESI 没有模块，只能从设备级声明里选唯一一套生效 PDO。
+
+    两条互相独立的规则都要给出同一套，才认为这份 ESI 足以确定映射：
+      1. 对象字典里 0x1C12/0x1C13 的出厂默认分配 —— 设备出厂就这样接的；
+      2. PDO 上的 Sm 属性 —— 只有真正绑到过程数据同步管理器上的映射才带 Sm。
+    只有一条能用、或两条给出不同集合，都直接失败：这时任何一套都是猜的，
+    猜错的后果是位偏移全错，跑起来才发现。
+    """
+    declared = facts.get("default_pdo_assignment") or {}
+    by_default = {
+        direction: [str(index) for index in declared.get(direction) or []]
+        for direction in ("rx", "tx")
+    }
+    by_sm = {
+        direction: [
+            pdo["index"]
+            for pdo in facts["direct_pdos"][direction]
+            if pdo.get("sync_manager") == sync_manager
+        ]
+        for direction, sync_manager in (("rx", 2), ("tx", 3))
+    }
+    if by_default != by_sm or not all(by_default.values()):
+        raise SystemExit(
+            "无法确定设备级生效 PDO —— 两条规则必须非空且一致。\n"
+            f"  出厂默认分配 1C12/1C13：{by_default}\n"
+            f"  PDO 的 Sm 属性：        {by_sm}\n"
+            "这份 ESI 既没用 <Module> 声明 PDO，又没有能互相印证的默认分配，"
+            "不足以确定映射；不要按其中一条猜着往下走。"
+        )
+
+    selected: dict[str, Any] = {}
+    for direction in ("rx", "tx"):
+        by_index = {pdo["index"]: pdo for pdo in facts["direct_pdos"][direction]}
+        missing = [index for index in by_default[direction] if index not in by_index]
+        if missing:
+            raise SystemExit(
+                f"{direction} 的默认分配引用了 ESI 里没有的 PDO：{', '.join(missing)}"
+            )
+        selected[direction] = _selected_direction(
+            [by_index[index] for index in by_default[direction]]
+        )
+    return {
+        "assignment_style": "direct_1c12",
+        "module_ident": None,
+        "rx": selected["rx"],
+        "tx": selected["tx"],
+    }
+
+
+def module_mode_ids(module: dict[str, Any]) -> dict[str, int]:
+    """一个模块的类型串里写了哪几种模式。
+
+    ESI 里的写法是 "csv,csp,cst - axis"：逗号分隔，末尾那个还带 " - axis"
+    后缀。只按逗号切会把 "cst - axis" 整个当成一个记号，"cst" 就漏掉了
+    —— 第一版就是这么错的，实测推导出的模式集合少了 cst。
+    """
+    modes: dict[str, int] = {}
+    kind = (module.get("type") or "").lower().replace("-", ",").replace("/", ",")
+    for token in kind.split(","):
+        token = token.strip()
+        if token in STANDARD_MODE_VALUES:
+            modes[token] = STANDARD_MODE_VALUES[token]
+    return modes
+
+
 def _modes(modules: list[dict[str, Any]]) -> dict[str, int]:
     modes: dict[str, int] = {}
     for module in modules:
-        # ESI 里的写法是 "csv,csp,cst - axis"：逗号分隔，末尾那个还带 " - axis"
-        # 后缀。只按逗号切会把 "cst - axis" 整个当成一个记号，"cst" 就漏掉了
-        # —— 第一版就是这么错的，实测推导出的模式集合少了 cst。
-        kind = (module.get("type") or "").lower().replace("-", ",").replace("/", ",")
-        for token in kind.split(","):
-            token = token.strip()
-            if token in STANDARD_MODE_VALUES:
-                modes[token] = STANDARD_MODE_VALUES[token]
+        modes.update(module_mode_ids(module))
     return dict(sorted(modes.items()))
 
 
@@ -125,16 +202,27 @@ def derive(facts: dict[str, Any]) -> dict[str, Any]:
             "supports_distributed_clocks": facts["capabilities"][
                 "supports_distributed_clocks"
             ],
+            # ESI 给的是"这套同步怎么使能"的硬事实：DC 与 SM 各自的 AssignActivate。
+            # 留在设备档里，是为了让生成运行方案的那一步用厂商写的数，而不是用
+            # "标准上一般是 0x0300"这种看着像事实的猜测 —— 写错这个数会安静地把
+            # 从站的同步配置配成另一套，主机这边只会看到 DC 对不上。
+            "assign_activate_by_strategy": facts["synchronization"][
+                "assign_activate_by_strategy"
+            ],
             "supported_modes": _modes(modules),
         },
+        # 模块化设备由 0xF030 选模块，一套模块一套映射；非模块化设备没有模块，
+        # 退回设备级声明，且必须能唯一确定 —— 见 _device_pdo_set。
         "pdo_sets": [
             {
+                "assignment_style": "module_slot",
                 "module_ident": module["module_ident"],
                 "rx": _direction(module, "rx"),
                 "tx": _direction(module, "tx"),
             }
             for module in modules
-        ],
+        ]
+        or [_device_pdo_set(facts)],
     }
 
 

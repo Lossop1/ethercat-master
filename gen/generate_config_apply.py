@@ -272,8 +272,8 @@ def render_header() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="拓扑配置 -> 填充代码 + 扁平文件")
     parser.add_argument("--topologies", type=Path, required=True, help="config/topologies 目录")
-    parser.add_argument("--c-output", type=Path, required=True)
-    parser.add_argument("--h-output", type=Path, required=True)
+    parser.add_argument("--c-output", type=Path, help="省略时只产出扁平文件")
+    parser.add_argument("--h-output", type=Path)
     parser.add_argument("--flat-output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -284,8 +284,13 @@ def main() -> int:
     topologies = topology_values(documents)
     # 一律 LF。这两个产物都是给 Linux 上的 C 程序读的；在 Windows 上生成时
     # Python 默认会按平台转成 CRLF，那样同一份配置在不同机器上字节不同。
-    args.c_output.write_text(render(topologies), encoding="utf-8", newline="\n")
-    args.h_output.write_text(render_header(), encoding="utf-8", newline="\n")
+    for path, text in (
+        (args.c_output, render(topologies)),
+        (args.h_output, render_header()),
+    ):
+        if path is not None:
+            path.write_text(text, encoding="utf-8", newline="\n")
+            print(f"已写出 {path}")
     rows = flat_rows(topologies)
     args.flat_output.write_text(
         "".join(f"{key}\t{value}\n" for key, value in rows),
@@ -293,8 +298,6 @@ def main() -> int:
         newline="\n",
     )
     print(f"拓扑 {len(topologies)} 份，从站 {sum(len(t['slaves']) for t in topologies)} 个")
-    print(f"已写出 {args.c_output}")
-    print(f"已写出 {args.h_output}")
     print(f"已写出 {args.flat_output}（{len(rows)} 条）")
     return 0
 

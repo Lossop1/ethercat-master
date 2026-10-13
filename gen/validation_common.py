@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +11,17 @@ from typing import Any
 @dataclass
 class Validation:
     errors: list[str]
+    # 告警与错误分开放：错误让校验失败，告警只说明"这份配置合法，但它意味着某事"。
+    # 把合法配置报成错误，只会让整个校验器被忽略，所以这类情况一律走这里。
+    warnings: list[str] = field(default_factory=list)
 
     def require(self, condition: bool, message: str) -> None:
         if not condition:
             self.errors.append(message)
+
+    def warn(self, condition: bool, message: str) -> None:
+        if not condition:
+            self.warnings.append(message)
 
 
 @dataclass(frozen=True)

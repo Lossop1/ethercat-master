@@ -15,6 +15,25 @@ int main(int argc, char **argv)
     if (argc != 2) { fprintf(stderr, "用法: %s <扁平配置>\n", argv[0]); return 2; }
     if (!emaster_config_reader_open(&reader, argv[1])) { fprintf(stderr, "打不开\n"); return 2; }
     if (!emaster_generated_runtime_apply(&reader)) { fprintf(stderr, "apply 失败\n"); return 1; }
+    /* 两族的条数都要与文件声明的一致。运行方案少了会表现为"某个部署引用不到
+       它的运行方案"，报出来的却是"ID 不存在" —— 两句报错差着一整个方向。 */
+    {
+        size_t declared = 0U;
+        if (!emaster_config_reader_size(&reader, "operation.count", &declared) ||
+            declared != emaster_operation_profile_count())
+        {
+            fprintf(stderr, "operation.count 声明 %zu，装载了 %zu\n",
+                    declared, emaster_operation_profile_count());
+            return 1;
+        }
+        if (!emaster_config_reader_size(&reader, "motion.count", &declared) ||
+            declared != emaster_motion_profile_count())
+        {
+            fprintf(stderr, "motion.count 声明 %zu，装载了 %zu\n",
+                    declared, emaster_motion_profile_count());
+            return 1;
+        }
+    }
 
     printf("operation.count\t%zu\n", emaster_operation_profile_count());
     for (oi = 0U; oi < emaster_operation_profile_count(); ++oi)

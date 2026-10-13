@@ -38,7 +38,11 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 # 构建目录跟随 CMakePresets.json 的 linux-debug（CI 也用同一个）。
 # 单数形式 $REPO/build 是旧台架树的习惯，两处不一致会让脚本去找不存在的二进制。
 BUILD=${BUILD:-$REPO/build/linux-debug}
-DEPLOY=${DEPLOY:-orangepi-bench-quint-30deg}
+DEPLOY=${DEPLOY:-}
+if [ -z "$DEPLOY" ]; then
+  echo "必须显式给 DEPLOY=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 SOCK=/tmp/emaster-${DEPLOY}.sock
 OSOCK=/tmp/emaster-${DEPLOY}-obs.sock
 REPORT_REL=$(DEPLOYMENT="$DEPLOY" python3 -c "

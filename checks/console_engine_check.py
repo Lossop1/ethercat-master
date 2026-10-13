@@ -20,6 +20,7 @@ refresh_status/refresh_topology 用的仍是控制台里那套真解析代码。
 `scripts/bench_panel_jog.sh`，转录用 `analysis/panel_transcript.py` 解析。
 """
 import importlib.util
+import json
 import os
 import pathlib
 import sys
@@ -367,13 +368,37 @@ def target_syntax_check():
     return 0
 
 
+def _guard_config_tree():
+    """造一棵最小配置树：两份部署，一份位置方案、一份力矩方案。
+
+    交付时仓库里没有部署（六族都是空的），所以这里自造。要的只是"部署 -> 运行方案
+    第一份 -> selected_mode_id"这条链走得通，护栏判的正是这条链读出来的模式。
+    """
+    def write(directory, name, payload):
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False)
+
+    root = tempfile.mkdtemp(prefix="console-guard-")
+    deployments = os.path.join(root, "config", "deployments")
+    profiles = os.path.join(root, "config", "operation_profiles")
+    os.makedirs(deployments)
+    os.makedirs(profiles)
+    for mode in ("csp", "cst"):
+        profile_id = f"check-op-{mode}"
+        write(profiles, f"{profile_id}.json",
+              {"operation_profile_id": profile_id, "selected_mode_id": mode})
+        write(deployments, f"check-{mode}.json",
+              {"deployment_id": f"check-{mode}", "operation_profile_ids": [profile_id]})
+    return root
+
+
 def mode_guard_check():
     """模式护栏：非位置模式的部署必须被面板拒绝，位置模式的照常放行。
 
-    用的是仓库里真有的两份部署（quint = csp、cst-smoke = cst），不是造的假配置——
-    护栏要挡的正是"这份配置真的存在、也真的能起主站"的那种情况。
+    两份部署都是本检查自造的：护栏要挡的正是"这份配置真的存在、也真的能起主站"
+    的那种情况，所以判据只能落在配置链读出来的模式上，不能落在部署 ID 上。
     """
-    root = str(pathlib.Path(__file__).resolve().parents[1])
+    root = _guard_config_tree()
     failures = []
 
     def check(label, condition, detail=""):
@@ -382,13 +407,11 @@ def mode_guard_check():
             failures.append(label)
 
     print("\n6) 模式护栏")
-    csp = Engine(FakeClient("/tmp/fake-csp.sock"), "orangepi-bench-quint-30deg",
-                 repo_root=root)
+    csp = Engine(FakeClient("/tmp/fake-csp.sock"), "check-csp", repo_root=root)
     check("位置模式（csp）放行", csp.mode_guard_passed(),
           f"mode={csp._selected_mode or '(读不到)'}")
 
-    cst = Engine(FakeClient("/tmp/fake-cst.sock"), "orangepi-bench-cst-smoke",
-                 repo_root=root)
+    cst = Engine(FakeClient("/tmp/fake-cst.sock"), "check-cst", repo_root=root)
     check("力矩模式（cst）拒绝", not cst.mode_guard_passed(), cst.message)
     # attach 的第一件事就是这个判断——被拒时不该碰套接字（假客户端没有连接）。
     check("被拒时 attach 直接返回，不连套接字", not cst.attach())

@@ -10,7 +10,7 @@
 # 用 m 键拉起主站也得是 root。主站已经在跑了，本脚本本身其实不需要 root。
 #
 # 参数（环境变量）：
-#   DEPLOYMENT  部署 ID，默认 orangepi-bench-quint-30deg（台架现有 5 个从站）
+#   DEPLOYMENT  部署 ID（必须给：由现场 init-site 生成，仓库里没有默认值）
 #   RANGE       自助软范围，相对启动位置多少度；0 = 不限制。默认 45
 #   JOG_SPEED   点动速度，输出轴度/秒，默认 10
 #
@@ -28,7 +28,11 @@
 set -u
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
+DEPLOYMENT=${DEPLOYMENT:-}
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 RANGE=${RANGE:-45}
 JOG_SPEED=${JOG_SPEED:-10}
 

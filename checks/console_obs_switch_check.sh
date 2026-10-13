@@ -15,7 +15,7 @@
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-ROOT=$(cd "$HERE/../.." && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
 SCRIPT=${1:-$ROOT/scripts/console.sh}
 
 if [ ! -f "$SCRIPT" ]; then echo "找不到 $SCRIPT" >&2; exit 2; fi
@@ -42,6 +42,10 @@ STUB_PY
 chmod +x "$STUB/id" "$STUB/python3"
 
 run() { PATH="$STUB:$PATH" bash "$SCRIPT" "$@" 2>/dev/null; }
+
+# 部署 ID 由本检查自己钉住。console.sh 要求调用方显式给（交付树里没有部署），
+# 所以这里给一个固定值 —— 判的是"参数原样转发"，与现场叫什么名字无关。
+export DEPLOYMENT=check-deployment
 args_of() { printf '%s\n' "$1" | sed -n 's/^ARGS://p'; }
 obs_of()  { printf '%s\n' "$1" | sed -n 's/^OBS://p'; }
 
@@ -76,7 +80,7 @@ esac
 # 面板脚本自己的路径由 console.sh 的 REPO 决定，不参与判定，先削掉。
 out=$(run --selftest)
 same "不带 --obs 时参数原样转发（多个参数、顺序不变）" \
-     "--repo /home/orangepi/ethercat-master --deployment orangepi-bench-quint-30deg --range 45 --jog-speed 10 --selftest" \
+     "--repo $ROOT --deployment check-deployment --range 45 --jog-speed 10 --selftest" \
      "$(args_of "$out" | sed 's|^[^ ]*/tools/emaster_console.py ||')"
 
 echo

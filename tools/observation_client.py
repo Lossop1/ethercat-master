@@ -10,7 +10,7 @@
    东西"，`--stall` 就是那条臂：连上、发一次 DUMP、然后永远不读。
 
 用法：
-    python3 observation_client.py INFO --deployment orangepi-bench-quint-30deg
+    python3 observation_client.py INFO --deployment <你的部署ID>
     python3 observation_client.py HEAD
     python3 observation_client.py LATEST
     python3 observation_client.py DUMP --from 0 --count 64

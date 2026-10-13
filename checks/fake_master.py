@@ -100,7 +100,7 @@ COMMAND_READ_MAX = 511              # 一次 read 的上限（buffer 512）
 COMMAND_CLIENT_IDLE_TIMEOUT_S = 5.0  # command_server.c:96
 
 DEFAULT_AXES = 5
-DEFAULT_MAX_STEP = 6400             # counts，与 orangepi-bench-quint 部署同量级
+DEFAULT_MAX_STEP = 6400             # counts，与台架五轴部署同量级
 DEFAULT_ENCODER = 16384
 DEFAULT_GEAR = "28/1"
 

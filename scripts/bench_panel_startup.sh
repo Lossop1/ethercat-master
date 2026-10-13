@@ -31,7 +31,7 @@
 #   sudo bash /home/orangepi/ethercat-master/scripts/bench_panel_startup.sh
 #
 # 参数（环境变量）：
-#   DEPLOYMENT  部署 ID，默认 orangepi-bench-quint-30deg（台架现有 5 个从站）
+#   DEPLOYMENT  部署 ID（必须给：由现场 init-site 生成，仓库里没有默认值）
 #   WAIT        空转秒数，默认 75。想多覆盖一会儿就调大。
 
 set -u
@@ -40,7 +40,11 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # 构建目录跟随 CMakePresets.json 的 linux-debug（CI 也用同一个）。
 # 单数形式 $REPO/build 是旧台架树的习惯，两处不一致会让脚本去找不存在的二进制。
 BUILD=${BUILD:-$REPO/build/linux-debug}
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
+DEPLOYMENT=${DEPLOYMENT:-}
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 WAIT=${WAIT:-75}
 
 OUT=/tmp/panel_startup.txt

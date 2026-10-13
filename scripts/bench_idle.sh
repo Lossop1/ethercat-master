@@ -8,9 +8,9 @@
 # 的读数都出自这份脚本跑出来的轮次）。
 #
 # 必须在 root 下运行（mlockall + SCHED_FIFO）。ulimit -r 由脚本自己提，调用式不带引号：
-#   sudo IDLE=45 TAG=idle1 DEPLOYMENT=orangepi-bench-non-30deg \
+#   sudo IDLE=45 TAG=idle1 DEPLOYMENT=<你的部署ID> \
 #        bash /home/orangepi/ethercat-master/scripts/bench_idle.sh
-# 台架当前是九轴，所以 DEPLOYMENT 一般显式给 orangepi-bench-non-30deg；不给则用下面的默认值。
+# DEPLOYMENT 必须显式给：ID 由现场 init-site 生成，仓库里没有默认值。
 #
 # 慢轮次要留意两件事（都踩过）：
 #   - 主站没起来时套接字不会出现，脚本会把主站日志尾部打出来再退出——这正是
@@ -45,7 +45,11 @@ if [ "$(ulimit -r)" != "unlimited" ]; then
     exit 64
 fi
 
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
+DEPLOYMENT=${DEPLOYMENT:-}
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 TAG=${TAG:-idle1}
 IDLE=${IDLE:-45}
 # OBSERVATION 是否让主站开观测通道（1=开，默认 1），与 bench_reciprocate_30deg.sh 同一个

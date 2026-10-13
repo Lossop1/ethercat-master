@@ -18,6 +18,42 @@ from typing import Any
 # 想要保留更久或一份不留，在部署配置里写 report_archive_keep。
 DEFAULT_REPORT_ARCHIVE_KEEP = 200
 
+# 枚举词表：每个枚举的合法取值**全集**，以及它在 C 里的符号前缀。
+#
+# 校验和生成器都读这一张表，但读的是不同的东西：校验问"这个值合法吗"，
+# 生成器要的是整张表 —— 生成器按表为每个取值生成一条 strcmp 分支，而不是
+# 按"这批配置里出现过什么"。按内容生成的话，客户交一份用了别的取值的配置
+# 进来，已经建好的二进制就解析不了，而客户不该为此重编主站。
+#
+# 表里的符号名必须与 include/emaster/config/runtime_config.h 的枚举逐一对上：
+# 表全了、头文件少了，生成物连编译都过不去，比运行期静默解析失败响得多。
+ENUM_VOCABULARY: dict[str, tuple[str, tuple[str, ...]]] = {
+    "operation_approval": ("EMASTER_OPERATION_PROFILE_", ("draft", "approved")),
+    "sync_strategy": ("EMASTER_SYNC_STRATEGY_", ("sm", "dc")),
+    "mode_display": ("EMASTER_MODE_DISPLAY_", ("required", "diagnostic")),
+    "sdo_value": (
+        "EMASTER_CONFIG_SDO_VALUE_",
+        ("u8", "i8", "u16", "i16", "u32", "i32"),
+    ),
+    "motion_approval": ("EMASTER_MOTION_PROFILE_", ("draft", "approved")),
+    "trajectory": (
+        "EMASTER_MOTION_TRAJECTORY_",
+        ("relative_linear_position", "constant_velocity"),
+    ),
+    "coordinate": ("EMASTER_MOTION_COORDINATE_", ("motor_rotor", "output_shaft")),
+}
+
+
+def enum_values(kind: str) -> tuple[str, ...]:
+    """这个枚举允许的全部取值。"""
+    return ENUM_VOCABULARY[kind][1]
+
+
+def enum_identifiers(kind: str) -> list[str]:
+    """这个枚举在 C 里的全部符号，排序后用于生成 strcmp 链。"""
+    prefix, values = ENUM_VOCABULARY[kind]
+    return sorted(prefix + value.upper() for value in values)
+
 
 def load_documents(paths: list[Path], kind: str) -> list[dict[str, Any]]:
     """按传入顺序读取 JSON 对象，输入错误直接使构建失败。"""
@@ -161,7 +197,7 @@ def operation_values(
             raise ValueError(f"运行方案 ID 重复：{operation_id}")
         seen.add(operation_id)
         status = required_string(document, "status", f"运行方案 {operation_id}")
-        if status not in ("draft", "approved"):
+        if status not in enum_values("operation_approval"):
             raise ValueError(
                 f"运行方案 {operation_id} 的 status 必须是 draft 或 approved"
             )
@@ -196,7 +232,7 @@ def operation_values(
         if not isinstance(sync, dict):
             raise ValueError(f"运行方案 {operation_id} 缺少 sync 对象")
         strategy = required_string(sync, "strategy", f"运行方案 {operation_id} 的 sync")
-        if strategy not in ("sm", "dc"):
+        if strategy not in enum_values("sync_strategy"):
             raise ValueError(f"运行方案 {operation_id} 的同步策略必须是 sm 或 dc")
         assign_present, assign_activate = optional_unsigned(
             sync.get("assign_activate"),
@@ -327,7 +363,7 @@ def operation_values(
                         )
 
             mode_display_policy = mode.get("mode_display_policy")
-            if mode_display_policy not in ("required", "diagnostic"):
+            if mode_display_policy not in enum_values("mode_display"):
                 raise ValueError(
                     f"运行方案 {operation_id} 的模式 {mode_id} 必须明确声明 "
                     "mode_display_policy 为 required 或 diagnostic"
@@ -431,7 +467,7 @@ def operation_values(
                         f"运行方案 {operation_id} 的模式 {mode_id} "
                         "诊断读取 subindex 超出范围"
                     )
-                if value_type not in ("u8", "i8", "u16", "i16", "u32", "i32"):
+                if value_type not in enum_values("sdo_value"):
                     raise ValueError(
                         f"运行方案 {operation_id} 的模式 {mode_id} "
                         f"诊断读取 {name} 的类型无效"
@@ -547,16 +583,16 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             raise ValueError(f"运动方案 ID 重复：{profile_id}")
         seen.add(profile_id)
         status = required_string(document, "status", f"运动方案 {profile_id}")
-        if status not in ("draft", "approved"):
+        if status not in enum_values("motion_approval"):
             raise ValueError(f"运动方案 {profile_id} 的 status 必须是 draft 或 approved")
         required_mode_id = required_string(
             document, "required_mode_id", f"运动方案 {profile_id}"
         )
         trajectory = required_string(document, "trajectory", f"运动方案 {profile_id}")
-        if trajectory not in ("relative_linear_position", "constant_velocity"):
+        if trajectory not in enum_values("trajectory"):
             raise ValueError(f"运动方案 {profile_id} 使用了不支持的轨迹：{trajectory}")
         coordinate = required_string(document, "coordinate_frame", f"运动方案 {profile_id}")
-        if coordinate not in ("motor_rotor", "output_shaft"):
+        if coordinate not in enum_values("coordinate"):
             raise ValueError(
                 f"运动方案 {profile_id} 的 coordinate_frame 必须是 motor_rotor 或 output_shaft"
             )

@@ -60,7 +60,7 @@ static void print_header(void)
 static void print_usage(const char *prog)
 {
     fprintf(stderr, "用法: sudo %s [刷新间隔ms] [选项]\n", prog);
-    fprintf(stderr, "示例: sudo %s 200 --deployment orangepi-bench-dual\n\n", prog);
+    fprintf(stderr, "示例: sudo %s 200 --deployment <你的部署ID>\n\n", prog);
     fprintf(stderr, "说明:\n");
     fprintf(stderr, "  - 位置单位: 脉冲 (pulse)\n");
     fprintf(stderr, "  - 速度单位: 脉冲/秒 (pulse/s)\n");

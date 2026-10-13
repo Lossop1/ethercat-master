@@ -1661,10 +1661,8 @@ REQUIRE_WRITE(fputs("{\"schema_version\":11,\"generated_at_utc\":", stream) != E
         ",\"access_count\":%zu,\"cyclic_capacity\":%zu,\"final_capacity\":%zu},"
         "\"diagnostic_preop_reached\":%s,"
         /*
-         * 停机时"失能是否真的做到了"。用户的要求是"系统说关就得是真的关"，
-         * 而这四个数就是那次逐台核对的结论——verified 才是"真的关"，
-         * still_enabled 是"写了但没照做"，unverified 是"没证实"。
-         * 不要拿 safe_state_reached 代替它：那个说的是主站视角。
+         * attempted=写调用台数，verified=bit2=0 台数，still_enabled=bit2=1 台数，
+         * unverified=读不回台数。verified 不等于已失能：真使能时 bit2 同样为 0。
          */
         "\"shutdown_disable\":{\"attempted\":%zu,\"verified\":%zu,"
         "\"still_enabled\":%zu,\"unverified\":%zu},",

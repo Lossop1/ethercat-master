@@ -29,6 +29,67 @@ target_link_libraries(test_audit_capacity PRIVATE emaster::run_audit)
 emaster_enable_strict_warnings(test_audit_capacity)
 add_test(NAME audit_capacity COMMAND test_audit_capacity)
 
+# 四族装载的回合测试：把 config-runtime 的扁平文件装进结构体，逐条 dump 出来，
+# 并核对装载条数与文件声明的 count 一致。跑的是交付时的那套 flat —— 空配置也必须
+# 装得进去（客户拿到仓库后的第一件事就是空跑一次），所以这里不假定任何条目存在。
+add_executable(test_topology_roundtrip topology_apply_roundtrip.c)
+target_link_libraries(test_topology_roundtrip PRIVATE emaster::config)
+emaster_enable_strict_warnings(test_topology_roundtrip)
+add_test(NAME topology_roundtrip
+         COMMAND test_topology_roundtrip ${CMAKE_SOURCE_DIR}/config-runtime/topologies.flat)
+
+add_executable(test_catalog_roundtrip catalog_apply_roundtrip.c)
+target_link_libraries(test_catalog_roundtrip PRIVATE emaster::config emaster::catalog)
+emaster_enable_strict_warnings(test_catalog_roundtrip)
+add_test(NAME catalog_roundtrip
+         COMMAND test_catalog_roundtrip ${CMAKE_SOURCE_DIR}/config-runtime/catalog.flat)
+
+add_executable(test_runtime_roundtrip runtime_apply_roundtrip.c)
+target_link_libraries(test_runtime_roundtrip PRIVATE emaster::config)
+emaster_enable_strict_warnings(test_runtime_roundtrip)
+add_test(NAME runtime_roundtrip
+         COMMAND test_runtime_roundtrip ${CMAKE_SOURCE_DIR}/config-runtime/runtime.flat)
+
+# 部署族要另外三族已经在场：它按 ID 去查前者的指针。
+add_executable(test_deployment_roundtrip deployment_apply_roundtrip.c)
+target_link_libraries(test_deployment_roundtrip PRIVATE emaster::config emaster::catalog)
+emaster_enable_strict_warnings(test_deployment_roundtrip)
+add_test(NAME deployment_roundtrip
+         COMMAND test_deployment_roundtrip
+                 ${CMAKE_SOURCE_DIR}/config-runtime/topologies.flat
+                 ${CMAKE_SOURCE_DIR}/config-runtime/catalog.flat
+                 ${CMAKE_SOURCE_DIR}/config-runtime/runtime.flat
+                 ${CMAKE_SOURCE_DIR}/config-runtime/deployments.flat)
+
+# 扁平文件读器：键名查找、类型转换、缺失语义。样本由测试自己写，不问任何型号的键。
+add_executable(test_config_reader_smoke config_reader_smoke.c)
+target_link_libraries(test_config_reader_smoke PRIVATE emaster::config)
+emaster_enable_strict_warnings(test_config_reader_smoke)
+add_test(NAME config_reader_smoke
+         COMMAND test_config_reader_smoke ${CMAKE_CURRENT_BINARY_DIR}/config-reader-smoke.flat)
+
+# 公开访问函数与扁平文件逐族对照。期望值从被交给它的那几个文件里读，不写死型号 ——
+# 交付时跑的是空的 config-runtime，问的是"空配置是合法的可装载状态"；客户自己生成
+# 一套之后同一个测试问的是"访问函数报的和文件里写的一致"。换电机、换网卡都不用改它。
+add_executable(test_public_api_swap public_api_swap.c)
+target_link_libraries(test_public_api_swap PRIVATE emaster::config emaster::catalog)
+emaster_enable_strict_warnings(test_public_api_swap)
+add_test(NAME public_api_swap
+         COMMAND test_public_api_swap
+                 ${CMAKE_SOURCE_DIR}/config-runtime/topologies.flat
+                 ${CMAKE_SOURCE_DIR}/config-runtime/catalog.flat
+                 ${CMAKE_SOURCE_DIR}/config-runtime/runtime.flat
+                 ${CMAKE_SOURCE_DIR}/config-runtime/deployments.flat)
+
+# CiA 402 状态字解码的回归基线。它不断言"解码是对的"，而是钉住**当前已知的行为**：
+# 掩码 0x006F 下，真使能时报 0x1250 的驱动器会被解码成 switch-on-disabled，
+# 于是停机判据判它"已安全"。这是台架实测过的反常识事实，本轮不改状态机，只固化基线
+# —— 谁哪天动掩码或映射，这个测试先红，逼他先读 docs/test-plan.md §2.1。
+add_executable(test_cia402_status_baseline unit/cia402/test_status_baseline.c)
+target_link_libraries(test_cia402_status_baseline PRIVATE emaster::cia402)
+emaster_enable_strict_warnings(test_cia402_status_baseline)
+add_test(NAME cia402_status_baseline COMMAND test_cia402_status_baseline)
+
 # 慢速遥测"读到过没有、多久以前读到的"：报告里那几个 0 该印成读数还是印「—」全靠
 # 这一条判定，而判错了不会有任何报错，只会安静地把"没读到"写成温度 0（P11.8）。
 # 只依赖 slow.c（纯 libc），所以开发机上也能建、能跑。

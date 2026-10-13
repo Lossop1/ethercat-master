@@ -256,7 +256,9 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_PDO_SET_NOT_FOUND);
         }
-        if (pdo_set->module_slot == 0U ||
+        /* 槽位只在模块化分配里有含义；直连分配恒为 0，那不是缺项。 */
+        if ((pdo_set->assignment_style == EMASTER_PDO_ASSIGNMENT_MODULE_SLOT &&
+             pdo_set->module_slot == 0U) ||
             (pdo_set->mode_init_on_safeop_to_op &&
              (pdo_set->mode_init_index == 0U ||
               pdo_set->mode_init_value != operation_mode->value)))

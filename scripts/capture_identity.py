@@ -33,6 +33,10 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# 构建目录由环境变量 BUILD 给，默认与 scripts/*.sh 同一个约定。二进制落在哪个子目录
+# 由 apps/<名字>/ 决定，所以这里跟着 apps 布局走。
+BUILD = os.environ.get("BUILD") or os.path.join(REPO, "build", "linux-debug")
+
 # 配置的类别 -> (目录, id 字段名)
 CONFIG_KINDS = (
     ("deployment", "deployments", "deployment_id"),
@@ -240,7 +244,7 @@ def collect_scan(interface):
     """跑扫描工具，返回 (lines, error)。扫不到时 error 非空而 lines 为空。"""
     if not interface:
         return [], "接口未知（部署档里没有 ethercat_interface）"
-    tool = os.path.join(REPO, "build", "tools", "diagnose_slave", "emaster-scan")
+    tool = os.path.join(BUILD, "apps", "diagnose_slave", "emaster-scan")
     if not os.path.isfile(tool):
         return [], "扫描工具未构建（%s）" % os.path.relpath(tool, REPO)
 
@@ -285,7 +289,7 @@ def main():
     # 工作区脏意味着"源码提交"不足以标识这一轮跑的代码，必须一起记。
     lines.append("git_dirty=%s" % ("yes" if (rc == 0 and dirty) else "no"))
 
-    binary = os.path.join(REPO, "build", "linux-debug", "apps", "master", "emaster-master")
+    binary = os.path.join(BUILD, "apps", "master", "emaster-master")
     lines.append("binary=%s" % os.path.relpath(binary, REPO))
     lines.append("binary_sha256=%s" % (sha256(binary) if os.path.isfile(binary) else "missing"))
 

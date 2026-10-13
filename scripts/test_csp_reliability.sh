@@ -2,7 +2,7 @@
 # CSP reliability test: continuously refresh external targets and monitor master stability
 # Usage: [DEPLOYMENT=<部署ID>] test_csp_reliability.sh [duration_seconds]
 # Default: 300s. For full P1 verification pass 3600 or more.
-# Deployment: 由 DEPLOYMENT / EMASTER_DEPLOYMENT 指定，默认台架五轴；需要部署里
+# Deployment: 必须由 DEPLOYMENT / EMASTER_DEPLOYMENT 显式指定；需要部署里
 #             没有 motion_profile，走纯外部目标模式。
 # Pass: socket responds throughout, process never exits, fail_count == 0
 # Fail: any socket failure, unexpected process exit, or master fault
@@ -12,7 +12,11 @@
 
 set -euo pipefail
 
-DEPLOYMENT="${DEPLOYMENT:-${EMASTER_DEPLOYMENT:-orangepi-bench-quint-30deg}}"
+DEPLOYMENT="${DEPLOYMENT:-${EMASTER_DEPLOYMENT:-}}"
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 SOCK=/tmp/emaster-${DEPLOYMENT}.sock
 LOG=/tmp/test_csp_reliability.log
 REPORT_DST=/tmp/test_csp_reliability_report.json

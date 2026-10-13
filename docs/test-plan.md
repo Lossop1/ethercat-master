@@ -14,7 +14,11 @@
 
 ## B. 冻结测试条件
 
-正式系列以 `orangepi-bench-duodec-30deg` 为基准：12 轴、1 ms、DC、CSP、30°输出轴往返、单程 5 s、100 Hz 客户端、triangle、全部轴运动、观测开启、轮间 60 s。保持测试沿用同一部署但不发运动目标。先确认实际拓扑及各轴换算与部署匹配；12 轴并非其它台架可直接照搬的条件。
+正式系列以台架自己的部署为基准（下文记作 `<你的部署ID>`）：12 轴、1 ms、DC、CSP、30°输出轴往返、单程 5 s、100 Hz 客户端、triangle、全部轴运动、观测开启、轮间 60 s。保持测试沿用同一部署但不发运动目标。先确认实际拓扑及各轴换算与部署匹配；12 轴并非其它台架可直接照搬的条件。
+
+`<你的部署ID>` 不是仓库里的常量 —— 交付时六族配置是空的，这一份由你在现场用
+`python gen/emaster_config.py init-site` 生成（见 `README.md` §20）。换台架就换一份，
+所以本文的命令里出现的都是这个占位符，不是某个具体名字。
 
 每个系列记录以下内容，任一改变均创建新 SERIES，禁止混合统计：
 
@@ -80,16 +84,45 @@ F9 开始前先估算审计容量、报告体积、磁盘空间与归档保留�
 
 ```bash
 python3 gen/validate_project.py
+python3 gen/emaster_config.py build --config config --out /tmp/config-runtime
+diff -r config-runtime /tmp/config-runtime          # 逐字节相同 = 生成与配置内容无关
 ctest --test-dir build --output-on-failure
 python3 checks/config_chain_check.py
 python3 checks/analysis_tools_check.py
 python3 checks/report_telemetry_check.py
+python3 checks/device_facts_check.py
+python3 checks/pdo_assignment_check.py
 ```
+
+第二条是"换电机不重编主站"的主断言：客户改配置只重新生成，不动二进制。所以生成物
+必须与配置内容无关 —— `diff` 有输出就说明生成器沾了内容（时间戳、字典序、浮点格式），
+那是先要修的东西，不是可以放过的噪音。
+
+前两条合起来只证到"生成器不看内容"。要证"主站真的不看内容"，还得让**同一份编好的
+二进制**把两套 flat 都装进去 —— 一套是交付的空的 `config-runtime`（0 份配置），一套是
+客户从 ESI 从零生成的。`public_api_swap` 与 `deployment_apply_roundtrip` 的期望值全部
+从交给它们的文件里读，不写死型号，所以换个 `--config-dir` 就是换一套判据：
+
+```bash
+# 用客户自己的配置生成一套 flat（先跑 add-device / init-site，见 README 第 20 节）
+python3 gen/emaster_config.py build --config config --out /tmp/customer-runtime
+
+# 不改一行 C、不重编，同一个可执行文件读两套
+./build/tests/test_public_api_swap config-runtime/topologies.flat config-runtime/catalog.flat \
+                                       config-runtime/runtime.flat config-runtime/deployments.flat
+./build/tests/test_public_api_swap /tmp/customer-runtime/topologies.flat \
+                                       /tmp/customer-runtime/catalog.flat \
+                                       /tmp/customer-runtime/runtime.flat \
+                                       /tmp/customer-runtime/deployments.flat
+```
+
+两边的条数会不同（空配置是 0、客户的按他的设备数），但都必须"失败 0 项"。空配置下它
+问的是"空是合法的可装载状态"，客户配置下问的是"访问函数报的和文件里写的一致"。
 
 保持示例（对应 F3 的第一组，SERIES 每次使用新名称）：
 
 ```bash
-sudo env REPO="$PWD" DEPLOYMENT=orangepi-bench-duodec-30deg \
+sudo env REPO="$PWD" DEPLOYMENT=<你的部署ID> \
   SERIES=f3_idle60_v1_20261009a MODE=idle ROUNDS=3 GAP=60 \
   IDLE=60 OBSERVATION=1 bash scripts/bench_series.sh
 ```
@@ -97,7 +130,7 @@ sudo env REPO="$PWD" DEPLOYMENT=orangepi-bench-duodec-30deg \
 运动示例（对应 F4 第一组）：
 
 ```bash
-sudo env REPO="$PWD" DEPLOYMENT=orangepi-bench-duodec-30deg \
+sudo env REPO="$PWD" DEPLOYMENT=<你的部署ID> \
   SERIES=f4_motion60_v1_20261009a MODE=reciprocate ROUNDS=10 GAP=60 \
   DURATION=60 TRAVERSE=5 DEGREES=30 RATE=100 WAVE=triangle \
   ONLY_AXIS=0 OBSERVATION=1 SETTLE_TICKS=10 REPORT_INTERVAL=10 \
@@ -165,7 +198,7 @@ python3 analysis/series_verdict.py evidence/_f4_motion60_v1_20261009a
 | 周期 | 1 ms，DC + SYNC0 |
 | 期望 WKC | 3 × 从站数（12 轴 = 36） |
 | 帧超时 | 周期/4 = 250 µs |
-| 部署档 | `orangepi-bench-duodec-30deg` |
+| 部署档 | `<你的部署ID>`（`init-site` 生成） |
 
 **齿轮比是识别环上位置的唯一地标。** 位置是环序，不是物理标签；两台 25:1 落在第 8、12 席，
 读出来的 `gear=` 序列就能判断缺的是哪几席。
@@ -197,9 +230,34 @@ python3 analysis/series_verdict.py evidence/_f4_motion60_v1_20261009a
    读它等于没读。SOEM 只在看到 error 位时才去读，这是照规范做，不是偷懒。
 
 **译名的依据只有标准。** 工具里印的 `switch-on-disabled` / `operation-enabled` 出自
-CiA 402（IEC 61800-7-201）的位定义，**没有厂商状态表佐证** —— 厂商那张图
-（`docs/lz-joint/image/伺服状态.png`）是图片，当前模型读不了。厂商手册的文字部分给的位名
-与标准不同（bit6 叫"伺服准备好"、bit2 叫"伺服运行"），而且与它自己的读数不自洽。
+CiA 402（IEC 61800-7-201）的位定义，**没有厂商状态表佐证** —— 厂商手册随电机走、不在仓库里，
+而且它给的位名与标准不同（bit6 叫"伺服准备好"、bit2 叫"伺服运行"），与它自己的读数也不自洽。
+**别拿厂商的位名去改这里的译名**：位定义只能照标准，厂商那张表是错的。
+
+### 2.1 每款新电机必须先做的读数（接上就做，不动轴）
+
+设备档里的 `safe_stop_status_mask` / `safe_stop_status_value` 是**唯一一条"给错不会有人
+看出来"的配置**：它不出现在报告正文里，也不影响通信，只决定主站**判定"能不能安全停机"时
+看状态字哪几位**。给错了，主站会在驱动器仍出力时报"全轴已安全"。所以它不能照标准默认值抄，
+只能量。
+
+台架上量过一条反常识的事实：**某款驱动器真使能时 `0x6041` 也读到 `0x1250`**，而
+`0x1250 & 0x006F == 0x40 == switch-on-disabled` —— 照标准默认掩码会把它判成"已停"。
+这不是所有驱动器都这样，但是"照抄默认值"这条路已经走不通的证明。
+
+**读数项（每款型号一份，写进它的设备档）**：
+
+| 状态 | 读什么 | 用来定 |
+| --- | --- | --- |
+| 未使能（伺服使能断、轴是松的） | `0x6041`、`0x6040`、`0x6061`、`0x608F` | `safe_stop_status_value` 的候选 |
+| 真使能（听声音、手动推轴确认，见下） | 同上四个对象 | 掩码必须把这两态分开 |
+
+**判使能只看两个真判据：有没有声音、轴松不松**（`0x6041` 也会骗人）。加力矩前先上机械防护。
+
+两态读完之后：状态字在同一段掩码下取值不同的那些位就是掩码；取不出任何有区分度的位，
+就把 `safe_stop_status_mask` 填 0（含义是"没有可靠的设备侧判据"，停机退化为标准 CiA 402
+判据），**并在设备档和台架记录里写明这台设备属于这一类**。`gen/validate_project.py` 在
+掩码为 0 时会打印一条告警，不是错误 —— 合法，但必须有人知道自己选了什么。
 
 ---
 
@@ -210,14 +268,14 @@ CiA 402（IEC 61800-7-201）的位定义，**没有厂商状态表佐证** —�
 **单轮空转**（电机不动，只使能保持）：
 
 ```bash
-sudo env DEPLOYMENT=orangepi-bench-duodec-30deg IDLE=60 OBSERVATION=1 TAG=idle1 \
+sudo env DEPLOYMENT=<你的部署ID> IDLE=60 OBSERVATION=1 TAG=idle1 \
   bash scripts/bench_idle.sh
 ```
 
 **单轮往返**（电机往复）：
 
 ```bash
-sudo env DEPLOYMENT=orangepi-bench-duodec-30deg DURATION=60 TRAVERSE=5 DEGREES=30 \
+sudo env DEPLOYMENT=<你的部署ID> DURATION=60 TRAVERSE=5 DEGREES=30 \
   RATE=100 ONLY_AXIS=0 OBSERVATION=1 TAG=recip30 \
   bash scripts/bench_reciprocate_30deg.sh
 ```
@@ -225,7 +283,7 @@ sudo env DEPLOYMENT=orangepi-bench-duodec-30deg DURATION=60 TRAVERSE=5 DEGREES=3
 **多轮**（把证据收进仓库）：
 
 ```bash
-sudo env DEPLOYMENT=orangepi-bench-duodec-30deg SERIES=<系列名> ROUNDS=3 GAP=20 \
+sudo env DEPLOYMENT=<你的部署ID> SERIES=<系列名> ROUNDS=3 GAP=20 \
   MODE=idle IDLE=900 OBSERVATION=1 bash scripts/bench_series.sh
 ```
 

@@ -66,9 +66,37 @@ def direction_values(direction: dict[str, Any], field: str) -> dict[str, object]
     return {"bytes": int(direction["bytes"]), "mappings": mappings}
 
 
+# 设备档里的写法 → C 枚举符号。与遥测的类型/语义同一套做法：扁平文件存符号文本，
+# 生成的 strcmp 链把它还原成符号，枚举的数值只由 C 编译器决定。
+ASSIGNMENT_STYLE_VALUES = {
+    "module_slot": "EMASTER_PDO_ASSIGNMENT_MODULE_SLOT",
+    "direct_1c12": "EMASTER_PDO_ASSIGNMENT_DIRECT",
+}
+
+
 def pdo_set_values(pdo_set: dict[str, Any], profile_id: str) -> dict[str, object]:
     """生成一个设备 PDO 方案的结构化值，保留所有可选方案。"""
     pdo_id = required_string(pdo_set, "id", f"设备 {profile_id} 的 PDO 方案")
+    # 缺省模块化：既有设备档没有这个字段，行为不能因为加它而变。
+    assignment_style = pdo_set.get("assignment_style", "module_slot")
+    if assignment_style not in ASSIGNMENT_STYLE_VALUES:
+        raise ValueError(
+            f"设备 {profile_id} PDO 方案 {pdo_id} 的 assignment_style 无效：{assignment_style!r}"
+        )
+    if assignment_style == "direct_1c12":
+        # 直连设备没有模块槽位这回事，声明了就是配置写错，不许留着当摆设。
+        if pdo_set.get("module_ident") is not None or pdo_set.get("module_slot", 0) != 0:
+            raise ValueError(
+                f"设备 {profile_id} PDO 方案 {pdo_id} 是直连分配，"
+                "不应声明 module_ident 或非零 module_slot"
+            )
+        module_ident = 0
+        module_slot = 0
+    else:
+        module_ident = parse_unsigned(
+            pdo_set["module_ident"], f"设备 {profile_id} PDO 方案 {pdo_id} 的 module_ident", 0xFFFFFFFF
+        )
+        module_slot = int(pdo_set["module_slot"])
     mode_initialization = pdo_set.get("mode_initialization")
     mode_init_enabled = mode_initialization is not None
     mode_init_index = 0
@@ -90,10 +118,9 @@ def pdo_set_values(pdo_set: dict[str, Any], profile_id: str) -> dict[str, object
             raise ValueError(f"设备 {profile_id} PDO 方案 {pdo_id} mode_initialization.value 超出范围")
     return {
         "id": pdo_id,
-        "module_ident": parse_unsigned(
-            pdo_set["module_ident"], f"设备 {profile_id} PDO 方案 {pdo_id} 的 module_ident", 0xFFFFFFFF
-        ),
-        "module_slot": int(pdo_set["module_slot"]),
+        "module_ident": module_ident,
+        "module_slot": module_slot,
+        "assignment_style": ASSIGNMENT_STYLE_VALUES[assignment_style],
         "rx": direction_values(pdo_set["rx"], f"设备 {profile_id} PDO 方案 {pdo_id} rx"),
         "tx": direction_values(pdo_set["tx"], f"设备 {profile_id} PDO 方案 {pdo_id} tx"),
         "mode_init_on_safeop_to_op": mode_init_enabled,
@@ -181,9 +208,13 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
     identity = document["identity"]
     pdo_sets = document["pdo_sets"]
     protocol = document["protocol"]
-    conversion = document["conversion"]
-    if not all(isinstance(item, dict) for item in (identity, protocol, conversion)):
-        raise ValueError(f"设备 {profile_id} 的 identity、protocol、pdo_sets 或 conversion 类型无效")
+    conversion = document.get("conversion")
+    if not all(isinstance(item, dict) for item in (identity, protocol)) or (
+        conversion is not None and not isinstance(conversion, dict)
+    ):
+        raise ValueError(
+            f"设备 {profile_id} 的 identity、protocol、pdo_sets 或 conversion 类型无效"
+        )
     if not isinstance(pdo_sets, list) or not pdo_sets:
         raise ValueError(f"设备 {profile_id} 的 pdo_sets 必须是非空数组")
 
@@ -197,7 +228,13 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
     safe_stop_status_value = parse_unsigned(
         protocol["safe_stop_status_value"], "protocol.safe_stop_status_value", 0xFFFF
     )
-    if safe_stop_status_mask == 0 or safe_stop_status_value & ~safe_stop_status_mask:
+    # 掩码为 0 是合法且含义明确的：这台设备没有可靠的设备侧停机判据。运行期据此
+    # 只走标准 CiA 402 状态判据（session_shutdown.c 里 device_safe 本来就带非零检查）。
+    # 禁止它反而是逼人写一个假的位；期望值必须同时为 0，否则那句话自相矛盾。
+    if safe_stop_status_mask == 0:
+        if safe_stop_status_value != 0:
+            raise ValueError(f"设备 {profile_id} 的空停用状态字掩码要求期望值也为 0")
+    elif safe_stop_status_value & ~safe_stop_status_mask:
         raise ValueError(f"设备 {profile_id} 的停用状态字条件无效")
 
     return {
@@ -210,7 +247,11 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
         "revision": parse_unsigned(identity["revision"], "identity.revision", 0xFFFFFFFF),
         "reference_pdo_set_id": c_string(reference_id),
         "pdo_sets": pdo_values,
-        "encoder_counts": int(conversion["encoder_counts_per_motor_revolution_default"]),
+        # 厂商资料没给换算期望时写 0：0 表示"没有这个事实"，不是"每转 0 个计数"。
+        # 这个字段全仓没有消费者，真正生效的换算是运动方案里每轴的值。
+        "encoder_counts": 0
+        if conversion is None
+        else int(conversion["encoder_counts_per_motor_revolution_default"]),
         "supports_pdo_assignment": "true"
         if protocol.get("supports_pdo_assignment", False)
         else "false",
@@ -276,6 +317,7 @@ def pdo_set_initializer(pdo_set: dict[str, object], profile_ordinal: int, pdo_se
         "    {"
         f"{c_string(pdo_set['id'])}, UINT32_C(0x{pdo_set['module_ident']:08X}), "
         f"UINT8_C({pdo_set['module_slot']}), "
+        f"{pdo_set['assignment_style']}, "
         f"UINT16_C({rx['bytes']}), UINT16_C({tx['bytes']}), "
         f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings, "
         f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings) / "

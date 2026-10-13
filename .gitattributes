@@ -6,7 +6,8 @@
 *.zip binary
 *.pcap binary
 
-# Vendor inputs are immutable evidence; do not normalize their bytes.
+# 厂商输入是原始证据，不要动它的字节。
 # 整个目录按字节保真，而不是逐个文件打补丁：只要有一个厂商文件被判成文本，
 # 它就会吃 text=auto eol=lf 的换行规范化，厂商给的字节就被改了。
-/docs/lz-joint/** binary
+# /esi/** 保留 —— 交付时目录是空的，客户把自己那份 ESI 放进来，那份同样不许被改字节。
+/esi/** binary

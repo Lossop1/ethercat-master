@@ -30,7 +30,7 @@
 #   sudo bash /home/orangepi/ethercat-master/scripts/bench_gui_takeover.sh
 #
 # 参数（环境变量）：
-#   DEPLOYMENT  部署 ID，默认 orangepi-bench-quint-30deg（台架现有 5 个从站）
+#   DEPLOYMENT  部署 ID（必须给：由现场 init-site 生成，仓库里没有默认值）
 #   DUR         自检总时长（秒），默认 20。动作按比例摊在这段时间里，给接管留出余量；
 #               调小了会出现"接管还没完成、目标就被投出去"，那是这一轮没跑好，不是代码错。
 
@@ -40,7 +40,11 @@ REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # 构建目录跟随 CMakePresets.json 的 linux-debug（CI 也用同一个）。
 # 单数形式 $REPO/build 是旧台架树的习惯，两处不一致会让脚本去找不存在的二进制。
 BUILD=${BUILD:-$REPO/build/linux-debug}
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
+DEPLOYMENT=${DEPLOYMENT:-}
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 DUR=${DUR:-20}
 
 MASTER_LOG=/tmp/gui_takeover_master.log

@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from runtime_config_model import motion_values, operation_values  # noqa: E402
+from runtime_config_model import (  # noqa: E402
+    enum_identifiers,
+    motion_values,
+    operation_values,
+)
 
 
 def read_str(key: str, target: str) -> list[str]:
@@ -66,26 +70,28 @@ def enum_resolver(name: str, c_type: str, identifiers: set[str]) -> list[str]:
     return lines
 
 
-def operation_enum_ids(operations: list[dict[str, Any]]) -> dict[str, set[str]]:
-    """收集这批配置里实际用到的枚举标识符，只为它们生成 strcmp 分支。"""
-    ids: dict[str, set[str]] = {"approval": set(), "strategy": set(), "display": set(), "sdo": set()}
-    for operation in operations:
-        ids["approval"].add(f"EMASTER_OPERATION_PROFILE_{operation['status'].upper()}")
-        ids["strategy"].add(f"EMASTER_SYNC_STRATEGY_{operation['strategy'].upper()}")
-        for mode in operation["modes"]:
-            ids["display"].add(f"EMASTER_MODE_DISPLAY_{mode['mode_display_policy'].upper()}")
-            for item in list(mode["safeop_to_op_sdo_writes"]) + list(mode["final_sdo_reads"]):
-                ids["sdo"].add(f"EMASTER_CONFIG_SDO_VALUE_{item['type'].upper()}")
-    return ids
+def operation_enum_ids() -> dict[str, set[str]]:
+    """运行方案族的枚举标识符，取词表全集。
+
+    不按"这批配置里出现过什么"生成分支：那样生成物就随配置内容变了，客户
+    换一份用了别的取值的配置进来，已经建好的二进制解析不了，而客户不该为此
+    重编主站。词表是封闭的（由 runtime_config.h 的枚举决定），与配置无关。
+    """
+    return {
+        "approval": set(enum_identifiers("operation_approval")),
+        "strategy": set(enum_identifiers("sync_strategy")),
+        "display": set(enum_identifiers("mode_display")),
+        "sdo": set(enum_identifiers("sdo_value")),
+    }
 
 
-def motion_enum_ids(motions: list[dict[str, Any]]) -> dict[str, set[str]]:
-    ids: dict[str, set[str]] = {"approval": set(), "trajectory": set(), "coordinate": set()}
-    for motion in motions:
-        ids["approval"].add(f"EMASTER_MOTION_PROFILE_{motion['status'].upper()}")
-        ids["trajectory"].add(f"EMASTER_MOTION_TRAJECTORY_{motion['trajectory'].upper()}")
-        ids["coordinate"].add(f"EMASTER_MOTION_COORDINATE_{motion['coordinate'].upper()}")
-    return ids
+def motion_enum_ids() -> dict[str, set[str]]:
+    """运动方案族的枚举标识符，同样取词表全集。"""
+    return {
+        "approval": set(enum_identifiers("motion_approval")),
+        "trajectory": set(enum_identifiers("trajectory")),
+        "coordinate": set(enum_identifiers("coordinate")),
+    }
 
 
 def runtime_rows(operations: list[dict[str, Any]], motions: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -240,8 +246,8 @@ def render(operations: list[dict[str, Any]], motions: list[dict[str, Any]]) -> s
         "}",
         "",
     ]
-    oids = operation_enum_ids(operations)
-    mids = motion_enum_ids(motions)
+    oids = operation_enum_ids()
+    mids = motion_enum_ids()
     L += enum_resolver("resolve_operation_approval", "emaster_operation_profile_approval_t", oids["approval"])
     L += [""]
     L += enum_resolver("resolve_sync_strategy", "emaster_sync_strategy_t", oids["strategy"])
@@ -674,8 +680,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="运行方案与运动方案 -> 填充代码 + 扁平文件")
     parser.add_argument("--operations", type=Path, required=True)
     parser.add_argument("--motions", type=Path, required=True)
-    parser.add_argument("--c-output", type=Path, required=True)
-    parser.add_argument("--h-output", type=Path, required=True)
+    parser.add_argument("--c-output", type=Path, help="省略时只产出扁平文件")
+    parser.add_argument("--h-output", type=Path)
     parser.add_argument("--flat-output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -686,17 +692,16 @@ def main() -> int:
         [json.loads(p.read_text(encoding="utf-8")) for p in sorted(args.motions.glob("*.json"))]
     )
     head = "/* 由 gen/generate_runtime_apply.py 生成，不要手改。 */\n"
-    args.c_output.write_text(
-        head + render(operations, motions),
-        encoding="utf-8",
-        newline="\n",
-    )
+    for path, text in (
+        (args.c_output, head + render(operations, motions)),
+        (args.h_output, render_header()),
+    ):
+        if path is not None:
+            path.write_text(text, encoding="utf-8", newline="\n")
+            print(f"已写出 {path}")
     rows = runtime_rows(operations, motions)
     args.flat_output.write_text("".join(f"{k}\t{v}\n" for k, v in rows), encoding="utf-8", newline="\n")
     print(f"运行方案 {len(operations)} 份、运动方案 {len(motions)} 份，扁平记录 {len(rows)} 条")
-    args.h_output.write_text(render_header(), encoding="utf-8", newline="\n")
-    print(f"已写出 {args.c_output}")
-    print(f"已写出 {args.h_output}")
     print(f"已写出 {args.flat_output}")
     return 0
 

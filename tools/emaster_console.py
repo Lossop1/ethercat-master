@@ -4,7 +4,7 @@ EtherCAT 主站手动控制台（香橙派上的全屏面板）
 
 用法：
     sudo bash scripts/console.sh [--start]
-    python3 tools/emaster_console.py --deployment orangepi-bench-quint-30deg --start
+    python3 tools/emaster_console.py --deployment <你的部署ID> --start
     python3 tools/emaster_console.py --selftest --deployment ...   # 不开面板，跑一遍引擎
 
 与主站解耦：本工具是一个**独立进程**，只通过命令套接字
@@ -1906,8 +1906,9 @@ def parse_args(argv):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="与主站解耦：只走命令套接字，主站一行不改。")
     parser.add_argument("--deployment",
-                        default=os.environ.get("DEPLOYMENT", "orangepi-bench-quint-30deg"),
-                        help="部署 ID，套接字路径由它推导（默认 %(default)s）")
+                        default=os.environ.get("DEPLOYMENT"),
+                        help="部署 ID，套接字路径由它推导。没有默认值：ID 由现场 "
+                             "init-site 生成（也可用 $DEPLOYMENT 给）")
     parser.add_argument("--socket", default=None, help="直接指定套接字路径，覆盖 --deployment")
     parser.add_argument("--repo",
                         default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1927,6 +1928,12 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    if args.socket is None and not args.deployment:
+        # 曾经的默认值是台架上的某个部署 ID。交付时仓库里没有部署，"默认"只会在
+        # 这里拼出一个不存在的套接字路径，然后报一句"连不上"——把问题指到错的地方。
+        print("必须给 --deployment <你的部署ID>（或用 --socket 直接指定套接字路径）；"
+              "部署 ID 由现场 init-site 生成，仓库里没有默认值", file=sys.stderr)
+        return 2
     sock_path = args.socket or f"/tmp/emaster-{args.deployment}.sock"
 
     if args.selftest:

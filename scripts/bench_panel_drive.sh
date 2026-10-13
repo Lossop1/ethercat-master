@@ -16,7 +16,11 @@
 # 于是往返验证的默认振幅是 min(30, 3×0.6)=1.8°，全程都是小动作。
 cd "$(dirname "$0")/.." || exit 1
 RANGE=${RANGE:-3}
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
+DEPLOYMENT=${DEPLOYMENT:-}
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 OUT=/tmp/panel-out.txt
 LOG=/tmp/emaster-console-master.log
 MARK=/tmp/panel-mark.txt

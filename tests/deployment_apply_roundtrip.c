@@ -42,6 +42,18 @@ int main(int argc, char **argv)
 
     if (argc != 5) { fprintf(stderr, "用法: %s <topo.flat> <cat.flat> <rt.flat> <dep.flat>\n", argv[0]); return 2; }
     if (!load_all(argv[1], argv[2], argv[3], argv[4])) { fprintf(stderr, "加载失败\n"); return 1; }
+    /* 部署条目数必须与文件声明的一致。部署族的指针是按每份部署声明的运行方案
+       条数 calloc 的，count 读错一处就是越界或者少接一条。 */
+    {
+        size_t declared = 0U;
+        if (!emaster_config_reader_size(&readers[3], "deployment.count", &declared) ||
+            declared != emaster_deployment_config_count())
+        {
+            fprintf(stderr, "deployment.count 声明 %zu，装载了 %zu\n",
+                    declared, emaster_deployment_config_count());
+            return 1;
+        }
+    }
 
     printf("deployment.count\t%zu\n", emaster_deployment_config_count());
     for (di = 0U; di < emaster_deployment_config_count(); ++di)

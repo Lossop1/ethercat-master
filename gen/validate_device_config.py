@@ -12,20 +12,36 @@ from validation_common import (
 )
 
 
+ASSIGNMENT_STYLES = ("module_slot", "direct_1c12")
+
+
 def validate_pdo_set(check: Validation, pdo_set: dict[str, Any], profile_id: str) -> bool:
     """校验一个 PDO 方案的映射表、条目类型、字节对齐和声明长度。"""
     initial_error_count = len(check.errors)
     pdo_id = pdo_set.get("id")
     check.require(non_empty_string(pdo_id), f"设备 {profile_id} 的 PDO 方案缺少 id")
-    validate_hex_value(
-        check, pdo_set.get("module_ident"), f"设备 {profile_id} 的 module_ident", 0xFFFFFFFF
+    style = pdo_set.get("assignment_style", "module_slot")
+    check.require(
+        style in ASSIGNMENT_STYLES,
+        f"设备 {profile_id} 的 PDO 方案 {pdo_id} assignment_style 无效：{style!r}",
     )
     module_slot = pdo_set.get("module_slot")
-    check.require(
-        isinstance(module_slot, int) and not isinstance(module_slot, bool) and
-        1 <= module_slot <= 0xFF,
-        f"设备 {profile_id} 的 PDO 方案 {pdo_id} module_slot 必须为 1..255",
-    )
+    if style == "direct_1c12":
+        # 直连分配没有模块槽位这回事：两个字段都必须留空，不能留个摆设让人以为有用。
+        check.require(
+            pdo_set.get("module_ident") is None and module_slot == 0,
+            f"设备 {profile_id} 的 PDO 方案 {pdo_id} 是直连分配，"
+            "module_ident 必须为 null 且 module_slot 必须为 0",
+        )
+    else:
+        validate_hex_value(
+            check, pdo_set.get("module_ident"), f"设备 {profile_id} 的 module_ident", 0xFFFFFFFF
+        )
+        check.require(
+            isinstance(module_slot, int) and not isinstance(module_slot, bool) and
+            1 <= module_slot <= 0xFF,
+            f"设备 {profile_id} 的 PDO 方案 {pdo_id} module_slot 必须为 1..255",
+        )
     mode_initialization = pdo_set.get("mode_initialization")
     if mode_initialization is not None:
         check.require(
@@ -286,17 +302,58 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
                 f"设备 {profile_id} 的 {field} 必须是布尔值",
             )
 
-    conversion = profile.get("conversion")
-    if not isinstance(conversion, dict):
-        check.errors.append(f"设备 {profile_id} 缺少 conversion 对象")
-    else:
-        encoder_counts = conversion.get("encoder_counts_per_motor_revolution_default")
-        check.require(
-            isinstance(encoder_counts, int)
-            and not isinstance(encoder_counts, bool)
-            and 0 < encoder_counts <= 0xFFFFFFFF,
-            f"设备 {profile_id} 的默认编码器计数必须是正整数",
+        # ESI 声明的 AssignActivate：DC 与 SM 各一个。这个映射里没有哪种同步方式，
+        # 就表示厂商没写它 —— 于是不能生成要求它的运行方案（生成器也会拒绝），
+        # 而不是替厂商编一个"标准上一般是这样"的值填上。
+        assign = protocol.get("assign_activate_by_strategy")
+        if not isinstance(assign, dict):
+            check.errors.append(
+                f"设备 {profile_id} 的 assign_activate_by_strategy 必须是对象；"
+                "缺了它就无法确定同步怎么使能，只能由人填"
+            )
+        else:
+            for strategy, value in sorted(assign.items()):
+                check.require(
+                    strategy in ("dc", "sm"),
+                    f"设备 {profile_id} 的 assign_activate_by_strategy 键必须是 dc 或 sm：{strategy!r}",
+                )
+                validate_hex_value(
+                    check, value, f"设备 {profile_id} 的 {strategy} AssignActivate", 0xFFFFFFFF
+                )
+
+        # 掩码为 0 合法且含义明确："这台设备没有可靠的设备侧停机判据"。但它的后果
+        # 只有读运行期代码才看得见 —— 停机时只按标准 CiA 402 状态判据（未使能/未就绪）
+        # 判定"能不能安全停"。对状态字不符合标准的驱动器这不安全：台架上实测过
+        # 某型号**真使能时 0x6041 也读到 0x1250**，而 0x1250 & 0x006F == SWITCH_ON_DISABLED，
+        # 于是主站会在驱动器仍出力时报"全轴已安全"。合法，可以放过，但必须说出来。
+        mask_text = protocol.get("safe_stop_status_mask")
+        try:
+            mask_is_zero = isinstance(mask_text, str) and hex_value(mask_text) == 0
+        except ValueError:
+            mask_is_zero = False
+        check.warn(
+            not mask_is_zero,
+            f"设备 {profile_id} 的 safe_stop_status_mask 为 0：停机只走标准 CiA 402 状态判据。"
+            "状态字不符合标准的驱动器（真使能时 0x6041 读 0x1250 这类）会被误判为已安全，"
+            "必须先在台架量准两个状态的 0x6041 再填实",
         )
+
+    # 缺省合法：厂商资料没给换算来源，是句实话；本仓也没有消费者读它
+    # （真正生效的换算是运动方案里每轴的值）。给了就必须完整。
+    conversion = profile.get("conversion")
+    if conversion is not None:
+        check.require(
+            isinstance(conversion, dict),
+            f"设备 {profile_id} 的 conversion 必须是对象",
+        )
+        if isinstance(conversion, dict):
+            encoder_counts = conversion.get("encoder_counts_per_motor_revolution_default")
+            check.require(
+                isinstance(encoder_counts, int)
+                and not isinstance(encoder_counts, bool)
+                and 0 < encoder_counts <= 0xFFFFFFFF,
+                f"设备 {profile_id} 的默认编码器计数必须是正整数",
+            )
 
     validate_slow_telemetry(check, profile, profile_id)
 

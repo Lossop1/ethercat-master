@@ -240,8 +240,6 @@ bool emaster_soem_assign_pdo_set_recorded(
     const emaster_pdo_set_profile_t *pdo_set,
     emaster_soem_pdo_assignment_result_t *result)
 {
-    uint32_t module_ident;
-    uint32_t observed_module_ident;
     bool rx_matches;
     bool tx_matches;
 
@@ -255,16 +253,22 @@ bool emaster_soem_assign_pdo_set_recorded(
     {
         return false;
     }
-    /* F030 是模块化从站的配置模块列表；先选择方案对应模块，再分配 PDO。 */
-    module_ident = pdo_set->module_ident;
-    if (!emaster_soem_write_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
-                                module_ident) ||
-        !emaster_soem_read_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
-                               &observed_module_ident) ||
-        observed_module_ident != module_ident)
+    /* F030 是模块化从站的配置模块列表；先选择方案对应模块，再分配 PDO。
+       非模块化设备没有这个对象，写它只会换来 SDO 中止，所以整段跳过 —— 这一类
+       设备的生效 PDO 由 1C12/1C13 自己决定，下面那两步就够了。 */
+    if (pdo_set->assignment_style == EMASTER_PDO_ASSIGNMENT_MODULE_SLOT)
     {
-        return assignment_failed(reader, result, UINT16_C(0xF030),
-                                 pdo_set->module_slot);
+        uint32_t module_ident = pdo_set->module_ident;
+        uint32_t observed_module_ident;
+        if (!emaster_soem_write_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
+                                    module_ident) ||
+            !emaster_soem_read_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
+                                   &observed_module_ident) ||
+            observed_module_ident != module_ident)
+        {
+            return assignment_failed(reader, result, UINT16_C(0xF030),
+                                     pdo_set->module_slot);
+        }
     }
     if (!assignment_matches(reader, UINT16_C(0x1C12), pdo_set->rx_mappings,
                             pdo_set->rx_mapping_count, &rx_matches, result) ||

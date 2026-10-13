@@ -1,84 +1,147 @@
-/* 配置读取器冒烟测试：从扁平文件读若干键，打印出来并核对。 */
+/*
+ * 扁平文件读取器冒烟测试：读自己写的那份扁平文件，核对键名查找、类型转换、
+ * 缺失语义和注释/空行处理。
+ *
+ * 为什么样本自己写：交付的仓库里不含任何设备配置，读器的输入由客户跑
+ * gen/emaster_config.py 现生成。所以这里不问"某个型号的某个键是多少"，
+ * 只问读器对**任意**一份扁平文件的行为 —— 那也是它在现场唯一需要成立的东西。
+ */
 #include "emaster/config/config_reader.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
+
+/* 样本自己带行尾空白、注释行与空行：现场生成的文件里它们都出现过。 */
+static const char *FIXTURE =
+    "# 注释行不算记录\n"
+    "\n"
+    "alpha\tone\n"
+    "alpha.empty\t\n"
+    "beta\t42\n"
+    "gamma\t-7\n"
+    "delta.flag\ttrue\n"
+    "epsilon\t4294967295\n";
+
+static int write_fixture(const char *path)
+{
+    FILE *handle = fopen(path, "wb");
+    if (handle == NULL)
+    {
+        return 0;
+    }
+    fputs(FIXTURE, handle);
+    return fclose(handle) == 0;
+}
 
 static void expect_str(const emaster_config_reader_t *r, const char *key, const char *want)
 {
     const char *got = NULL;
     if (!emaster_config_reader_string(r, key, &got))
     {
-        printf("缺失  %-44s 期望 %s\n", key, want);
+        printf("缺失  %-24s 期望 %s\n", key, want);
         failures += 1;
         return;
     }
     if (strcmp(got, want) != 0)
     {
-        printf("不同  %-44s 得到 %s 期望 %s\n", key, got, want);
+        printf("不同  %-24s 得到 %s 期望 %s\n", key, got, want);
         failures += 1;
         return;
     }
-    printf("一致  %-44s %s\n", key, got);
+    printf("一致  %-24s %s\n", key, got);
 }
 
-static void expect_u32(const emaster_config_reader_t *r, const char *key, uint32_t want)
+static void expect_u32(const emaster_config_reader_t *r, const char *key, unsigned want)
 {
     uint32_t got = 0U;
     if (!emaster_config_reader_u32(r, key, &got) || got != want)
     {
-        printf("不同  %-44s 得到 %u 期望 %u\n", key, got, want);
+        printf("不同  %-24s 得到 %u 期望 %u\n", key, (unsigned)got, want);
         failures += 1;
         return;
     }
-    printf("一致  %-44s %u\n", key, got);
+    printf("一致  %-24s %u\n", key, (unsigned)got);
+}
+
+static void expect_absent_string(const emaster_config_reader_t *r, const char *key)
+{
+    const char *got = NULL;
+    if (emaster_config_reader_string(r, key, &got))
+    {
+        printf("不同  %-24s 不该存在却有值 %s\n", key, got);
+        failures += 1;
+        return;
+    }
+    printf("一致  %-24s 正确报告缺失\n", key);
 }
 
 int main(int argc, char **argv)
 {
     emaster_config_reader_t reader;
+    char path[512];
 
-    if (argc != 2)
+    if (argc == 2)
     {
-        fprintf(stderr, "用法: %s <扁平配置文件>\n", argv[0]);
+        (void)snprintf(path, sizeof(path), "%s", argv[1]);
+    }
+    else if (argc == 1)
+    {
+        const char *tmpdir = getenv("TMPDIR");
+        (void)snprintf(path, sizeof(path), "%s/emaster-config-reader-smoke.flat",
+                       tmpdir != NULL ? tmpdir : ".");
+    }
+    else
+    {
+        fprintf(stderr, "用法: %s [扁平文件路径]\n", argv[0]);
         return 2;
     }
-    if (!emaster_config_reader_open(&reader, argv[1]))
+
+    if (!write_fixture(path))
     {
-        fprintf(stderr, "打不开 %s\n", argv[1]);
+        fprintf(stderr, "写不出样本 %s\n", path);
+        return 2;
+    }
+    if (!emaster_config_reader_open(&reader, path))
+    {
+        fprintf(stderr, "打不开 %s\n", path);
         return 2;
     }
     printf("读入 %zu 条记录，%zu 字节\n\n", reader.line_count, reader.size);
 
-    expect_str(&reader, "profile_id", "cyberbeast.isvd90rc-300b-100-70.rev1");
-    expect_str(&reader, "identity.vendor_id", "0x000C0B00");
-    expect_str(&reader, "model", "ISVD90RC-300B-100-70");
-    expect_u32(&reader, "pdo_sets.count", 4U);
-    expect_str(&reader, "pdo_sets.0.id", "dynamic_csp_csv_cst");
-    expect_str(&reader, "pdo_sets.1.mode_initialization.index", "0x6060");
-    expect_u32(&reader, "pdo_sets.1.mode_initialization.value", 10U);
-    expect_str(&reader, "pdo_sets.2.rx.mappings.0.entries.1.name", "target_position");
-    expect_u32(&reader, "pdo_sets.2.rx.mappings.0.entries.1.bits", 32U);
-    expect_u32(&reader, "slow_telemetry.count", 12U);
-    expect_str(&reader, "slow_telemetry.11.name", "max_motor_speed");
+    expect_str(&reader, "alpha", "one");
+    expect_u32(&reader, "beta", 42U);
+    expect_u32(&reader, "epsilon", 4294967295U);
 
-    /* 不存在的键必须报缺失，而不是给个默认值。 */
+    /* 有符号：i32 读负数，u32 读同一个键必须拿不到正确的数。 */
     {
-        const char *missing = NULL;
-        if (emaster_config_reader_string(&reader, "no.such.key", &missing))
+        int32_t signed_value = 0;
+        if (!emaster_config_reader_i32(&reader, "gamma", &signed_value) || signed_value != -7)
         {
-            printf("不同  %-44s 不该存在却有值\n", "no.such.key");
+            printf("不同  %-24s 得到 %d 期望 -7\n", "gamma", (int)signed_value);
             failures += 1;
         }
         else
         {
-            printf("一致  %-44s 正确报告缺失\n", "no.such.key");
+            printf("一致  %-24s %d\n", "gamma", (int)signed_value);
         }
     }
 
+    /*
+     * 空值读出来就是空字符串，读取照样成功。读器不做"空即缺失"的推断 ——
+     * 那层判断在生成器里（字段非空由校验器管）。这里钉住的是读器的边界：
+     * 只有**真正没有这一行**才算缺失。
+     */
+    expect_str(&reader, "alpha.empty", "");
+
+    /* 不存在的键必须报缺失，而不是给个默认值。 */
+    expect_absent_string(&reader, "no.such.key");
+    expect_absent_string(&reader, "alpha.one");
+
     emaster_config_reader_close(&reader);
+    (void)remove(path);
     printf("\n失败 %d 项\n", failures);
     return failures == 0 ? 0 : 1;
 }

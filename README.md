@@ -374,8 +374,8 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVER_VERBOSE=1 EMASTER_O
 ```
 
 - **这些是 OP（CSP）运行期间的 SDO 读数**，不是停机快照
-- 清单在设备配置的 `slow_telemetry`（`config/devices/cyberbeast_isvd90rc_300b_100_70.json`），
-  共 12 项：`0x6078` 电流、`0x603F` 故障码、`0x6079` 母线电压、`0x200B:01` MOSFET 温度、
+- 清单在设备档的 `slow_telemetry` 里（上面这份是台架那台，共 12 项）：
+  `0x6078` 电流、`0x603F` 故障码、`0x6079` 母线电压、`0x200B:01` MOSFET 温度、
   `0x200B:02` 电机温度、`0x200B:08` 实际转速、`0x200B:09` 转速指令、扩展伺服故障码、读回目标、
   最大力矩、最大转速等
 - 加了这个开关还会打出每条读数的对象地址与 wkc，用来确认"到底读到没有"
@@ -446,7 +446,7 @@ sudo env DEPLOYMENT=<freerun-deployment-id> DURATION=40 TRAVERSE=5 DEGREES=30 \
   RATE=100 ONLY_AXIS=0 OBSERVATION=1 TAG=fr30 bash scripts/bench_reciprocate_30deg.sh
 ```
 
-运行方案位于 `config/operation_profiles/cyberbeast_freerun_csp_1ms.json`：`strategy: "sm"`、`assign_activate: 0x00000000`、`sm2/sm3_sync_type: 0x0000`。选择引用该方案且与实际拓扑匹配的部署。它可用于同步策略对照；相同现象在两种策略下出现，只说明该现象不专属于 DC 路径，不能排除两种策略共有的配置、数据或驱动器问题。
+不用 DC 的运行方案这样写：`sync.strategy: "sm"`、`sync.assign_activate: "0x00000000"`、`sync.sm2_sync_type` 与 `sync.sm3_sync_type` 都写 `"0x0000"`（DC 那份的对应值是 `"0x00000300"` 与 `"0x0002"`/`"0x0022"`）。选引用该方案且与实际拓扑匹配的部署。它可用于同步策略对照；相同现象在两种策略下出现，只说明该现象不专属于 DC 路径，不能排除两种策略共有的配置、数据或驱动器问题。
 
 ### 11.6 "轴不动"的检查项与证据边界
 
@@ -573,7 +573,7 @@ CSP 的最小产品入口必须把**位置目标输入**和**周期 PDO 发送**
 3. **AL 在 INIT 时读不到 `0x6041`**（邮箱关闭），这时只能说"读不到"
 4. **`0x0134` 只在 `0x0130` 的 bit4（Error Indicator）置起时才有意义**；没有 error 位时读它等于没读。SOEM 只在看到 error 位时才去读，这是照规范做
 
-**对象编号的权威链**：CiA 402（IEC 61800-7-201）规定编号 → 厂商在 ESI/EDS 里声明（`docs/lz-joint/ds402.eds`、`ECAT_CIA402.xml`）→ 本项目在 `config/devices/` 的 PDO 映射表里引用 → 主站按表建过程映像。
+**对象编号的权威链**：CiA 402（IEC 61800-7-201）规定编号 → 厂商在 ESI/EDS 里声明（客户放在 `esi/` 下）→ 本项目在设备档的 PDO 映射表里引用 → 主站按表建过程映像。
 
 `src/cia402/controller.c` 按标准状态掩码解码状态字；设备配置另提供停用确认掩码。标准状态名不能代替厂商扩展位定义，`Voltage enabled` 等状态位也不等于独立的电气断能测量。
 
@@ -620,17 +620,40 @@ CSP 的最小产品入口必须把**位置目标输入**和**周期 PDO 发送**
 
 ## 20 配置体系
 
-**配置分类**，全部在 `config/` 下（文件数量以工作副本为准）：
+**交付时 `esi/` 与 `config/` 下的六族都是空的。** 仓库里只有代码，不含任何电机的配置。
+客户带着自己那台电机的 ESI 从零生成，全程不需要重编主站 —— 生成的 C 与配置内容无关
+（每族的条目数在运行期从扁平文件读），换配置只是重新生成扁平文件再重启。
 
-| 目录 | 份数 | 内容 |
-| --- | ---: | --- |
-| `deployments/` | 18 | 部署：轴数、引用哪套拓扑／设备／运行方案／运动方案、报告路径、容错策略 |
-| `topologies/` | 13 | 拓扑：环上有哪些从站、顺序、每台的身份期望与位置 |
-| `devices/` | 1 | 设备：身份、PDO 映射、`slow_telemetry` 清单、状态字掩码 |
-| `operation_profiles/` | 6 | 运行方案：周期、DC 策略（`dc`/`sm`）、SM2/SM3 同步类型、相位与偏移 |
-| `motion_profiles/` | 19 | 运动方案：单步上限、跟随误差限幅、轨迹 |
-| `error_recovery_policies/` | 3 | 容错阈值 |
-| `messages/zh_CN.json` | 1 | 中文文案 |
+| 目录 | 谁写 | 内容 |
+| --- | --- | --- |
+| `esi/<你的型号>/` | 你放进去 | 厂商的 ESI/EDS 原文件，设备档的权威来源 |
+| `device_policies/` | `add-device` 出草稿，人改 | 人写的那一半：停机掩码、PDO 组选择、支持的模式集合 |
+| `devices/` | `add-device` 合成 | 设备档：身份、PDO 映射、`slow_telemetry` 清单、状态字掩码 |
+| `topologies/` | `init-site` | 拓扑：环上有哪些从站、顺序、每台的身份期望与位置 |
+| `operation_profiles/` | `init-site` | 运行方案：周期、DC 策略（`dc`/`sm`）、SM2/SM3 同步类型、相位与偏移 |
+| `motion_profiles/` | 你写 | 运动方案：单步上限、跟随误差限幅、轨迹、每轴的换算 |
+| `deployments/` | `init-site` | 部署：主机名、网口、轴数、引用哪套拓扑／运行方案／运动方案、报告路径 |
+| `error_recovery_policies/` | 随产品交付 | 容错阈值（`default` / `strict` / `tolerant`，与电机无关） |
+| `messages/zh_CN.json` | 随产品交付 | 中文文案 |
+
+**换一款电机要动的只有前七行**，且是跑命令不是改代码：
+
+```bash
+cp <厂商给的>/*.xml esi/<你的型号>/           # 1. 放进 ESI
+python gen/emaster_config.py add-device esi/<你的型号>/*.xml   # 2. 出设备档草稿
+$EDITOR config/device_policies/<生成的>.json  # 3. 人补推不出来的那几个字段
+python gen/emaster_config.py init-site --device <设备档 ID> --interface <网口>   # 4. 出拓扑与部署
+$EDITOR config/motion_profiles/<你的>.json    # 5. 写每轴换算与限幅
+python gen/emaster_config.py build            # 6. 生成 config-runtime/*.flat
+apps/master --config-dir config-runtime       # 7. 起主站（二进制不用重编）
+```
+
+每一步推不出来的字段与它的后果见 `gen/device/README.md`。
+
+第 4 步只在设备档声明了 DC 时才生成运行方案，而且 `assign_activate` 取自 ESI（不猜）。
+ESI 里没有 `<Dc><OpMode>` 那一段就是"厂商没声明 DC" —— 此时 `init-site` 拒绝生成并说明
+两条路：补 ESI，或者照实测手写一份 SM 方案。编一个同步参数填上，会安静地把从站的同步
+生成配成另一套，主机这边只看到 DC 对不上。
 
 轴数来自部署、硬件换算会读回、恢复阈值来自策略；`apps/master/main.c` 同时包含 200 ms 默认超时、2°缺省限值和无运动配置时 6400 counts 兜底。外部保护限值取第一轴的预期换算后统一用于全轴，详见 §28。
 
@@ -813,26 +836,33 @@ freerun 运行方案选择 `strategy:"sm"`，不配置 DC/Sync0，相应 DC 推�
   src/              实现，按功能分模块（bus/ 下再分 soem/session/observe/io/internal）
   include/emaster/  公共头，与 src/<模块> 一一对应
   apps/             可执行程序（主站、指纹、扫描、诊断、客户端…）
-  config/           配置输入：人改的 JSON，9 个族
   config-runtime/   配置的运行时形态：构建期由 gen/ 生成，主站启动时读它
 
-构建期与工具
-  gen/              生成器与校验器（CMake 与 CI 调用，人不会去敲）
-  tools/            Python 工具：客户端、控制台、GUI、观测、桥
+配置（三层：设备描述 → 出厂设计 → 现场）
+  esi/              设备描述：**出厂是空的**，放入你自己那台电机的 ESI/EDS
+  config/           配置源：devices/ device_policies/ topologies/ motion_profiles/
+                    operation_profiles/ deployments/（前五个由 gen/emaster_config.py 从
+                    ESI 生成，出厂为空）＋ error_recovery_policies/ messages/（随产品交付）
+                    这里不随产品交付任何电机的配置 —— 客户带自己的 ESI 从零生成
+
+构建期
+  gen/              生成器与校验器（CMake 与 CI 调用）
+  gen/device/       设备上手工具（人跑：从 ESI 生成设备档，换电机时用）
+  cmake/  CMakeLists.txt  CMakePresets.json
+
+运行期工具
+  tools/            Python 工具：客户端、控制台、GUI、观测、跨机桥
+
+开发与验证（不随产品交付）
   scripts/          shell 台架脚本
   analysis/         读报告
   checks/           验证项目性质（CI 用）
-  cmake/  CMakeLists.txt  CMakePresets.json
-
-验证
   tests/            离线单元测试（CTest）
-
-记录与资料
-  evidence/         入库证据（脚本收进来的 evidence_*.txt）与 fingerprints/ 装置指纹
+  evidence/         入库证据（evidence_*.txt）与 fingerprints/ 装置指纹
   runtime/          运行期落点：报告按 run_report_path 落这里，不入库
-  docs/             厂商资料 lz-joint/、测试文档 test-plan.md、归档与 time-and-space.txt
 
-产物
+资料与产物
+  docs/             项目文档：test-plan.md、time-and-space.txt、archive/
   build/            构建产物（CMake）
 ```
 

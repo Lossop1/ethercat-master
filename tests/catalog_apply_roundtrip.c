@@ -28,6 +28,19 @@ int main(int argc, char **argv)
         emaster_config_reader_close(&reader);
         return 1;
     }
+    /* 装进来的条数必须等于文件声明的条数：少了就是装载中途半途而废，
+       而它不会自己报错 —— 上层只会看到"少了几台设备"。 */
+    {
+        size_t declared = 0U;
+        if (!emaster_config_reader_size(&reader, "profile.count", &declared) ||
+            declared != emaster_slave_profile_count())
+        {
+            fprintf(stderr, "profile.count 声明 %zu，装载了 %zu\n",
+                    declared, emaster_slave_profile_count());
+            emaster_config_reader_close(&reader);
+            return 1;
+        }
+    }
 
     printf("profile.count\t%zu\n", emaster_slave_profile_count());
     for (pi = 0U; pi < emaster_slave_profile_count(); ++pi)
@@ -54,6 +67,9 @@ int main(int argc, char **argv)
             printf("profile.%zu.pdo_sets.%zu.pdo_set_id\t%s\n", pi, si, s->pdo_set_id);
             printf("profile.%zu.pdo_sets.%zu.module_ident\t0x%08X\n", pi, si, s->module_ident);
             printf("profile.%zu.pdo_sets.%zu.module_slot\t%u\n", pi, si, (unsigned)s->module_slot);
+            printf("profile.%zu.pdo_sets.%zu.assignment_style\t%s\n", pi, si,
+                   s->assignment_style == EMASTER_PDO_ASSIGNMENT_DIRECT ? "direct_1c12"
+                                                                        : "module_slot");
             printf("profile.%zu.pdo_sets.%zu.mode_init_value\t%d\n", pi, si, (int)s->mode_init_value);
             printf("profile.%zu.pdo_sets.%zu.rx_pdo_bytes\t%u\n", pi, si, (unsigned)s->rx_pdo_bytes);
             printf("profile.%zu.pdo_sets.%zu.tx_pdo_bytes\t%u\n", pi, si, (unsigned)s->tx_pdo_bytes);

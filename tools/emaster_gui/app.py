@@ -18,7 +18,7 @@
 写的报告 JSON 里。本轮不做实时通路，界面上留位、如实显示为未知，而不是画一条假的。
 
 用法：
-    python -m emaster_gui --deployment orangepi-bench-quint-30deg
+    python -m emaster_gui --deployment <你的部署ID>
     python -m emaster_gui --tcp 192.168.124.81:5001
     QT_QPA_PLATFORM=offscreen python -m emaster_gui --obs-endpoint tcp:127.0.0.1:5002 \
         --selftest 20

@@ -15,6 +15,9 @@
 两个输入
     --facts   由 gen/device/derive_device_facts.py 从 ESI 产出
     --policy  人写的策略档
+
+事实与策略的边界：facts 说什么硬件就是什么，policy 只做选择。
+所以两者撞车时以 facts 为准，并报错要求人去改策略 —— 见 _supported_modes。
 """
 
 from __future__ import annotations
@@ -34,24 +37,51 @@ MODE_TRANSITION = "safeop_to_op"
 PROTOCOL_PROFILE = "CiA 402"
 PROTOCOL_MAILBOX = "CoE"
 
+# 生效 PDO 怎么选：模块化设备先写 0xF030 选模块，非模块化设备直接写 1C12/1C13。
+# 缺省取模块化 —— 既有设备档都是这类，不写这个键时行为逐字节不变。
+ASSIGNMENT_STYLE_MODULE_SLOT = "module_slot"
 
-def build(facts: dict[str, Any], policy: dict[str, Any], esi_path: str) -> dict[str, Any]:
-    by_ident = {pdo["module_ident"]: pdo for pdo in facts["pdo_sets"]}
+
+def _pdo_sets(
+    facts: dict[str, Any], policy: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """按策略挑出要写进设备档的 PDO 方案，硬件部分一律取自 facts。"""
+    by_ident = {
+        pdo["module_ident"]: pdo
+        for pdo in facts["pdo_sets"]
+        if pdo["assignment_style"] == "module_slot"
+    }
+    direct = [pdo for pdo in facts["pdo_sets"] if pdo["assignment_style"] == "direct_1c12"]
 
     pdo_sets: list[dict[str, Any]] = []
     for entry in policy["pdo_sets"]:
-        ident = entry["module_ident"]
-        if ident not in by_ident:
-            raise SystemExit(
-                f"策略引用了 ESI 里没有的 PDO 模块：{ident}"
-                f"（ESI 里有：{', '.join(sorted(by_ident))}）"
-            )
-        hardware = by_ident[ident]
+        if entry.get("assignment_style", ASSIGNMENT_STYLE_MODULE_SLOT) == "direct_1c12":
+            # 非模块化设备只有出厂那一套映射，策略没有可挑的余地，
+            # 所以这里不写 module_ident / module_slot —— 它们对这类设备没有含义。
+            if len(direct) != 1:
+                raise SystemExit(
+                    f"策略按直连方式引用 PDO，ESI 却给出 {len(direct)} 套设备级映射；应为 1 套"
+                )
+            hardware = direct[0]
+            ident = None
+            module_slot = 0
+        else:
+            ident = entry["module_ident"]
+            if ident not in by_ident:
+                raise SystemExit(
+                    f"策略引用了 ESI 里没有的 PDO 模块：{ident}"
+                    f"（ESI 里有：{', '.join(sorted(by_ident))}）"
+                )
+            hardware = by_ident[ident]
+            module_slot = entry["module_slot"]
         pdo_sets.append(
             {
                 "id": entry["id"],
+                "assignment_style": entry.get(
+                    "assignment_style", ASSIGNMENT_STYLE_MODULE_SLOT
+                ),
                 "module_ident": ident,
-                "module_slot": entry["module_slot"],
+                "module_slot": module_slot,
                 "mode_initialization": {
                     "transition": MODE_TRANSITION,
                     "index": MODE_OBJECT_INDEX,
@@ -62,8 +92,32 @@ def build(facts: dict[str, Any], policy: dict[str, Any], esi_path: str) -> dict[
                 "tx": hardware["tx"],
             }
         )
+    return pdo_sets
 
-    return {
+
+def _supported_modes(facts: dict[str, Any], policy: dict[str, Any]) -> dict[str, int]:
+    """模式能力由人声明，但 ESI 声明了模块类型时以 ESI 为准，两者必须一致。
+
+    ESI 的模块类型是"这台设备支持哪些模式"的直接证据；人写的那份是转述。
+    转述和证据对不上就是有一方错了，不能挑一个信。
+    非模块化 ESI 不写模块类型，观察不到 —— 这时只有人写的那份，是已知的唯一来源。
+    """
+    if "supported_modes" not in policy:
+        raise SystemExit("策略档缺 supported_modes：模式能力推不出来，必须由人声明")
+    declared = {str(key): int(value) for key, value in policy["supported_modes"].items()}
+    observed = facts["protocol"]["supported_modes"]
+    if observed and observed != declared:
+        raise SystemExit(
+            f"策略声明支持的模式 {declared} 与 ESI 模块类型给出的 {observed} 不一致"
+        )
+    return declared
+
+
+def build(facts: dict[str, Any], policy: dict[str, Any], esi_path: str) -> dict[str, Any]:
+    pdo_sets = _pdo_sets(facts, policy)
+    supported_modes = _supported_modes(facts, policy)
+
+    merged: dict[str, Any] = {
         "schema_version": policy.get("schema_version", 1) + 1,
         "profile_id": policy["profile_id"],
         "model": facts["model"],
@@ -74,16 +128,22 @@ def build(facts: dict[str, Any], policy: dict[str, Any], esi_path: str) -> dict[
             "supports_pdo_assignment": facts["protocol"]["supports_pdo_assignment"],
             "supports_pdo_configuration": facts["protocol"]["supports_pdo_configuration"],
             "supports_distributed_clocks": facts["protocol"]["supports_distributed_clocks"],
+            "assign_activate_by_strategy": facts["protocol"]["assign_activate_by_strategy"],
             "safe_stop_status_mask": policy["safe_stop_status_mask"],
             "safe_stop_status_value": policy["safe_stop_status_value"],
-            "supported_modes": facts["protocol"]["supported_modes"],
+            "supported_modes": supported_modes,
         },
         "reference_pdo_set_id": policy["reference_pdo_set_id"],
         "pdo_sets": pdo_sets,
-        "conversion": policy["conversion"],
-        "slow_telemetry": policy["slow_telemetry"],
-        "source": {"esi": esi_path},
     }
+    # 这两项只在策略给了内容时才写进去。缺省在这里的含义是"厂商资料没给"，
+    # 是句实话；编一个默认值填上就成了假的设备事实。
+    if policy.get("conversion"):
+        merged["conversion"] = policy["conversion"]
+    if policy.get("slow_telemetry"):
+        merged["slow_telemetry"] = policy["slow_telemetry"]
+    merged["source"] = {"esi": esi_path}
+    return merged
 
 
 def main() -> int:

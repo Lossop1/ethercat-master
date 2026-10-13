@@ -34,7 +34,9 @@ import socket
 import sys
 import time
 
-DEPLOY = os.environ.get("DEPLOY", "orangepi-bench-quint-30deg")
+DEPLOY = os.environ.get("DEPLOY", "")
+if not DEPLOY:
+    raise SystemExit("必须给 DEPLOY=<你的部署ID>：ID 由现场 init-site 生成，仓库里没有默认值")
 # 台架脚本给的是绝对路径，这里跟着它的规矩走
 SOCK = f"/tmp/emaster-{DEPLOY}.sock"
 OBS_SOCK = f"/tmp/emaster-{DEPLOY}-obs.sock"

@@ -290,7 +290,7 @@ class ObservationClient:
 def _main():
     """不经过界面地走一遍观测通道，用来单独验证桥/套接字通不通。
 
-    python3 tools/emaster_client.py --deployment orangepi-bench-quint-30deg
+    python3 tools/emaster_client.py --deployment <你的部署ID>
     python3 tools/emaster_client.py --tcp 192.168.124.81:5001
     """
     ap = argparse.ArgumentParser(description="观测通道自查（INFO / HEAD / 一个窗口）")

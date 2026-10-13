@@ -77,7 +77,11 @@
 set -u
 
 REPO=${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
-DEPLOY=${DEPLOY:-orangepi-bench-quint-30deg}
+DEPLOY=${DEPLOY:-}
+if [ -z "$DEPLOY" ]; then
+  echo "必须显式给 DEPLOY=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 BUILD=${BUILD:-$REPO/build/linux-debug}
 MASTER_BIN=${MASTER_BIN:-$BUILD/apps/master/emaster-master}
 DUR=${DUR:-60}                 # 每个 GUI 臂跑多久

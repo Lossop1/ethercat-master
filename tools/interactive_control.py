@@ -3,7 +3,7 @@
 EtherCAT 主站交互式位置控制工具
 
 用法：
-    python3 interactive_control.py [socket_path]
+    python3 interactive_control.py <socket_path>
 
 设计要点（都是踩过的坑）：
 
@@ -21,7 +21,8 @@ EtherCAT 主站交互式位置控制工具
 3. max_step 从 topology 响应读取（主站新增字段），不硬编码——换部署时
    限幅值会变。
 
-默认 socket 路径：/tmp/emaster-orangepi-bench-dual.sock
+socket 路径必须显式给：它由现场部署 ID 决定（/tmp/emaster-<你的部署ID>.sock），
+仓库里没有默认值。
 """
 
 import math
@@ -487,8 +488,11 @@ def interactive_shell(client):
 
 
 def main():
-    sock_path = (sys.argv[1] if len(sys.argv) > 1
-                 else "/tmp/emaster-orangepi-bench-dual.sock")
+    if len(sys.argv) < 2:
+        print("必须给 socket 路径：/tmp/emaster-<你的部署ID>.sock；"
+              "部署 ID 由现场 init-site 生成，仓库里没有默认值", file=sys.stderr)
+        return 2
+    sock_path = sys.argv[1]
 
     print("EtherCAT 主站交互式位置控制工具")
     print("=" * 80)

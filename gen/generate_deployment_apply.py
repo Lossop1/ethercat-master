@@ -10,6 +10,8 @@
 指针数组
     operation_profiles 是 const T *const *（指针本身也 const），运行期无法逐项赋值，
     所以声明成"指针可变、指向内容只读"，赋值处显式转型。
+    每一行按该部署自己声明了几个运行方案 calloc，不预留"最长那个部署"的宽度 ——
+    宽度取自配置内容的话，客户加一个运行方案更多的部署就得重编译，而客户不该重编译。
 """
 
 from __future__ import annotations
@@ -103,6 +105,7 @@ def render(deployments: list[dict[str, Any]]) -> str:
         "#include <stddef.h>",
         "#include <stdint.h>",
         "#include <stdio.h>",
+        "#include <stdlib.h>",
         "#include <string.h>",
         "",
         f"#define EMASTER_DEPLOYMENT_CAPACITY {DEPLOYMENT_CAPACITY}U",
@@ -188,9 +191,11 @@ def render(deployments: list[dict[str, Any]]) -> str:
         "    return NULL;",
         "}",
         "",
-        "/* 运行方案指针数组按容量预留：指针本身要到加载时才知道指哪。 */",
-        f"static const emaster_operation_profile_t *operation_pointers[{DEPLOYMENT_CAPACITY}U]"
-        f"[{max((len(d['operation_profile_ids']) for d in deployments), default=1)}U];",
+        "/*",
+        " * 每个部署一行指向运行方案的指针，行本身在加载时按该部署声明的条数 calloc。",
+        " * 生命周期绑进程，与读取器同寿，不释放 —— 设备目录族也是这个做法。",
+        " */",
+        f"static const emaster_operation_profile_t **operation_pointers[{DEPLOYMENT_CAPACITY}U];",
         "",
         "static bool load_deployment(const emaster_config_reader_t *reader, size_t ordinal,",
         "                            emaster_deployment_config_t *out)",
@@ -316,10 +321,19 @@ def render(deployments: list[dict[str, Any]]) -> str:
         "    {",
         "        return false;",
         "    }",
-        f"    if (count > {max((len(d['operation_profile_ids']) for d in deployments), default=0)}U)",
+        "    if (count > 0U)",
         "    {",
-        "        emaster_config_reader_note_failure(\"条目数超过编译期容量\");",
-        "        return false;",
+        "        operation_pointers[ordinal] = (const emaster_operation_profile_t **)calloc(",
+        "            count, sizeof(*operation_pointers[ordinal]));",
+        "        if (operation_pointers[ordinal] == NULL)",
+        "        {",
+        "            emaster_config_reader_note_failure(\"运行方案指针数组分配失败\");",
+        "            return false;",
+        "        }",
+        "    }",
+        "    else",
+        "    {",
+        "        operation_pointers[ordinal] = NULL;",
         "    }",
         "    for (index = 0U; index < count; ++index)",
         "    {",
@@ -459,8 +473,8 @@ def main() -> int:
     parser.add_argument("--topologies", type=Path, required=True)
     parser.add_argument("--operations", type=Path, required=True)
     parser.add_argument("--motions", type=Path, required=True)
-    parser.add_argument("--c-output", type=Path, required=True)
-    parser.add_argument("--h-output", type=Path, required=True)
+    parser.add_argument("--c-output", type=Path, help="省略时只产出扁平文件")
+    parser.add_argument("--h-output", type=Path)
     parser.add_argument("--flat-output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -471,14 +485,16 @@ def main() -> int:
     operations = operation_values(load(args.operations))
     motions = motion_values(load(args.motions))
     deployments = deployment_values(load(args.deployments), topologies, operations, motions)
-    head = "/* 由 gen/generate_deployment_apply.py 生成，不要手改。 */\n"
-    args.c_output.write_text(render(deployments), encoding="utf-8", newline="\n")
-    args.h_output.write_text(render_header(), encoding="utf-8", newline="\n")
+    for path, text in (
+        (args.c_output, render(deployments)),
+        (args.h_output, render_header()),
+    ):
+        if path is not None:
+            path.write_text(text, encoding="utf-8", newline="\n")
+            print(f"已写出 {path}")
     rows = deployment_rows(deployments)
     args.flat_output.write_text("".join(f"{k}\t{v}\n" for k, v in rows), encoding="utf-8", newline="\n")
     print(f"部署 {len(deployments)} 份，扁平记录 {len(rows)} 条")
-    print(f"已写出 {args.c_output}")
-    print(f"已写出 {args.h_output}")
     print(f"已写出 {args.flat_output}")
     return 0
 

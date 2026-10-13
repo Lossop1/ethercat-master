@@ -25,6 +25,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from generate_slave_catalog import (  # noqa: E402
+    ASSIGNMENT_STYLE_VALUES,
     TELEMETRY_SEMANTIC_VALUES,
     TELEMETRY_TYPE_VALUES,
     profile_values,
@@ -61,6 +62,7 @@ def catalog_rows(values: list[dict[str, Any]]) -> list[tuple[str, str]]:
                 (f"{pbase}.pdo_set_id", pdo["id"]),
                 (f"{pbase}.module_ident", f"0x{pdo['module_ident']:08X}"),
                 (f"{pbase}.module_slot", str(pdo["module_slot"])),
+                (f"{pbase}.assignment_style", pdo["assignment_style"]),
                 (f"{pbase}.mode_init_value", str(pdo["mode_init_value"])),
             ]
             for direction in ("rx", "tx"):
@@ -192,6 +194,10 @@ def render(values: list[dict[str, Any]]) -> str:
     L += enum_resolver("resolve_telemetry_type", "emaster_telemetry_type_t", TELEMETRY_TYPE_VALUES)
     L += [""]
     L += enum_resolver("resolve_telemetry_semantic", "emaster_telemetry_semantic_t", TELEMETRY_SEMANTIC_VALUES)
+    L += [""]
+    L += enum_resolver(
+        "resolve_assignment_style", "emaster_pdo_assignment_style_t", ASSIGNMENT_STYLE_VALUES
+    )
     L += [
         "",
         "/* 读一个方向。base 就是映射数组本身的键：profile.0.pdo_sets.1.rx_mappings",
@@ -424,6 +430,9 @@ def render(values: list[dict[str, Any]]) -> str:
         "        if (number > UINT8_MAX) { emaster_config_reader_note_failure(\"超出 uint8 范围\"); return false; }",
         "        set->module_slot = (uint8_t)number;",
         "        memcpy(leaf, key, sizeof(leaf));",
+        '        if (!key_push(leaf, sizeof(leaf), "assignment_style") ||',
+        "            !resolve_assignment_style(reader, leaf, &set->assignment_style)) { return false; }",
+        "        memcpy(leaf, key, sizeof(leaf));",
         '        if (!key_push(leaf, sizeof(leaf), "mode_init_value") ||',
         "            !emaster_config_reader_i32(reader, leaf, &signed_number)) { return false; }",
         "        set->mode_init_value = (int8_t)signed_number;",
@@ -570,21 +579,21 @@ def render_header() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="设备目录 -> 填充代码 + 扁平文件")
     parser.add_argument("--devices", type=Path, required=True)
-    parser.add_argument("--c-output", type=Path, required=True)
-    parser.add_argument("--h-output", type=Path, required=True)
+    parser.add_argument("--c-output", type=Path, help="省略时只产出扁平文件")
+    parser.add_argument("--h-output", type=Path)
     parser.add_argument("--flat-output", type=Path, required=True)
     args = parser.parse_args()
 
     documents = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(args.devices.glob("*.json"))]
     values = [profile_values(document) for document in documents]
     # 一律 LF：两个产物都是给 Linux 上的 C 程序读的。
-    args.c_output.write_text(render(values), encoding="utf-8", newline="\n")
+    for path, text in ((args.c_output, render(values)), (args.h_output, render_header())):
+        if path is not None:
+            path.write_text(text, encoding="utf-8", newline="\n")
+            print(f"已写出 {path}")
     rows = catalog_rows(values)
     args.flat_output.write_text("".join(f"{k}\t{v}\n" for k, v in rows), encoding="utf-8", newline="\n")
     print(f"设备 {len(values)} 份，扁平记录 {len(rows)} 条")
-    args.h_output.write_text(render_header(), encoding="utf-8", newline="\n")
-    print(f"已写出 {args.c_output}")
-    print(f"已写出 {args.h_output}")
     print(f"已写出 {args.flat_output}")
     return 0
 

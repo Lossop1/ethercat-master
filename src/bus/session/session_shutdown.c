@@ -1045,24 +1045,18 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
                 ++still_enabled;
             }
         }
-        /*
-         * 把核对结果说出来。这是"说关"与"真的关"之间那一步：只看写调用的返回值不够，
-         * 写成功而驱动器没照做才是真正要抓的形状；读不回来也要算未证实，不能当通过。
-         */
+        /* 记录 0x6041 读数；bit2 不当失能判据。 */
         session->report->shutdown_disable_attempted_count = disable_attempted;
         session->report->shutdown_disable_verified_count =
             session->plan->axis_count - still_enabled - disable_unreadable;
         session->report->shutdown_still_enabled_count = still_enabled;
         session->report->shutdown_enable_unverified_count = disable_unreadable;
-        if (still_enabled > 0U || disable_unreadable > 0U) {
-            printf("[SHUTDOWN] ！失能未全部证实：仍使能=%zu 台，读不回=%zu 台"
-                   "（共 %zu 台，写入尝试 %zu 台）\n",
-                   still_enabled, disable_unreadable, session->plan->axis_count,
-                   disable_attempted);
-        } else {
-            printf("[SHUTDOWN] 失能已逐台证实：%zu/%zu 台 0x6041 的 bit2=0\n",
-                   session->plan->axis_count, session->plan->axis_count);
-        }
+        printf("[SHUTDOWN]%s 失能核对 0x6041：bit2=0 %zu 台 / bit2=1 %zu 台 / 读不回 %zu 台，"
+               "写入尝试 %zu 台（共 %zu 台）\n",
+               (still_enabled > 0U || disable_unreadable > 0U) ? " ！" : "",
+               session->report->shutdown_disable_verified_count, still_enabled, disable_unreadable,
+               disable_attempted, session->plan->axis_count);
+        printf("[SHUTDOWN] bit2=0 不代表已失能（真使能时也读到）\n");
         fflush(stdout);
     }
     /*

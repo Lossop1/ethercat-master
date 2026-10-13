@@ -28,11 +28,12 @@ option(EMASTER_BUILD_TESTS "构建离线单元测试" ON)
 
 # 设备配置是可扩展的输入集合。CONFIGURE_DEPENDS 使新增或删除型号后 CMake 自动重新配置，
 # 避免在构建脚本中维护单个设备文件名。
+#
+# 空目录是合法状态，不是错误：这个项目交付时不含任何电机配置，客户用自己的 ESI 跑
+# gen/emaster_config.py 生成。构建必须先于配置成立 —— 生成出来的 C 与配置内容无关
+# （条目数在运行期从扁平文件读），所以二进制建得出来，只是启动时说"没有部署"。
 file(GLOB EMASTER_DEVICE_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/devices/*.json")
-if(NOT EMASTER_DEVICE_CONFIG_FILES)
-    message(FATAL_ERROR "config/devices 中至少需要一个设备配置")
-endif()
 
 # 拓扑和部署也是生成目录的输入集合。这里只发现文件，不在 CMake 中解释具体拓扑、网卡或数量。
 file(GLOB EMASTER_TOPOLOGY_CONFIG_FILES CONFIGURE_DEPENDS
@@ -47,8 +48,7 @@ file(GLOB EMASTER_ERROR_RECOVERY_POLICY_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/error_recovery_policies/*.json")
 if(NOT EMASTER_TOPOLOGY_CONFIG_FILES OR NOT EMASTER_DEPLOYMENT_CONFIG_FILES OR
    NOT EMASTER_OPERATION_PROFILE_CONFIG_FILES)
-    message(FATAL_ERROR
-        "config/topologies、config/deployments 和 config/operation_profiles 中都至少需要一个配置")
+    message(STATUS "拓扑/部署/运行方案有空目录：按空配置生成，主站启动时会找不到部署")
 endif()
 if(NOT EMASTER_ERROR_RECOVERY_POLICY_FILES)
     message(WARNING "config/error_recovery_policies 中未找到错误恢复策略，将使用空配置")

@@ -19,7 +19,6 @@ USER = "orangepi"
 PASSWORD = "orangepi"
 
 DEFAULT_BINARY = str(Path(__file__).resolve().parents[1] / "build/apps/fingerprint/emaster-fingerprint")
-DEFAULT_DEPLOYMENT = "orangepi-current-bench-idle"
 DEFAULT_OUTPUT = "/tmp/fingerprint-capture.json"
 CONFIRM_TOKEN = "PRE-OP"
 
@@ -27,7 +26,9 @@ CONFIRM_TOKEN = "PRE-OP"
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
-    parser.add_argument("--deployment", default=DEFAULT_DEPLOYMENT)
+    # 部署 ID 不设默认值：交付的仓库里没有任何部署配置，写死一个 ID 只会在换
+    # 现场之后静静地对不上。不给就交给指纹工具自己按主机名匹配。
+    parser.add_argument("--deployment", default=None)
     parser.add_argument("--binary", default=DEFAULT_BINARY)
     parser.add_argument("--timeout", type=float, default=120.0)
     args = parser.parse_args()
@@ -36,9 +37,9 @@ def main() -> int:
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(HOST, username=USER, password=PASSWORD, timeout=10)
 
-    command = (
-        f"sudo {args.binary} capture {args.output} --deployment {args.deployment}"
-    )
+    command = f"sudo {args.binary} capture {args.output}"
+    if args.deployment is not None:
+        command += f" --deployment {args.deployment}"
     channel = client.get_transport().open_session()
     channel.get_pty()
     channel.exec_command(command)

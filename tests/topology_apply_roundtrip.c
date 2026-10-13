@@ -30,6 +30,19 @@ int main(int argc, char **argv)
         emaster_config_reader_close(&reader);
         return 1;
     }
+    /* 装进来的条数必须等于文件声明的条数：少了就是装载中途半途而废，
+       而它不会自己报错 —— 上层只会看到"少了几个部署"。 */
+    {
+        size_t declared = 0U;
+        if (!emaster_config_reader_size(&reader, "topology.count", &declared) ||
+            declared != emaster_topology_config_count())
+        {
+            fprintf(stderr, "topology.count 声明 %zu，装载了 %zu\n",
+                    declared, emaster_topology_config_count());
+            emaster_config_reader_close(&reader);
+            return 1;
+        }
+    }
 
     printf("topology.count\t%zu\n", emaster_topology_config_count());
     for (index = 0U; index < emaster_topology_config_count(); ++index)

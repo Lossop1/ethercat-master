@@ -21,11 +21,14 @@
 """
 
 import argparse
+import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -414,14 +417,40 @@ def _probe_command(master, timeout):
         sock.close()
 
 
+def _cst_guard_repo():
+    """造一棵最小交付树：工具目录照抄，配置目录里只有一份 CST 部署。
+
+    交付时仓库里没有部署（客户手持 ESI 从头开始），所以这里自造。被挡住的理由必须
+    来自配置链读出的模式（部署 -> 运行方案 -> selected_mode_id），不能来自部署 ID
+    的字面——否则换个名字就漏过去了。
+    """
+    root = tempfile.mkdtemp(prefix="gui-guard-")
+    shutil.copytree(TOOLS, os.path.join(root, "tools"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    for subdir in ("deployments", "operation_profiles"):
+        os.makedirs(os.path.join(root, "config", subdir))
+    with open(os.path.join(root, "config", "operation_profiles", "cst.json"), "w",
+              encoding="utf-8") as handle:
+        json.dump({"operation_profile_id": "check-op-cst", "selected_mode_id": "cst"},
+                  handle, ensure_ascii=False)
+    with open(os.path.join(root, "config", "deployments", "cst.json"), "w",
+              encoding="utf-8") as handle:
+        json.dump({"deployment_id": "check-cst",
+                   "operation_profile_ids": ["check-op-cst"]},
+                  handle, ensure_ascii=False)
+    return root
+
+
 def check_mode_guard_blocks_cst(context):
     """CST 部署要被挡在**连套接字之前**：位置量纲的目标发到力矩模式上是静默错发。"""
+    repo = _cst_guard_repo()
     with fake_master.FakeMaster(publish_hz=200.0) as master:
         args = [sys.executable, "-m", "emaster_gui",
-                "--deployment", "orangepi-bench-cst-smoke",
+                "--deployment", "check-cst",
                 "--obs-endpoint", f"tcp:127.0.0.1:{master.obs_port}",
                 "--selftest", "3", "--selftest-takeover", "--no-confirm"]
-        done = subprocess.run(args, cwd=TOOLS, env=gui_env(), capture_output=True,
+        done = subprocess.run(args, cwd=os.path.join(repo, "tools"), env=gui_env(),
+                              capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=120)
         want(done.returncode == 0, f"界面退出码 {done.returncode}：{done.stdout[-2000:]}")
         want(master.snapshot_counters()["commands"] == 0,

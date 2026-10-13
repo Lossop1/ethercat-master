@@ -43,11 +43,10 @@ def first_mismatch(index, axis):
 
 
 def dump_disable(report):
-    """停机时"真的失能了吗"。用户的要求是"系统说关就得是真的关"。
+    """停机时逐台走邮箱读 0x6041 的记录（不是 safe_state_reached 那种主站视角）。
 
-    不要用 safe_state_reached 代替它：那个说的是主站视角（安全停机帧发出去了），
-    而 PDO 只在 OP 下有效——掉出 OP 的轴收不到停用帧，却仍然显示"安全状态到达"。
-    这里印的是逐台走邮箱核对 0x6041 的结果。
+    bit2=0（报告里叫 verified）不代表已失能：真使能时也读到 0x1250。
+    bit2=1（still_enabled）才能证明还在使能。
     """
     block = report.get("shutdown_disable")
     if not block:
@@ -57,9 +56,9 @@ def dump_disable(report):
     verified = block.get("verified", "?")
     enabled = block.get("still_enabled", "?")
     unverified = block.get("unverified", "?")
-    verdict = "真的关了" if enabled == 0 and unverified == 0 else "**没有全部证实**"
-    print("  失能核对：%s  写入尝试 %s 台 / 已证实 %s 台 / 仍使能 %s 台 / 读不回 %s 台"
-          % (verdict, attempted, verified, enabled, unverified))
+    print("  0x6041 核对：写入尝试 %s 台 / bit2=0 %s 台 / bit2=1 %s 台 / 读不回 %s 台"
+          % (attempted, verified, enabled, unverified))
+    print("            （bit2=0 不等于已失能）")
     if enabled:
         print("            ！仍使能的轴：%s" % " ".join(
             "#%d" % (index + 1)

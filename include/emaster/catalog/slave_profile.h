@@ -24,12 +24,29 @@ typedef struct
     uint32_t bit_length;
 } emaster_pdo_mapping_profile_t;
 
+/*
+ * 一套 PDO 方案在总线上怎么被选中。
+ *
+ * 模块化设备（用 <Module> 声明 PDO 的那些）先往 0xF030 的模块槽位写模块标识，
+ * 再分配 1C12/1C13；非模块化设备没有模块槽位这个对象，只有 1C12/1C13 可写，
+ * 写模块标识那一步会以 SDO 中止告终。
+ *
+ * 取 0 为模块化：设备目录里没有这个字段时，行为与加它之前完全一致。
+ */
+typedef enum
+{
+    EMASTER_PDO_ASSIGNMENT_MODULE_SLOT = 0,
+    EMASTER_PDO_ASSIGNMENT_DIRECT = 1
+} emaster_pdo_assignment_style_t;
+
 /* 一个设备可以声明多个 PDO 方案；运行方案负责选择其中一个。 */
 typedef struct
 {
     const char *pdo_set_id;
+    /* 直连分配时这两个字段没有含义，恒为 0。 */
     uint32_t module_ident;
     uint8_t module_slot;
+    emaster_pdo_assignment_style_t assignment_style;
     uint16_t rx_pdo_bytes;
     uint16_t tx_pdo_bytes;
     const emaster_pdo_mapping_profile_t *rx_mappings;

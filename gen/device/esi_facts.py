@@ -64,6 +64,45 @@ def little_endian_default_data(value: str) -> int:
         raise ValueError(f"ESI DefaultData 不是有效字节序列：{value!r}") from error
 
 
+# 出厂默认 PDO 分配由这两个对象管：0x1C12 管 RxPdo（输出），0x1C13 管 TxPdo（输入）。
+PDO_ASSIGNMENT_OBJECTS: dict[str, str] = {"#x1c12": "rx", "#x1c13": "tx"}
+
+
+def _default_pdo_assignment(device: ET.Element) -> dict[str, list[str]]:
+    """读对象字典里设备出厂就接好的 PDO 分配。
+
+    子项 0 是条目数 N，其后 N 个子项的 DefaultData 是小端 u16 的 PDO 索引。
+    空列表表示这份 ESI 没写默认分配 —— 模块化设备就是这样，由 0xF030 在运行期
+    选模块，而不是靠默认分配。两种情况的区别由调用者按"有没有模块"判断。
+    """
+    assignment: dict[str, list[str]] = {"rx": [], "tx": []}
+    for object_config in device.findall("Profile/Dictionary/Objects/Object"):
+        index_text = object_config.findtext("Index")
+        if index_text is None:
+            continue
+        direction = PDO_ASSIGNMENT_OBJECTS.get(index_text.strip().lower())
+        if direction is None:
+            continue
+        defaults = [
+            little_endian_default_data(value.strip())
+            for value in (
+                subitem.findtext("./Info/DefaultData")
+                for subitem in object_config.findall("./Info/SubItem")
+            )
+            if value is not None and value.strip()
+        ]
+        if not defaults:
+            continue
+        count = defaults[0]
+        if count + 1 > len(defaults):
+            raise ValueError(
+                f"ESI {index_text} 声明了 {count} 项默认分配，"
+                f"却只有 {len(defaults) - 1} 个带默认值的子项"
+            )
+        assignment[direction] = [_hex_text(value, 4) for value in defaults[1 : count + 1]]
+    return assignment
+
+
 def _device_runtime_constraints(device: ET.Element) -> EsiRuntimeConstraints:
     """提取一个 Device 明确声明的 PDO 配置能力、同步模式和最小周期。"""
     coe = device.find("Mailbox/CoE")
@@ -238,6 +277,7 @@ def _device_facts(vendor: ET.Element, device: ET.Element) -> dict[str, Any]:
             "supports_pdo_configuration": constraints.supports_pdo_configuration,
             "supports_distributed_clocks": constraints.supports_distributed_clocks,
         },
+        "default_pdo_assignment": _default_pdo_assignment(device),
         "direct_pdos": {
             direction: [_pdo_fact(pdo) for pdo in device.findall(tag)]
             for direction, tag in (("rx", "RxPdo"), ("tx", "TxPdo"))

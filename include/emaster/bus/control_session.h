@@ -1076,10 +1076,13 @@ typedef struct
      *
      * 所以停机时逐台走邮箱「读 6041 → 写 6040=0 → 再读 6041」，这四个数就是那次核对：
      *   attempted  —— 写调用发出去了几台
-     *   verified   —— 读回来确认 bit2=0 的有几台（**这才是"真的关"**）
-     *   still_enabled —— 读回来仍然 bit2=1 的有几台（写成功而驱动器没照做，最该抓的形状）
-     *   unverified —— 读不回来的有几台（没证实，不能当通过）
+     *   verified   —— 读回来 bit2=0 的有几台
+     *   still_enabled —— 读回来仍然 bit2=1 的有几台
+     *   unverified —— 读不回来的有几台
      * 不变式：verified + still_enabled + unverified == 轴数。
+     *
+     * 注意：bit2 不是失能判据。实测真使能（current_state=8）时读回也是 0x1250，
+     * 所以 verified 按"bit2=0 的台数"读，不是"已失能的台数"。
      *
      * 这一段不设任何前置条件（原先与停机诊断共用一个门槛，而那个门槛只在"到过 OP
      * 且成功切回 PRE-OP"时成立——最需要禁用的轴恰好被它挡住）。

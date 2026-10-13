@@ -6,7 +6,11 @@
 # 前置：主站已经在跑。轴会真动，跑之前确认台架周围是安全的。
 cd "$(dirname "$0")/.." || exit 1
 RANGE=${RANGE:-15}
-DEPLOYMENT=${DEPLOYMENT:-orangepi-bench-quint-30deg}
+DEPLOYMENT=${DEPLOYMENT:-}
+if [ -z "$DEPLOYMENT" ]; then
+  echo "必须显式给 DEPLOYMENT=<你的部署ID>：部署 ID 是现场生成的，仓库里没有默认值（README.md 第 20 节）" >&2
+  exit 2
+fi
 OUT=/tmp/panel-jog.txt
 
 : > "$OUT"
