@@ -17,6 +17,8 @@
 #include "emaster/audit/run_report.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/config/runtime_config.h"
+#include "emaster/config/runtime_config_cli.h"
+#include "emaster/config/runtime_config_load.h"
 #include "emaster/messages.h"
 #include "emaster/motion/position_target.h"
 
@@ -425,6 +427,7 @@ static void print_probe_summary(const emaster_probe_ramp_t *ramp,
 
 int main(int argc, char **argv)
 {
+    const char *config_directory = emaster_cli_config_dir(&argc, argv);
     const emaster_deployment_config_t *deployment;
     emaster_session_axis_plan_t *plan_axes;
     emaster_session_plan_t plan;
@@ -436,6 +439,17 @@ int main(int argc, char **argv)
     emaster_control_session_status_t session_status;
     size_t axis_capacity;
     char resolved_report_path[EMASTER_REPORT_PATH_CAPACITY];
+
+    if (config_directory == NULL)
+    {
+        fprintf(stderr, "用法：%s [--config-dir <目录>] [--deployment <部署ID>]\n", argv[0]);
+        return 2;
+    }
+    if (!emaster_runtime_config_load(config_directory))
+    {
+        fprintf(stderr, "错误：无法从 '%s' 加载运行时配置\n", config_directory);
+        return 1;
+    }
 
     /* 解析命令行参数：支持 --deployment <id> 指定部署配置 */
     if (argc == 3 && strcmp(argv[1], "--deployment") == 0)
@@ -473,8 +487,9 @@ int main(int argc, char **argv)
     }
     else
     {
-        fprintf(stderr, "用法：%s [--deployment <deployment-id>]\n", argv[0]);
+        fprintf(stderr, "用法：%s [--config-dir <目录>] [--deployment <deployment-id>]\n", argv[0]);
         fprintf(stderr, "  无参数：自动匹配当前主机的部署配置\n");
+        fprintf(stderr, "  --config-dir：运行时配置目录，默认 config-runtime\n");
         fprintf(stderr, "  --deployment：显式指定部署配置ID\n");
         fprintf(stderr, "注意：运行参数由部署配置决定，不接受参数覆盖\n");
         return 2;

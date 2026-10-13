@@ -260,13 +260,28 @@ int main(int argc, char **argv)
             break;
         }
 
-        /* 解析角度输入 */
-        if (sscanf(input_line, "%lf %lf %lf %lf %lf %lf %lf %lf",
-                   &degrees[0], &degrees[1], &degrees[2], &degrees[3],
-                   &degrees[4], &degrees[5], &degrees[6], &degrees[7]) < (int)topo.axis_count)
+        /* 解析角度输入：逐个取数，取满轴数即止。不写死个数，轴数变了不用改代码。 */
         {
-            fprintf(stderr, "输入错误：需要 %zu 个角度值\n", topo.axis_count);
-            continue;
+            const char *cursor = input_line;
+            size_t parsed = 0U;
+
+            while (parsed < topo.axis_count)
+            {
+                char *end = NULL;
+                double value = strtod(cursor, &end);
+
+                if (end == cursor)
+                {
+                    break;
+                }
+                degrees[parsed++] = value;
+                cursor = end;
+            }
+            if (parsed < topo.axis_count)
+            {
+                fprintf(stderr, "输入错误：需要 %zu 个角度值\n", topo.axis_count);
+                continue;
+            }
         }
 
         /* 转换为脉冲 */

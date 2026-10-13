@@ -7,6 +7,8 @@
 #include "emaster/bus/preop_probe.h"
 #include "emaster/catalog/slave_profile.h"
 #include "emaster/config/runtime_config.h"
+#include "emaster/config/runtime_config_cli.h"
+#include "emaster/config/runtime_config_load.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -302,7 +304,8 @@ static int publish_report(const char *output_path, const emaster_preop_report_t 
 
 int main(int argc, char **argv)
 {
-    emaster_command_t command = emaster_console_parse_command(argc, argv);
+    const char *config_directory = emaster_cli_config_dir(&argc, argv);
+    emaster_command_t command;
     const emaster_deployment_config_t *deployment;
     const char *output_path;
     emaster_sdo_request_t requests[EMASTER_PREOP_MAX_SDO_REQUESTS];
@@ -313,6 +316,14 @@ int main(int argc, char **argv)
     int report_is_usable;
     int output_result;
 
+    if (config_directory == NULL)
+    {
+        emaster_console_print_usage(argv[0]);
+        return 2;
+    }
+    command = emaster_console_parse_command(argc, argv);
+
+    /* 枚举网卡不读配置：现场还没有配置目录时也要能列出网卡。 */
     if (command.kind == EMASTER_COMMAND_INTERFACES)
     {
         status = emaster_soem_visit_interfaces(emaster_console_print_interface, stdout);
@@ -322,6 +333,11 @@ int main(int argc, char **argv)
             return 1;
         }
         return 0;
+    }
+    if (!emaster_runtime_config_load(config_directory))
+    {
+        fprintf(stderr, "错误：无法从 '%s' 加载运行时配置\n", config_directory);
+        return 1;
     }
     if (command.kind == EMASTER_COMMAND_DEPLOYMENTS)
     {

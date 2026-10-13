@@ -231,6 +231,7 @@ def add_device(args: argparse.Namespace) -> int:
     print(f"  PDO 方案 {len(merged['pdo_sets'])} 套，模式 {'/'.join(merged['protocol']['supported_modes'])}")
     _print_notes(notes)
     print(f"\n下一步：python gen/emaster_config.py init-site --device {profile_id} --interface <网卡>")
+    print(f"  改了策略档 {policy_path} 之后要重跑本命令：只有这里会把策略档合并进设备档")
     return 0
 
 
