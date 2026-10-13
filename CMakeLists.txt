@@ -192,7 +192,7 @@ if(EMASTER_BUILD_HARDWARE_TOOLS)
     endif()
     if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/SOEM/CMakeLists.txt")
         message(FATAL_ERROR
-            "缺少 SOEM 子模块，请运行：git submodule update --init --recursive")
+            "external/SOEM 缺失。交付树自带 SOEM 源码，请重新获取交付件")
     endif()
 
     set(SOEM_BUILD_SAMPLES OFF CACHE BOOL "不构建上游 SOEM 示例" FORCE)

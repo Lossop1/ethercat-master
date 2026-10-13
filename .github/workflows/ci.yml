@@ -13,8 +13,6 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: 安装分析工具
         run: sudo apt-get update && sudo apt-get install -y cppcheck ninja-build

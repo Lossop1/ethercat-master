@@ -43,7 +43,13 @@
                     motion_profiles/ deployments/
                     另有随产品交付的两份：error_recovery_policies/、messages/
 
+外部依赖
+  external/SOEM/    SOEM 源码。随交付树给你，构建不需要联网
+
 构建期
+  CMakeLists.txt    顶层构建入口
+  CMakePresets.json 构建预设
+  cmake/            CMake 辅助模块
   gen/              生成器与校验器
   gen/device/       设备上手工具
 
@@ -73,10 +79,11 @@
 
 **构建依赖**：CMake ≥ 3.28、Python ≥ 3.10、C11 编译器。预设需要 Ninja。图形界面另需 PyQt5。`nc -U` 示例需要支持 Unix socket 的 netcat。
 
+SOEM 的源码在 `external/SOEM` 里，随交付树一起给你。**构建不需要联网。**
+
 在仓库根目录执行：
 
 ```bash
-git submodule update --init --recursive
 python3 gen/validate_project.py
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DEMASTER_BUILD_HARDWARE_TOOLS=ON -DEMASTER_BUILD_TESTS=ON
 cmake --build build -j4
