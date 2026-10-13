@@ -225,13 +225,15 @@ class EtherCATClient:
             return None
         axis = self.topology[0]
         try:
-            increments = float(axis["enc"])
+            increments, motor_revolutions = (float(x) for x in axis["enc"].split("/"))
             gear_motor, gear_shaft = (float(x) for x in axis["gear"].split("/"))
         except (KeyError, ValueError):
             return None
-        if gear_shaft == 0:
+        if motor_revolutions == 0 or gear_shaft == 0:
             return None
-        return increments * (gear_motor / gear_shaft) / 360.0
+        # 电机每转计数 = 增量数 / 电机转数。编码器不直接装在电机轴上时这两段不等，
+        # 只取分子会把系数算大若干倍，而它乘的是目标角度。
+        return increments / motor_revolutions * (gear_motor / gear_shaft) / 360.0
 
     def degrees_to_counts(self, degrees):
         factor = self.counts_per_degree()
@@ -400,7 +402,7 @@ def interactive_shell(client):
             if client.refresh_topology():
                 print(f"\n轴数={client.axis_count} 单步限幅={client.max_step} counts")
                 for axis in client.topology:
-                    print(f"  {axis['id']}: bus={axis['bus']} enc={axis['enc']} "
+                    print(f"  {axis['id']}: bus={axis['bus']} enc={axis['enc']} 增量/电机转 "
                           f"gear={axis['gear']}")
                 factor = client.counts_per_degree()
                 if factor:

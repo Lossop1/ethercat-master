@@ -393,18 +393,18 @@ class Engine:
         return False
 
     def _axis_factor(self, index):
-        """该轴 1 度 = 多少 counts：enc × (gear_motor/gear_shaft) / 360。"""
+        """该轴 1 度 = 多少 counts：(enc 增量/电机转) × (gear_motor/gear_shaft) / 360。"""
         if not self.client.topology or index >= len(self.client.topology):
             return None
         axis = self.client.topology[index]
         try:
-            increments = float(axis["enc"])
+            increments, motor_revolutions = (float(x) for x in axis["enc"].split("/"))
             gear_motor, gear_shaft = (float(x) for x in axis["gear"].split("/"))
         except (KeyError, ValueError):
             return None
-        if gear_shaft == 0:
+        if motor_revolutions == 0 or gear_shaft == 0:
             return None
-        return increments * (gear_motor / gear_shaft) / 360.0
+        return increments / motor_revolutions * (gear_motor / gear_shaft) / 360.0
 
     def _axis_field(self, index, name, fallback_name=None):
         if not self.axes or index >= len(self.axes):

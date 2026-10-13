@@ -62,10 +62,11 @@ import emaster_endpoint
 # 与 include/emaster/bus/command_socket_path.h 的 EMASTER_DEPLOYMENT_ENV 同名同义。
 DEPLOYMENT_ENV = "EMASTER_DEPLOYMENT"
 
-# 台架四轴的换算：16384 增量/电机转 × 28 减速比 ÷ 360 度。仅用于把 counts 折成度
-# 打印出来给人看，判据一律用 counts，免得引入一个会漂的浮点常数。
-COUNTS_PER_SHAFT_DEG = 16384.0 * 28.0 / 360.0
-DEFAULT_AMPLITUDE_COUNTS = int(round(30.0 * COUNTS_PER_SHAFT_DEG))
+# 换算不留常数。每台设备的编码器分辨率和齿轮比都不同，写死一个数就意味着换一台
+# 电机之后打印出来的角度是错的，而判据用的是 counts —— 错的那个数没人会去核。
+# 真实的系数从主站查拓扑得到（closed 模式本来就有命令通道），readonly 模式查不到，
+# 那种模式下不打印角度，或者由 --counts-per-deg 显式给出。
+
 # 心跳周期：长跑日志里要能区分"在跑"和"卡死"。
 HEARTBEAT_NS = 60 * 10 ** 9
 
@@ -133,6 +134,39 @@ class LineReader:
             if not chunk:
                 raise ConnectionError("连接在对端发出完整行之前关闭")
             self.buffer += chunk
+
+
+def counts_per_degree_from_topology(reply):
+    """从 `topology` 的回复取每轴 1 度等于多少 counts，返回 {} 表示取不到。
+
+    回复形状：OK|axes=N,max_step=S|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|a2:...
+    缺字段或分母为 0 就整体放弃 —— 宁可不算，也不要拿半个字段凑出一个数。
+    """
+    parts = reply.split("|")
+    if not parts or parts[0] != "OK":
+        return {}
+    factors = {}
+    for part in parts[1:]:
+        if not part.startswith("a") or ":" not in part:
+            continue
+        _, _, body = part.partition(":")
+        fields = {}
+        for item in body.split(","):
+            key, _, value = item.partition("=")
+            fields[key] = value
+        try:
+            increments, motor_revolutions = (float(x) for x in fields["enc"].split("/"))
+            gear_motor, gear_shaft = (float(x) for x in fields["gear"].split("/"))
+        except (KeyError, ValueError):
+            return {}
+        if motor_revolutions <= 0 or gear_shaft <= 0:
+            return {}
+        # 电机每转计数 = 增量数 / 电机转数，两段都要用。只取分子在编码器不直接装在
+        # 电机轴上的设备上会把系数算大若干倍。
+        factors[fields.get("bus", "")] = (
+            increments / motor_revolutions * (gear_motor / gear_shaft) / 360.0
+        )
+    return factors
 
 
 def parse_latest(reply):
@@ -254,6 +288,34 @@ def run(args):
             return 3
         cmd_reader = LineReader(cmd)
 
+    counts_per_degree = args.counts_per_deg
+    if counts_per_degree is None and cmd is not None:
+        cmd.sendall(b"topology\n")
+        factors = counts_per_degree_from_topology(cmd_reader.line())
+        if not factors:
+            print("topology 回复里没有可用的换算（enc 或 gear 缺失/不合法）", file=sys.stderr)
+            return 3
+        distinct = set(factors.values())
+        if len(distinct) > 1:
+            # 混装减速比的环（台架上出现过 8 根里 1 根不同）没有单一的"每度多少 counts"。
+            # 幅度是按度给的一个标量，套到全部轴必然偏，所以要求显式指定。
+            print("各轴换算不一致，无法用一个系数把角度折成 counts：", file=sys.stderr)
+            for bus, factor in sorted(factors.items()):
+                print(f"  轴 {bus}: {factor:.4f} counts/度", file=sys.stderr)
+            print("请用 --amplitude-counts 直接给幅度（counts）。", file=sys.stderr)
+            return 3
+        counts_per_degree = distinct.pop()
+    if counts_per_degree is None:
+        print("拿不到每度多少 counts：readonly 模式没有命令通道，请给 --counts-per-deg。"
+              "本次只打印 counts，不换算角度。", file=sys.stderr)
+
+    if args.amplitude_counts is None:
+        if counts_per_degree is None:
+            print("--amplitude-counts 没给，又没有换算系数可用，无法确定幅度",
+                  file=sys.stderr)
+            return 3
+        args.amplitude_counts = round(args.amplitude_deg * counts_per_degree)
+
     # 起点取自观测帧本身，不另外查 status：一来少一次往返，二来 status 与观测是两条
     # 通道、两个时刻，另取的值可能与真正开始运动时的那一刻对不上。
     start_positions = None
@@ -268,8 +330,12 @@ def run(args):
             continue
         start_positions = [axis["pos"] for axis in axes]
     axis_count = len(start_positions)
-    print(f"起点 counts={start_positions} "
-          f"(≈{[round(v / COUNTS_PER_SHAFT_DEG, 2) for v in start_positions]} 度)", flush=True)
+    if counts_per_degree is not None:
+        print(f"起点 counts={start_positions} "
+              f"(≈{[round(v / counts_per_degree, 2) for v in start_positions]} 度)",
+              flush=True)
+    else:
+        print(f"起点 counts={start_positions}", flush=True)
 
     period_ns = int(1e9 / args.read_hz)
     send_every = max(1, int(round(args.read_hz / args.hz))) if args.mode == "closed" else 0
@@ -429,7 +495,11 @@ def run(args):
         "observation_age_ms": obs_ms,
         "command_latency_ms": cmd_ms,
         "following_error_counts": summarise(following_error),
-        "following_error_deg": scaled(summarise(following_error), COUNTS_PER_SHAFT_DEG, 4),
+        "following_error_deg": (
+            scaled(summarise(following_error), counts_per_degree, 4)
+            if counts_per_degree is not None else None
+        ),
+        "counts_per_deg": counts_per_degree,
         "axis_error_max_counts": [round(value, 1) for value in axis_error_max],
         "cycle_delta_ok": cycle_delta_ok,
         "cycle_delta_total": cycle_delta_total,
@@ -487,8 +557,12 @@ def main():
     parser.add_argument("--jitter-us", type=int, default=0,
                         help="每次读取叠加的均匀抖动上界（微秒），用来把采样相位扫开")
     parser.add_argument("--seconds", type=float, default=60.0)
-    parser.add_argument("--amplitude-counts", type=float, default=DEFAULT_AMPLITUDE_COUNTS,
-                        help="余弦往返的峰值幅度，counts（默认 30 度）")
+    parser.add_argument("--amplitude-counts", type=float, default=None,
+                        help="余弦往返的峰值幅度，counts；不给则按 --amplitude-deg 与实测换算算")
+    parser.add_argument("--amplitude-deg", type=float, default=30.0,
+                        help="不给 --amplitude-counts 时的峰值幅度，度")
+    parser.add_argument("--counts-per-deg", type=float, default=None,
+                        help="每度多少 counts；不给则从主站的 topology 查（readonly 模式必给）")
     parser.add_argument("--period-s", type=float, default=10.0, help="往返一个完整周期")
     parser.add_argument("--kp", type=float, default=0.0, help="位置反馈增益，0 即纯轨迹前馈")
     parser.add_argument("--clamp-counts", type=float, default=2000.0, help="反馈项限幅")

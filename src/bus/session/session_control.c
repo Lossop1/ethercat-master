@@ -1155,7 +1155,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         case EMASTER_COMMAND_QUERY_TOPOLOGY: {
                             /*
                              * 拓扑查询：返回实际轴数、总线位置和关键参数
-                             * 格式: axes=N,max_step=S|a1:bus=B,enc=E,gear=G1/G2,torque=T|a2:...
+                             * 格式: axes=N,max_step=S|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|a2:...
                              *
                              * max_step 是相邻两条目标允许的最大增量（原始 counts，全轴统一值）。
                              * 客户端必须按此值把大角度目标拆成小步流式发送：单步超限不会返回
@@ -1179,13 +1179,17 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 }
                                 /* 编码器分辨率 = encoder_increments / encoder_motor_revolutions
                                  * 齿轮比 = gear_motor_revolutions : gear_shaft_revolutions
+                                 * 分辨率的两段都要给：只给分子，encoder_motor_revolutions
+                                 * 不是 1 的设备（编码器不直接装在电机轴上）在客户端会被算错，
+                                 * 而算错的是一个把角度折成脉冲的系数，看不出来。
                                  * 注意：rated_torque 字段可能不在 position_scale 中，暂时输出0 */
                                 written = snprintf(response.message + offset,
                                                    sizeof(response.message) - (size_t)offset,
-                                                   "|a%u:bus=%u,enc=%u,gear=%u/%u,torque=0",
+                                                   "|a%u:bus=%u,enc=%u/%u,gear=%u/%u,torque=0",
                                                    (unsigned int)(axis_index + 1U),
                                                    (unsigned int)axis->position,
                                                    (unsigned int)scale->encoder_increments,
+                                                   (unsigned int)scale->encoder_motor_revolutions,
                                                    (unsigned int)scale->gear_motor_revolutions,
                                                    (unsigned int)scale->gear_shaft_revolutions);
                                 if (written < 0) {

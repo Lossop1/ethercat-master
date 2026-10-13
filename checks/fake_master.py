@@ -102,6 +102,7 @@ COMMAND_CLIENT_IDLE_TIMEOUT_S = 5.0  # command_server.c:96
 DEFAULT_AXES = 5
 DEFAULT_MAX_STEP = 6400             # counts，与台架五轴部署同量级
 DEFAULT_ENCODER = 16384
+DEFAULT_ENCODER_REVS = 1
 DEFAULT_GEAR = "28/1"
 
 # 主站状态机的整数（docs/protocol/command-protocol-v1.md:94-101）
@@ -395,7 +396,8 @@ class FakeMaster:
             if name == "topology":
                 body = f"OK|axes={self.axes_count},max_step={self.max_step}"
                 for index in range(self.axes_count):
-                    body += (f"|a{index + 1}:bus={index + 1},enc={DEFAULT_ENCODER},"
+                    body += (f"|a{index + 1}:bus={index + 1},"
+                             f"enc={DEFAULT_ENCODER}/{DEFAULT_ENCODER_REVS},"
                              f"gear={DEFAULT_GEAR},torque=0")
                 return body
 

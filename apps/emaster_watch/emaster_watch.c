@@ -30,7 +30,8 @@ static char g_socket_path[EMASTER_SOCKET_PATH_CAPACITY];
 
 typedef struct {
     unsigned int bus_position;
-    unsigned int encoder_resolution;  /* 编码器分辨率（脉冲/转） */
+    unsigned int encoder_increments;         /* 编码器增量数（分子） */
+    unsigned int encoder_motor_revolutions;  /* 对应电机转数（分母） */
     unsigned int gear_ratio_num;      /* 齿轮比分子 */
     unsigned int gear_ratio_den;      /* 齿轮比分母 */
     unsigned int rated_torque_mnm;    /* 额定力矩（毫牛米） */
@@ -74,7 +75,7 @@ static void print_usage(const char *prog)
     fprintf(stderr, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
 }
 
-/* 查询拓扑：解析 "axes=N|a1:bus=B,enc=E,gear=G1/G2,torque=T|..." */
+/* 查询拓扑：解析 "axes=N|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|..." */
 static int query_topology(int sock_fd, topology_t *topo)
 {
     char request[] = "topology\n";
@@ -134,16 +135,22 @@ static int query_topology(int sock_fd, topology_t *topo)
             return -1;
         }
 
-        /* 解析 "a1:bus=B,enc=E,gear=G1/G2,torque=T" */
-        if (sscanf(token, "a%u:bus=%u,enc=%u,gear=%u/%u,torque=%u",
+        /* 解析 "a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T" */
+        if (sscanf(token, "a%u:bus=%u,enc=%u/%u,gear=%u/%u,torque=%u",
                    &axis_num,
                    &axis->bus_position,
-                   &axis->encoder_resolution,
+                   &axis->encoder_increments,
+                   &axis->encoder_motor_revolutions,
                    &axis->gear_ratio_num,
                    &axis->gear_ratio_den,
-                   &axis->rated_torque_mnm) != 6)
+                   &axis->rated_torque_mnm) != 7)
         {
             fprintf(stderr, "解析轴 %zu 参数失败: %s\n", axis_index, token);
+            return -1;
+        }
+        if (axis->encoder_motor_revolutions == 0 || axis->gear_ratio_den == 0)
+        {
+            fprintf(stderr, "轴 %zu 的分辨率参数不合法（分母为 0）\n", axis_index);
             return -1;
         }
     }
@@ -240,14 +247,18 @@ int main(int argc, char **argv)
     for (i = 0; i < topo.axis_count; i++)
     {
         const axis_config_t *axis = &topo.axes[i];
-        unsigned long load_resolution = (unsigned long)axis->encoder_resolution * axis->gear_ratio_num / axis->gear_ratio_den;
-        unsigned long pulses_per_degree = load_resolution / 360;
+        unsigned long long load_resolution = (unsigned long long)axis->encoder_increments *
+                                             axis->gear_ratio_num /
+                                             ((unsigned long long)axis->encoder_motor_revolutions *
+                                              axis->gear_ratio_den);
+        unsigned long pulses_per_degree = (unsigned long)(load_resolution / 360);
 
         printf("轴 %zu:\n", i + 1);
         printf("  总线位置: %u\n", axis->bus_position);
-        printf("  编码器分辨率: %u 脉冲/转（电机侧）\n", axis->encoder_resolution);
+        printf("  编码器分辨率: %u/%u 脉冲/电机转\n",
+               axis->encoder_increments, axis->encoder_motor_revolutions);
         printf("  齿轮比: %u:%u（电机:负载）\n", axis->gear_ratio_num, axis->gear_ratio_den);
-        printf("  负载侧分辨率: %lu 脉冲/转\n", load_resolution);
+        printf("  负载侧分辨率: %llu 脉冲/转\n", load_resolution);
         printf("  角度换算: 1° = %lu 脉冲\n", pulses_per_degree);
         if (axis->rated_torque_mnm > 0) {
             printf("  额定力矩: %u mNm\n", axis->rated_torque_mnm);

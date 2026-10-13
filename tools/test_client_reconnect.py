@@ -67,7 +67,7 @@ class MockServer(threading.Thread):
                         line, _, buffer = buffer.partition(b"\n")
                         cmd = line.decode().strip()
                         if cmd == "topology":
-                            reply = b"OK|axes=2,max_step=6400|a1:bus=1,enc=16384,gear=28/1,torque=0|a2:bus=2,enc=16384,gear=28/1,torque=0\n"
+                            reply = b"OK|axes=2,max_step=6400|a1:bus=1,enc=16384/1,gear=28/1,torque=0|a2:bus=2,enc=16384/1,gear=28/1,torque=0\n"
                         elif cmd == "status":
                             reply = b"OK|state=4 cycle=1 axes=2 enabled=1 completed=0|a1:pos=0,vel=0,torque=0,status=0x1237,target_pos=0,planned=0,err=0x0000,state=5|a2:pos=0,vel=0,torque=0,status=0x1237,target_pos=0,planned=0,err=0x0000,state=5\n"
                         else:

@@ -119,7 +119,7 @@ class FakeMaster:
         if name == "topology":
             body = f"OK|axes={AXES},max_step={MAX_STEP}"
             for i in range(AXES):
-                body += f"|a{i + 1}:bus={i + 1},enc=16384,gear=28/1,torque=0"
+                body += f"|a{i + 1}:bus={i + 1},enc=16384/1,gear=28/1,torque=0"
             return body
         if name == "halt":
             self.halted = len(parts) > 1 and parts[1] == "1"

@@ -278,7 +278,7 @@ def format_run_report(response):
 def axis_counts_per_degree(topology):
     """每轴各自的 counts/度（输出轴），按总线位置排序返回**列表**。
 
-    topology 的轴段里本来就有每轴的 enc 与 gear（`a1:bus=1,enc=E,gear=G1/G2`），
+    topology 的轴段里本来就有每轴的 enc 与 gear（`a1:bus=1,enc=E1/E2,gear=G1/G2`），
     原先却只取第一根、再套用到全部轴。台架可以混装不同减速比的电机——2026-09-29 的
     八轴档第 8 根就是 25:1、其余 28:1——拿第一根的换算去驱动全部轴，那一根的角度就
     悄悄偏了 12%：命令说 30°、它实际走 33.6°，而终端上打印的"位移"还是 30° 的那个数。
@@ -295,9 +295,15 @@ def axis_counts_per_degree(topology):
             for item in segment.split(":", 1)[1].split(",")
             if "=" in item
         )
+        # enc 是 "增量数/电机转数" 两段。只取分子（编码器不直接装在电机轴上时两段不等）
+        # 会把系数算大若干倍，而它乘的是角度。
         try:
-            enc = float(int(fields.get("enc", "16384"), 0))
-        except ValueError:
+            numerator, _, denominator = fields.get("enc", "16384/1").partition("/")
+            motor_revolutions = float(denominator)
+            enc = float(numerator) / motor_revolutions
+            if enc <= 0.0:
+                enc = 16384.0
+        except (ValueError, ZeroDivisionError):
             enc = 16384.0
         gear = 1.0
         if "/" in fields.get("gear", ""):
@@ -520,7 +526,7 @@ def main():
         # 起点取 0，不连主站、不碰硬件。轴数可指定，用来离线核对"只动一根轴"
         # 时其余轴的目标确实钉在起点上。
         per_degree = axis_counts_per_degree(
-            "OK|axes=1,enc=16384|a1:bus=1,enc=16384,gear=28/1")[0]
+            "OK|axes=1,enc=16384|a1:bus=1,enc=16384/1,gear=28/1")[0]
         delta = int(round(args.degrees * per_degree))
         deltas = axis_deltas(args.dry_run_axes, [delta] * args.dry_run_axes, args.only)
         which = "全部轴" if args.only <= 0 else f"只有第 {args.only} 轴"

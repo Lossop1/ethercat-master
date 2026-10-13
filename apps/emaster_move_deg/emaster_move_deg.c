@@ -27,7 +27,8 @@ static char g_socket_path[EMASTER_SOCKET_PATH_CAPACITY];
 
 typedef struct {
     unsigned int bus_position;
-    unsigned int encoder_resolution;
+    unsigned int encoder_increments;
+    unsigned int encoder_motor_revolutions;
     unsigned int gear_ratio_num;
     unsigned int gear_ratio_den;
     double pulses_per_degree;  /* 1° = ? 脉冲 */
@@ -93,7 +94,7 @@ static int query_topology(int sock_fd, topology_t *topo)
     {
         axis_config_t *axis = &topo->axes[axis_index];
         unsigned int axis_num, torque;
-        unsigned long load_resolution;
+        unsigned long long load_resolution;
 
         token = strtok_r(NULL, "|", &saveptr);
         if (token == NULL)
@@ -102,20 +103,35 @@ static int query_topology(int sock_fd, topology_t *topo)
             return -1;
         }
 
-        if (sscanf(token, "a%u:bus=%u,enc=%u,gear=%u/%u,torque=%u",
+        if (sscanf(token, "a%u:bus=%u,enc=%u/%u,gear=%u/%u,torque=%u",
                    &axis_num,
                    &axis->bus_position,
-                   &axis->encoder_resolution,
+                   &axis->encoder_increments,
+                   &axis->encoder_motor_revolutions,
                    &axis->gear_ratio_num,
                    &axis->gear_ratio_den,
-                   &torque) != 6)
+                   &torque) != 7)
         {
             fprintf(stderr, "解析轴 %zu 参数失败: %s\n", axis_index, token);
             return -1;
         }
 
-        /* 计算换算系数：负载侧分辨率 / 360 */
-        load_resolution = (unsigned long)axis->encoder_resolution * axis->gear_ratio_num / axis->gear_ratio_den;
+        /*
+         * 换算系数 = 电机每转计数 × 齿轮比 ÷ 360。
+         *
+         * 电机每转计数 = encoder_increments / encoder_motor_revolutions，两段都得用：
+         * 编码器不直接装在电机轴上时（编码器每转对应电机多转），只用分子会把系数
+         * 算大若干倍。乘法先做完再除，避免整数除法先截断。
+         */
+        if (axis->encoder_motor_revolutions == 0 || axis->gear_ratio_den == 0)
+        {
+            fprintf(stderr, "轴 %zu 的分辨率参数不合法（分母为 0）\n", axis_index);
+            return -1;
+        }
+        load_resolution = (unsigned long long)axis->encoder_increments *
+                          axis->gear_ratio_num /
+                          ((unsigned long long)axis->encoder_motor_revolutions *
+                           axis->gear_ratio_den);
         axis->pulses_per_degree = (double)load_resolution / 360.0;
     }
 
@@ -135,10 +151,11 @@ static void print_header(const topology_t *topo)
     for (i = 0; i < topo->axis_count; i++)
     {
         const axis_config_t *axis = &topo->axes[i];
-        printf("  轴 %zu: 1° = %.2f 脉冲 (编码器 %u, 齿轮比 %u:%u)\n",
+        printf("  轴 %zu: 1° = %.2f 脉冲 (编码器 %u/%u, 齿轮比 %u:%u)\n",
                i + 1,
                axis->pulses_per_degree,
-               axis->encoder_resolution,
+               axis->encoder_increments,
+               axis->encoder_motor_revolutions,
                axis->gear_ratio_num,
                axis->gear_ratio_den);
     }
