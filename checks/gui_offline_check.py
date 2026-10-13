@@ -444,25 +444,29 @@ def _cst_guard_repo():
 def check_mode_guard_blocks_cst(context):
     """CST 部署要被挡在**连套接字之前**：位置量纲的目标发到力矩模式上是静默错发。"""
     repo = _cst_guard_repo()
-    with fake_master.FakeMaster(publish_hz=200.0) as master:
-        args = [sys.executable, "-m", "emaster_gui",
-                "--deployment", "check-cst",
-                "--obs-endpoint", f"tcp:127.0.0.1:{master.obs_port}",
-                "--selftest", "3", "--selftest-takeover", "--no-confirm"]
-        done = subprocess.run(args, cwd=os.path.join(repo, "tools"), env=gui_env(),
-                              capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=120)
-        want(done.returncode == 0, f"界面退出码 {done.returncode}：{done.stdout[-2000:]}")
-        want(master.snapshot_counters()["commands"] == 0,
-             "CST 部署下命令口还是被连上了——护栏没在连之前拦住")
-        # 光拦住不够：**得让人看见为什么**。只拦不说，界面上是一片"主站状态未知"的
-        # 空白轴表，操作员会以为界面坏了，反复点接管。所以要求那句话确实出现过。
-        want("这个部署不能接管" in done.stdout,
-             f"被拒了却没说理由：{done.stdout}")
-        want("CST" in done.stdout and "已被拒绝" in done.stdout,
-             f"拒绝的理由说得不清楚：{done.stdout}")
-        want("轴表：没有快照" in done.stdout,
-             f"被拒的会话却产出了快照：{done.stdout}")
+    try:
+        with fake_master.FakeMaster(publish_hz=200.0) as master:
+            args = [sys.executable, "-m", "emaster_gui",
+                    "--deployment", "check-cst",
+                    "--obs-endpoint", f"tcp:127.0.0.1:{master.obs_port}",
+                    "--selftest", "3", "--selftest-takeover", "--no-confirm"]
+            done = subprocess.run(args, cwd=os.path.join(repo, "tools"), env=gui_env(),
+                                  capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", timeout=120)
+            want(done.returncode == 0, f"界面退出码 {done.returncode}：{done.stdout[-2000:]}")
+            want(master.snapshot_counters()["commands"] == 0,
+                 "CST 部署下命令口还是被连上了——护栏没在连之前拦住")
+            # 光拦住不够：**得让人看见为什么**。只拦不说，界面上是一片"主站状态未知"的
+            # 空白轴表，操作员会以为界面坏了，反复点接管。所以要求那句话确实出现过。
+            want("这个部署不能接管" in done.stdout,
+                 f"被拒了却没说理由：{done.stdout}")
+            want("CST" in done.stdout and "已被拒绝" in done.stdout,
+                 f"拒绝的理由说得不清楚：{done.stdout}")
+            want("轴表：没有快照" in done.stdout,
+                 f"被拒的会话却产出了快照：{done.stdout}")
+    finally:
+        # 这棵树是 mkdtemp 造的，不拆的话每跑一次检查在 /tmp 里留一份。
+        shutil.rmtree(repo, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- 单元面

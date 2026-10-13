@@ -130,12 +130,53 @@ static bool path_exists(const char *path)
     return stat(path, &info) == 0;
 }
 
+#define SCRATCH_TEMPLATE "/tmp/emaster-prune-XXXXXX"
+
 /* 夹具要摆在静态存储上：它装着一份完整报告，含现场环的两份 64 条样本。 */
 static report_fixture_t fixture;
 
+static char scratch_root[sizeof(SCRATCH_TEMPLATE)];
+
+/*
+ * 拆掉这棵临时树。挂在 atexit 上而不是写在末尾：中途那几处 return 2 也得走到这里，
+ * 补在末尾就会漏——每跑一次 ctest 在 /tmp 里留一个目录，跑上几十遍就是一堆。
+ * 树只有两层：根下 archive/ 装的全是文件，外加一个报告占位文件。
+ */
+static void remove_scratch(void)
+{
+    char path[sizeof(scratch_root) + 128U];
+    DIR *dir;
+    struct dirent *entry;
+
+    if (scratch_root[0] == '\0')
+    {
+        return;
+    }
+    (void)snprintf(path, sizeof(path), "%s/archive", scratch_root);
+    dir = opendir(path);
+    if (dir != NULL)
+    {
+        while ((entry = readdir(dir)) != NULL)
+        {
+            if (entry->d_name[0] == '.')
+            {
+                continue;
+            }
+            (void)snprintf(path, sizeof(path), "%s/archive/%s", scratch_root,
+                           entry->d_name);
+            (void)unlink(path);
+        }
+        (void)closedir(dir);
+        (void)snprintf(path, sizeof(path), "%s/archive", scratch_root);
+        (void)rmdir(path);
+    }
+    (void)snprintf(path, sizeof(path), "%s/bench-latest.json", scratch_root);
+    (void)unlink(path);
+    (void)rmdir(scratch_root);
+}
+
 int main(void)
 {
-    char root[] = "/tmp/emaster-prune-XXXXXX";
     /* 缓冲给得比最长的路径还宽裕：写歪了要红，但不该被 -Wformat-truncation 的
      * "理论最长"提前劝退（它按 archive 满 1024 算）。 */
     char archive[1024];
@@ -146,13 +187,18 @@ int main(void)
     unsigned int index;
     size_t deleted;
 
-    if (mkdtemp(root) == NULL)
+    if (mkdtemp(scratch_root) == NULL)
     {
         printf("  [不符] 造不出临时目录\n");
         return 2;
     }
-    (void)snprintf(archive, sizeof(archive), "%s/archive", root);
-    (void)snprintf(report_path, sizeof(report_path), "%s/bench-latest.json", root);
+    if (atexit(remove_scratch) != 0)
+    {
+        printf("  [不符] 注册不了退出清理\n");
+        return 2;
+    }
+    (void)snprintf(archive, sizeof(archive), "%s/archive", scratch_root);
+    (void)snprintf(report_path, sizeof(report_path), "%s/bench-latest.json", scratch_root);
     if (!make_directory(archive))
     {
         printf("  [不符] 造不出归档目录\n");

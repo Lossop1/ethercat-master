@@ -23,6 +23,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import sys
 import tempfile
 import time
@@ -407,18 +408,22 @@ def mode_guard_check():
             failures.append(label)
 
     print("\n6) 模式护栏")
-    csp = Engine(FakeClient("/tmp/fake-csp.sock"), "check-csp", repo_root=root)
-    check("位置模式（csp）放行", csp.mode_guard_passed(),
-          f"mode={csp._selected_mode or '(读不到)'}")
+    try:
+        csp = Engine(FakeClient("/tmp/fake-csp.sock"), "check-csp", repo_root=root)
+        check("位置模式（csp）放行", csp.mode_guard_passed(),
+              f"mode={csp._selected_mode or '(读不到)'}")
 
-    cst = Engine(FakeClient("/tmp/fake-cst.sock"), "check-cst", repo_root=root)
-    check("力矩模式（cst）拒绝", not cst.mode_guard_passed(), cst.message)
-    # attach 的第一件事就是这个判断——被拒时不该碰套接字（假客户端没有连接）。
-    check("被拒时 attach 直接返回，不连套接字", not cst.attach())
+        cst = Engine(FakeClient("/tmp/fake-cst.sock"), "check-cst", repo_root=root)
+        check("力矩模式（cst）拒绝", not cst.mode_guard_passed(), cst.message)
+        # attach 的第一件事就是这个判断——被拒时不该碰套接字（假客户端没有连接）。
+        check("被拒时 attach 直接返回，不连套接字", not cst.attach())
 
-    unknown = Engine(FakeClient("/tmp/fake-none.sock"), "no-such-deployment",
-                     repo_root=root)
-    check("读不到部署时不拦（护栏不猜）", unknown.mode_guard_passed())
+        unknown = Engine(FakeClient("/tmp/fake-none.sock"), "no-such-deployment",
+                         repo_root=root)
+        check("读不到部署时不拦（护栏不猜）", unknown.mode_guard_passed())
+    finally:
+        # 这棵树是 mkdtemp 造的，不拆的话每跑一次检查在 /tmp 里留一份。
+        shutil.rmtree(root, ignore_errors=True)
 
     if failures:
         print("\n模式护栏失败项：" + "，".join(failures))
