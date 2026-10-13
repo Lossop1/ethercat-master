@@ -26,6 +26,7 @@ import re
 import socket
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -77,14 +78,43 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
+def _width(text: str) -> int:
+    """终端里的显示宽度。中日韩字符占两列，按字符数补空格会对不齐。"""
+    return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
+
+
+def _print_block(title: str, rows: list[tuple[str, str]]) -> None:
+    """印一块"标签 值"的表。列宽按显示宽度算。"""
+    width = max(_width(label) for label, _ in rows)
+    print(f"\n{title}")
+    for label, text in rows:
+        print(f"  {label}{' ' * (width - _width(label))}  {text}")
+
+
+def _print_notes(notes: list[tuple[str, str]]) -> None:
+    """还没定下来的事，编号印出来。每条都能直接照做。空就不印。"""
+    if not notes:
+        return
+    width = max(_width(label) for label, _ in notes)
+    print(f"\n需要你确认 {len(notes)} 项")
+    for number, (label, text) in enumerate(notes, start=1):
+        print(f"  {number:>2}  {label}{' ' * (width - _width(label))}  {text}")
+
+
+def _print_next(*lines: str) -> None:
+    print("\n下一步")
+    for line in lines:
+        print(f"  {line}")
+
+
 def _write_json(path: Path, document: dict[str, Any]) -> None:
+    """只写文件，不打印 —— 输出由调用方汇总成一块，免得一屏全是"已写出"。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(document, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
         newline="\n",
     )
-    print(f"已写出 {path}")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -130,7 +160,7 @@ def _resolve_esi(argument: str) -> Path:
 
 
 def _pdo_set_draft(
-    facts: dict[str, Any], derived: dict[str, Any], notes: list[str]
+    facts: dict[str, Any], derived: dict[str, Any], notes: list[tuple[str, str]]
 ) -> list[dict[str, Any]]:
     """按 ESI 里的模块（或设备级声明）起草 PDO 方案列表。"""
     modules = facts.get("modules") or []
@@ -168,8 +198,11 @@ def _pdo_set_draft(
         )
         if len(usable) > 1:
             notes.append(
-                f"模块 {module['module_ident']} 还支持 {'/'.join(usable[1:])}；"
-                f"要这些模式就在同一套映射上照抄一份策略条目，只改 mode_value",
+                (
+                    "模式",
+                    f"模块 {module['module_ident']} 还支持 {'、'.join(usable[1:])}。"
+                    f"要就在策略档照抄一条，只改 mode_value。",
+                )
             )
     return draft
 
@@ -182,17 +215,20 @@ def add_device(args: argparse.Namespace) -> int:
     profile_id = _profile_id(derived["identity"], derived["model"])
     stem = _file_stem(profile_id)
 
-    notes: list[str] = []
+    notes: list[tuple[str, str]] = []
     policy_path = config / "device_policies" / f"{stem}.json"
     if policy_path.is_file():
         policy = _read_json(policy_path)
-        print(f"策略档已存在，按它合成：{policy_path}")
+        policy_state = "已存在，按它合成"
     else:
         observed_modes = derived["protocol"]["supported_modes"]
         if not observed_modes:
             notes.append(
-                "ESI 里没有模式信息，supported_modes 按 CiA 402 标准三种填了 csp/csv/cst；"
-                "台架上确认这台设备到底支持哪几种",
+                (
+                    "模式",
+                    "ESI 里没有模式信息，暂按 CiA 402 标准三种填了 csp、csv、cst。"
+                    "台架确认这一台支持哪几种。",
+                )
             )
             observed_modes = dict(STANDARD_MODE_VALUES)
         modes = _pdo_set_draft(facts, derived, notes)
@@ -206,41 +242,58 @@ def add_device(args: argparse.Namespace) -> int:
             "pdo_sets": modes,
         }
         notes.append(
-            "safe_stop_status_mask 填的是 0，含义是\"没有可靠的设备侧停机判据\"，"
-            "停机时只按标准 CiA 402 状态判据（未使能/未就绪）。"
-            "台架上量准之后把它填实",
+            (
+                "停机判据",
+                "当前为空，按 CiA 402 标准状态判据停机。台架实测后填 safe_stop_status_mask；"
+                "填错没人看得出来，它只影响主站自己的判定。",
+            )
         )
         notes.append(
-            "没有声明 slow_telemetry，报告里的慢速遥测列会是空的；"
-            "要母线电压、温度这类数据就照 config/README.md 补这张表",
+            (
+                "慢速遥测",
+                "未声明，报告里温度、母线电压、电流那几栏会是空的。"
+                "要就照 config/README.md 补 slow_telemetry。",
+            )
         )
         if not derived["protocol"]["assign_activate_by_strategy"].get("dc"):
             notes.append(
-                "这份 ESI 没有声明 DC 同步（<Dc><OpMode> 那一段），init-site 将拒绝为它"
-                "生成运行方案。别在这里编同步参数：要么把 ESI 补全再重新跑本命令，"
-                "要么照 config/README.md『运行方案』手写一份 SM 方案",
+                (
+                    "同步",
+                    "这份 ESI 没声明 DC（缺 <Dc><OpMode>），init-site 会拒绝生成运行方案。"
+                    "补 ESI，不要在这里编同步参数。",
+                )
             )
         _write_json(policy_path, policy)
+        policy_state = "新建，改了要重跑本命令"
 
     merged = merge_device_profile.build(
         derived, policy, esi_path.as_posix()
     )
     _write_json(config / "devices" / f"{stem}.json", merged)
 
-    print(f"\n设备档：{profile_id}")
-    print(f"  PDO 方案 {len(merged['pdo_sets'])} 套，模式 {'/'.join(merged['protocol']['supported_modes'])}")
+    identity = merged["identity"]
+    _print_block(
+        f"设备档 {profile_id}",
+        [
+            (
+                "身份",
+                f"{identity['vendor_id']} / {identity['product_code']}"
+                f" / rev {int(str(identity['revision']), 16)}",
+            ),
+            ("PDO", f"{len(merged['pdo_sets'])} 套"),
+            ("模式", " ".join(merged["protocol"]["supported_modes"])),
+            ("策略档", f"{policy_path}（{policy_state}）"),
+            ("设备档", str(config / "devices" / f"{stem}.json")),
+        ],
+    )
     _print_notes(notes)
-    print(f"\n下一步：python gen/emaster_config.py init-site --device {profile_id} --interface <网卡>")
-    print(f"  改了策略档 {policy_path} 之后要重跑本命令：只有这里会把策略档合并进设备档")
+    _print_next(
+        "build/apps/diagnose_slave/emaster-scan <网卡> > scan.txt    # 只读；环上有几台、各是什么",
+        f"python3 gen/emaster_config.py init-site --device {profile_id} "
+        f"--interface <网卡> --from-scan scan.txt",
+        "台数和逐台身份都从扫描来，不用手填 --slaves。",
+    )
     return 0
-
-
-def _print_notes(notes: list[str]) -> None:
-    if not notes:
-        return
-    print("\n还需要人工确认：")
-    for note in notes:
-        print(f"  - {note}")
 
 
 def _mode_rank(mode_id: str) -> int:
@@ -353,12 +406,77 @@ def _refuse_if_exists(paths: list[Path], force: bool) -> None:
         )
 
 
+def _cycle_text(cycle_ns: int) -> str:
+    return f"{cycle_ns // 1_000_000}ms" if cycle_ns % 1_000_000 == 0 else f"{cycle_ns}ns"
+
+
 def _operation_id(device: dict[str, Any], mode: str, cycle_ns: int) -> str:
-    if cycle_ns % 1_000_000 == 0:
-        cycle_text = f"{cycle_ns // 1_000_000}ms"
-    else:
-        cycle_text = f"{cycle_ns}ns"
-    return f"{_slug(device['model'])}.dc-{mode}-{cycle_text}"
+    return f"{_slug(device['model'])}.dc-{mode}-{_cycle_text(cycle_ns)}"
+
+
+def _read_scan(path: Path) -> tuple[int, list[dict[str, str]]]:
+    """读 emaster-scan 的输出，返回台数与逐台身份。
+
+    输出是 key=value 的纯文本：一条 `slaves=N`，之后每台一条 `slave=…` 行。
+    只取本命令用得上的一部分，其余原样不管 —— 扫描输出还会加字段，那不该
+    让这里失效。
+    """
+    if not path.is_file():
+        raise SystemExit(f"找不到扫描输出 {path}\n先跑：emaster-scan <网卡> > {path}")
+    line = re.compile(
+        r"slave=(?P<position>\d+) name=(?P<name>.*?)"
+        r" vendor=0x(?P<vendor>[0-9A-Fa-f]+)"
+        r" product=0x(?P<product>[0-9A-Fa-f]+)"
+        r" revision=0x(?P<revision>[0-9A-Fa-f]+)"
+    )
+    total: int | None = None
+    scanned: list[dict[str, str]] = []
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        raw = raw.strip()
+        if raw.startswith("slaves="):
+            total = int(raw.split("=", 1)[1])
+            continue
+        match = line.match(raw)
+        if match:
+            scanned.append(match.groupdict())
+    if total is None or not scanned:
+        raise SystemExit(
+            f"{path} 不像 emaster-scan 的输出：没有 slaves= 行，或者没有 slave= 行。\n"
+            f"先跑：emaster-scan <网卡> > {path}"
+        )
+    if total != len(scanned):
+        raise SystemExit(
+            f"{path} 自相矛盾：slaves={total}，逐台行却只有 {len(scanned)} 条"
+        )
+    return total, scanned
+
+
+def _check_scan_identity(device: dict[str, Any], scanned: list[dict[str, str]]) -> None:
+    """拿扫到的逐台身份跟设备档对。对不上要点名到台。
+
+    只报"身份不一致"等于没说：环上有几台、哪一台不对、差在型号还是版本，
+    都是现场要的。这里在读配置的时候就把话说清楚。
+    """
+    expected = device["identity"]
+    wanted = (
+        int(str(expected["vendor_id"]), 16),
+        int(str(expected["product_code"]), 16),
+        int(str(expected["revision"]), 16),
+    )
+    for entry in scanned:
+        got = (
+            int(entry["vendor"], 16),
+            int(entry["product"], 16),
+            int(entry["revision"], 16),
+        )
+        if got != wanted:
+            raise SystemExit(
+                f"第 {entry['position']} 台不是 {device['profile_id']}。\n"
+                f"  总线上：{entry['name']} "
+                f"0x{got[0]:08X} / 0x{got[1]:08X} / rev {got[2]}\n"
+                f"  设备档：0x{wanted[0]:08X} / 0x{wanted[1]:08X} / rev {wanted[2]}\n"
+                f"换电机就重新跑 add-device，接错线就查线。"
+            )
 
 
 def init_site(args: argparse.Namespace) -> int:
@@ -369,7 +487,22 @@ def init_site(args: argparse.Namespace) -> int:
 
     host = args.hostname or socket.gethostname()
     host_slug = _slug(host)
-    axis_count = args.slaves
+    if args.from_scan:
+        scan_path = Path(args.from_scan)
+        axis_count, scanned = _read_scan(scan_path)
+        _check_scan_identity(device, scanned)
+        axis_note = (
+            "轴数",
+            f"{axis_count} 台，来自扫描 {scan_path}，逐台身份已核对。"
+            f"环序到物理关节的对应仍未确认。",
+        )
+    else:
+        axis_count = args.slaves
+        axis_note = (
+            "轴数",
+            f"按 --slaves {axis_count} 填的，没跟实物比过。"
+            f"接上真机跑 emaster-scan 核对；环序到物理关节的对应也仍未确认。",
+        )
     topology_id = f"{host_slug}-{axis_count}-axis"
     operation_id = _operation_id(device, args.mode, args.cycle_ns)
     deployment_id = f"{topology_id}-idle"
@@ -424,17 +557,36 @@ def init_site(args: argparse.Namespace) -> int:
     _write_json(operation_path, operation)
     _write_json(deployment_path, deployment)
 
-    notes = [
-        "拓扑的 status 是 provisional、从站数按 --slaves 给的填；"
-        "接上真机核对总线顺序和轴数后再改成 observed",
-        f"运行方案里只有 DC 同步和模式字段，没有 safeop_to_op_sdo_writes 与 "
-        f"final_sdo_reads —— 那两份表是台架按型号逐个挑出来的诊断项",
-        "realtime 只给了优先级、没绑核；要绑核按目标机的核数补 cpu_core，"
-        "计时类实验还要把 required 改成 true",
-    ]
-    print(f"\n现场：{deployment_id}（{args.interface}，{axis_count} 轴，{args.mode}）")
-    _print_notes(notes)
-    print("\n下一步：python gen/emaster_config.py build")
+    _print_block(
+        "已生成",
+        [
+            ("拓扑", f"{topology_id}     {axis_count} 轴，状态 provisional"),
+            (
+                "运行方案",
+                f"{operation_id}     {args.mode} / {_cycle_text(args.cycle_ns)} / DC",
+            ),
+            ("部署", f"{deployment_id}     {args.interface}"),
+        ],
+    )
+    _print_notes(
+        [
+            axis_note,
+            (
+                "诊断项",
+                "运行方案里没有 safeop_to_op_sdo_writes 和 final_sdo_reads，"
+                "那两张表要按型号在台架挑。",
+            ),
+            (
+                "实时",
+                "只给了调度优先级，没绑核。要绑核补 realtime.cpu_core，"
+                "计时类实验还要把 realtime.required 改成 true。",
+            ),
+        ]
+    )
+    _print_next(
+        "python3 gen/emaster_config.py build",
+        "生成主站读的四族扁平文件。",
+    )
     return 0
 
 
@@ -501,8 +653,12 @@ def build(args: argparse.Namespace) -> int:
             sys.stderr.write(done.stderr)
             print(f"{script} 失败，退出码 {done.returncode}", file=sys.stderr)
             return done.returncode
-    print(f"\n四族扁平文件已写入 {out}")
-    print(f"主站这样读：--config-dir {out}")
+    _print_block("已写出", [(name, str(out / name)) for _, _, name in steps])
+    _print_next(
+        f"sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 "
+        f"./build/apps/master/emaster-master --config-dir {out}'",
+        "起主站。同机有多份部署档时再加 --deployment <部署 ID>。",
+    )
     return 0
 
 
@@ -520,6 +676,10 @@ def main() -> int:
     site.add_argument("--interface", required=True, help="只跑 EtherCAT 的物理网卡")
     site.add_argument("--hostname", help="运行主站的主机名，缺省取本机")
     site.add_argument("--slaves", type=int, default=1, help="从站数，缺省 1")
+    site.add_argument(
+        "--from-scan",
+        help="emaster-scan 的输出文件；给了就用它的台数和身份，不用 --slaves",
+    )
     site.add_argument("--cycle-ns", type=int, default=DEFAULT_CYCLE_NS, help="周期，缺省 1 ms")
     site.add_argument("--mode", default="csp", help="运行模式，缺省 csp")
     site.add_argument("--pdo-set", help="用哪套 PDO 方案，缺省设备档的参照方案")

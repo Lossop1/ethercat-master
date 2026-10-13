@@ -333,9 +333,9 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
             mask_is_zero = False
         check.warn(
             not mask_is_zero,
-            f"设备 {profile_id} 的 safe_stop_status_mask 为 0：停机只走标准 CiA 402 状态判据。"
-            "状态字不符合标准的驱动器（真使能时 0x6041 读 0x1250 这类）会被误判为已安全，"
-            "必须先在台架量准两个状态的 0x6041 再填实",
+            f"设备 {profile_id} 的停机判据是空的（safe_stop_status_mask=0），"
+            "停机只按标准 CiA 402 状态判据。真使能时 0x6041 读 0x1250 这类驱动器会被误判为"
+            "已安全。台架量准 0x6041 后填实。",
         )
 
     # 缺省合法：厂商资料没给换算来源，是句实话；本仓也没有消费者读它

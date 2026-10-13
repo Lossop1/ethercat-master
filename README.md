@@ -106,49 +106,58 @@ ctest --test-dir build-offline --output-on-failure
 
 ## 3 快速上手：从 ESI 到主站跑起来
 
+前提：第 2 节构建完成。每条命令都在仓库根目录执行。
+
 ```bash
 # 1 放入 ESI。一台型号一个目录，目录名随意
 cp <厂商给的>/*.xml esi/<你的型号>/
 
-# 2 从 ESI 生成设备档草稿和策略档草稿
+# 2 从 ESI 生成设备档和策略档
 python3 gen/emaster_config.py add-device esi/<你的型号>/*.xml
 
-# 3 人工补上推不出来的字段。<文件名> 是第 2 步打印的
+# 3 补上推不出来的字段。<文件名> 由第 2 步打印
 $EDITOR config/device_policies/<文件名>.json
 
-# 4 生成拓扑、运行方案与部署。<轴数> 是环上的从站数，不给就是 1
-#   设备档 ID 和第 4 步这条命令都由第 2 步打印
-python3 gen/emaster_config.py init-site --device <设备档 ID> \
-  --interface <网卡> --slaves <轴数>
+# 4 只读扫描总线：环上有几台、每台各是什么型号
+build/apps/diagnose_slave/emaster-scan <网卡> > scan.txt
 
-# 5 写每轴换算与限幅
+# 5 生成拓扑、运行方案与部署。轴数和逐台身份都取自扫描
+python3 gen/emaster_config.py init-site --device <设备档 ID> \
+  --interface <网卡> --from-scan scan.txt
+
+# 6 写每轴换算与限幅
 $EDITOR config/motion_profiles/<你的>.json
 
-# 6 生成 config-runtime/*.flat
+# 7 生成 config-runtime/*.flat
 python3 gen/emaster_config.py build
 
-# 7 起主站
+# 8 起主站
 sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
   ./build/apps/master/emaster-master --config-dir config-runtime'
 ```
 
-**第 3 步是唯一推不出来的地方。** 第 2 步会打印一张"还需要人工确认"的清单，逐条处理它。
+第 2 步的"设备档 ID"和第 5 步那条命令，第 2 步会打印出来，照抄。
+
+**第 3 步是唯一推不出来的地方。** 第 2 步会打印一张待确认清单，逐条处理它。
+
+**第 4 步只在主站没在跑的时候做。** `emaster-scan` 会驱动总线并把从站还原到 INIT；主站在跑时执行会打断它。
 
 各步的产出与失败点：
 
 | 步 | 产出 | 失败看哪 |
 | --- | --- | --- |
 | 2 | `config/devices/`、`config/device_policies/` | 退出码非 0，并打印冲突的 PDO 集合。原因：ESI 里既没有默认分配（`#x1C12`/`#x1C13` 的 `DefaultData`），也没有 `Sm="2"`/`Sm="3"` 标记 |
-| 4 | `config/topologies/`、`config/operation_profiles/`、`config/deployments/` | 报"厂商没声明 DC"。原因：ESI 里没有 `<Dc><OpMode>` 段。两条路：补 ESI，或照实测手写一份 SM 方案。忘了 `--slaves` 会得到一份 1 轴的拓扑 |
-| 6 | `config-runtime/*.flat` | 校验失败会逐个指名字段 |
+| 4 | `scan.txt` | 报"一台从站都没扫到"。查网卡名写错、从站没上电、环没接好 |
+| 5 | `config/topologies/`、`config/operation_profiles/`、`config/deployments/` | 报"第 N 台不是 <设备档>"。总线上的型号和版本跟设备档对不上，点名到台。报"厂商没声明 DC"：ESI 里没有 `<Dc><OpMode>` 段，补 ESI，不要自己编同步参数 |
+| 7 | `config-runtime/*.flat` | 校验失败会逐个指名字段 |
 
-`init-site` 的 `assign_activate` 取自 ESI，不猜。**不要自己编一个同步参数填上。** 填错会把从站的同步生成配成另一套，主机这边只看到 DC 对不上。
+`init-site` 的 `assign_activate` 取自 ESI，不猜。填错会把从站的同步生成配成另一套，主机这边只看到 DC 对不上。
 
-第 2、4、6 步都可以重复执行：
+第 2、5、7 步可以重复执行：
 
 - 改了策略档，必须重跑第 2 步。只有它会合并策略档。
-- 改了设备档或现场参数，必须重跑第 4 步。
-- 任何配置改动，都必须重跑第 6 步并重启主站。
+- 改了设备档或现场参数，必须重跑第 5 步。
+- 任何配置改动，都必须重跑第 7 步并重启主站。
 
 轴数来自部署档，硬件换算在主站启动时读回，恢复阈值来自错误恢复策略。
 
@@ -306,7 +315,7 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | 工具 | 说明 |
 | --- | --- |
 | `emaster-master` | 主站 |
-| `emaster-scan` | 只读扫描：逐台身份、AL 状态、`0x6041`、故障码、换算 |
+| `emaster-scan` | 只读扫描：逐台身份、AL 状态、`0x6041`、故障码、换算。第 3 节第 4 步用它 |
 | `emaster-disable` | **走邮箱把驱动器失能**。主站起不来时也能用 |
 | `emaster-watch [间隔ms] --deployment <ID>` | 实时监控位置／速度／力矩／状态字 |
 | `emaster-move-deg --deployment <ID>` | 交互式角度控制，自动换算 |
