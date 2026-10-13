@@ -32,8 +32,15 @@
  * src/audit/CMakeLists.txt）：
  *   gcc -std=c11 -Iinclude -o tmp/test_report_fault_fields \
  *       tests/unit/audit/test_report_fault_fields.c \
- *       src/audit/run_report.c src/audit/report_sections.c src/audit/json_writer.c
+ *       src/audit/run_report.c src/audit/report_sections.c src/audit/json_writer.c \
+ *       src/cyclic/histogram.c \
+ *       src/diagnostics/error_class.c src/diagnostics/cia402_error.c \
+ *       src/diagnostics/al_status.c src/audit/report_error_class.c
  *   ./tmp/test_report_fault_fields /tmp/out.json
+ *
+ * 最后三个源文件是诊断码表，report_sections.c 要调它：漏掉就是链接失败。
+ * 这份清单是 checks/report_sources_closure.py 算出来的闭包，与 checks/report_axis_fault_check.py、
+ * checks/report_archive_check.py 里的 SOURCES 同源，改动要一起改。
  */
 #include "emaster/audit/run_report.h"
 

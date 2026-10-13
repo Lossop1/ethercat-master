@@ -33,9 +33,15 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEST = os.path.join(ROOT, "tests", "unit", "audit", "test_report_prune.c")
 RUN_REPORT = os.path.join(ROOT, "src", "audit", "run_report.c")
-MODEL = os.path.join(ROOT, "tools", "runtime_config_model.py")
+MODEL = os.path.join(ROOT, "gen", "runtime_config_model.py")
+# report_sections.c 要调诊断码表（类别键、类别文本、CiA 402 码解释、AL 码判同步），
+# 少一个源文件就是链接失败——而失败长成"用例建得起来"那一条不对，看着像检查本身坏了。
+# 这份清单是 checks/report_sources_closure.py 算出来的闭包；加模块后重算一次，别靠撞链接错误。
 SOURCES = ("src/audit/run_report.c", "src/audit/report_sections.c",
-           "src/audit/json_writer.c", "src/cyclic/histogram.c")
+           "src/audit/json_writer.c", "src/cyclic/histogram.c",
+           "src/diagnostics/error_class.c", "src/diagnostics/cia402_error.c",
+           "src/diagnostics/al_status.c",
+           "src/audit/report_error_class.c")
 
 # 用例里的形状：25 份旧的 + 刚发布那一份，保留 20 份 ⇒ 削掉 6 份，正是最旧的那 6 份。
 DELETED = 6

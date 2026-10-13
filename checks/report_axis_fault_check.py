@@ -33,7 +33,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEST = os.path.join(ROOT, "tests", "unit", "audit", "test_report_fault_fields.c")
 SECTIONS = os.path.join(ROOT, "src", "audit", "report_sections.c")
 SOURCES = ("src/audit/run_report.c", "src/audit/report_sections.c",
-           "src/audit/json_writer.c", "src/cyclic/histogram.c")
+           "src/audit/json_writer.c", "src/cyclic/histogram.c",
+           "src/diagnostics/error_class.c", "src/diagnostics/cia402_error.c",
+           "src/diagnostics/al_status.c",
+           "src/audit/report_error_class.c")
 
 # 变异：把 runtime 对象收尾的两个括号去掉一个。这是"加字段时数错了括号"的真实长相，
 # C 照样编得过、C 用例的子串断言照样全过，只有 JSON 会解析不了。
@@ -115,6 +118,7 @@ def check(sections, workdir):
 
 
 def main():
+    global PASSED, FAILED
     if platform.system() != "Linux":
         print(f"SKIP  本机是 {platform.system()}：src/audit 的报告库只在 Linux 上建，"
               f"这里没得验（CI 上会真跑）。")
@@ -128,10 +132,23 @@ def main():
             print("变异点找不到——report_sections.c 里 runtime 的收尾写法变了，"
                   "这个检查得跟着改。", file=sys.stderr)
             return 2
+        # 先跑一遍没变异的。少了这一步，构建坏掉时下面那条"FAILED 非空即算抓住"
+        # 会把链接失败当成抓住变异——检查恒绿。这正是一次真实经过：诊断码表加进
+        # report_sections.c 后没人更新 SOURCES，本检查红了，变异对照照旧绿。
         with tempfile.TemporaryDirectory() as tmp:
+            PASSED = 0
+            FAILED = 0
+            check(SECTIONS, tmp)
+            if FAILED:
+                print(f"\n基线就不通过（{FAILED} 项不符）：先修上面这些，"
+                      f"这时的对照不说明任何事。", file=sys.stderr)
+                return 2
+
             mutated = os.path.join(tmp, "report_sections_mutated.c")
             with open(mutated, "w", encoding="utf-8") as handle:
                 handle.write(source.replace(MUTATE_FROM, MUTATE_TO, 1))
+            PASSED = 0
+            FAILED = 0
             check(mutated, tmp)
         if FAILED:
             print(f"\n变异被抓住：{FAILED} 项不符（这正是要证明的）")

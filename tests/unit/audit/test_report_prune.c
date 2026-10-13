@@ -32,8 +32,13 @@
  * src/audit/CMakeLists.txt）：
  *   gcc -std=c11 -Iinclude -o tmp/test_report_prune \
  *       tests/unit/audit/test_report_prune.c \
- *       src/audit/run_report.c src/audit/report_sections.c src/audit/json_writer.c
+ *       src/audit/run_report.c src/audit/report_sections.c src/audit/json_writer.c \
+ *       src/cyclic/histogram.c \
+ *       src/diagnostics/error_class.c src/diagnostics/cia402_error.c \
+ *       src/diagnostics/al_status.c src/audit/report_error_class.c
  *   ./tmp/test_report_prune
+ *
+ * 最后三个源文件是诊断码表，report_sections.c 要调它：漏掉就是链接失败。
  */
 /* mkdtemp 在严格 ANSI 模式下对 glibc 不可见，得在任何头文件之前先声明要哪个方言。 */
 #define _POSIX_C_SOURCE 200809L
