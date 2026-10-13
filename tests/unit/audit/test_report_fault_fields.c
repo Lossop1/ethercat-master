@@ -344,15 +344,62 @@ int main(int argc, char **argv)
               "与轴 1 的'未读到'必须分得开，这正是这一层存在的理由");
     }
 
+    /* ── 丢失链计数 ─────────────────────────────────────────────────────── */
+    printf("丢失链计数\n");
+    if (!axis_section(text, 1U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 1 的对象分界（丢失链计数）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"error_counters_read\":true,"
+                     "\"rx_error_counter\":[0,0,0,0,0,0,0,0],"
+                     "\"forwarded_rx_error_counter\":[0,0,0,0],"
+                     "\"lost_link_counter\":[0,0,0,3],"
+                     "\"lost_link_counter_first\":[0,0,0,2],"
+                     "\"lost_link_counter_first_valid\":true") != NULL,
+              "轴 1 末端口上电以来 2 次、本轮 3 次：键排在两个 RX 计数器之后（错位就断在这里）");
+    }
+    if (!axis_section(text, 2U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 2 的对象分界（丢失链计数）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"lost_link_counter\":[0,5,0,0],"
+                     "\"lost_link_counter_first\":[0,5,0,0],"
+                     "\"lost_link_counter_first_valid\":true") != NULL,
+              "轴 2 首末一样，本轮一次没断——绝对值非零不等于本轮断过");
+    }
+    if (!axis_section(text, 3U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 3 的对象分界（丢失链计数）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"error_counters_read\":false,"
+                     "\"rx_error_counter\":[0,0,0,0,0,0,0,0],"
+                     "\"forwarded_rx_error_counter\":[0,0,0,0],"
+                     "\"lost_link_counter\":[7,0,0,0],"
+                     "\"lost_link_counter_first\":[0,0,0,0],"
+                     "\"lost_link_counter_first_valid\":false") != NULL,
+              "轴 3 计数没更新却留着 7：判据是 read，不是值是否为 0");
+    }
+
     /* ── 停机来源与归档保留份数 ────────────────────────────────────────── */
     printf("结果级字段\n");
-    /* 是 11 而不是 6/8：6 早被那批游离提交占用（带 tracking_error 的那种形状），
+    /* 是 12 而不是 6/8：6 早被那批游离提交占用（带 tracking_error 的那种形状），
      * 同一版本号下并存两种形状正是这次要避开的。见 report_sections.c 里那段注释。
      * 升到 10 的理由：多了分类层，报告怎么被解读变了——旧脚本以为 status_code 就是
      * 结论，而它现在只是输入。升到 11 的理由：逐轴多了首次不符当下的 1C32/1C33
-     * 计数器（first_mismatch_sm2/sm3），旧报告里这一层不存在。 */
-    check(strstr(text, "\"schema_version\":11") != NULL,
-          "schema_version 是 11（加了首次不符的同步计数器就要升版本）");
+     * 计数器（first_mismatch_sm2/sm3），旧报告里这一层不存在。升到 12 的理由：
+     * shutdown_disable 的键改名——旧报告里叫 verified 的那一列读起来像"已失能"。
+     * 升到 13 的理由：逐轴多了丢失链计数（ESC 0x0310）。 */
+    check(strstr(text, "\"schema_version\":13") != NULL,
+          "schema_version 是 13（逐轴多了丢失链计数就要升版本）");
     check(strstr(text,
                  "\"error_class\":\"DRIVE_FAULT\",\"error_class_text\":\"驱动器自报故障\","
                  "\"error_class_evidence_no_frame\":false,"
@@ -368,6 +415,19 @@ int main(int argc, char **argv)
           "stop_source 是 2 = COMMAND（命令口发的停机）");
     check(strstr(text, "\"report_archive_keep\":200") != NULL,
           "deployment 里带上了本次生效的归档保留份数（P12.29）");
+
+    /* ── 停机失能核对与它用的判据 ──────────────────────────────────────── */
+    /*
+     * 一处整串比对把三件事一起钉住：键名（叫 verified 就会在这里断）、键序
+     * （格式串与实参错位是这份文件里反复出现的形状，见上面 still_enabled 那条）、
+     * 以及判据枚举到 ASCII 键的映射。值层面另外靠 attempted=2 露绑定错误。
+     */
+    printf("停机失能核对\n");
+    check(strstr(text,
+                 "\"shutdown_disable\":{\"attempted\":2,\"statusword_bit2_clear\":1,"
+                 "\"statusword_bit2_set\":1,\"statusword_unreadable\":1},"
+                 "\"shutdown_stop_criterion\":\"standard_cia402\"") != NULL,
+          "失能核对三个键说的是读到了什么（不是'已失能'），判据键是 standard_cia402");
 
     free(text);
 

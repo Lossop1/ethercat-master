@@ -43,6 +43,8 @@ static const char *session_status_text(emaster_control_session_status_t status) 
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_DC_SYNC_FAILED);
     case EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_SAFE_STOP_FAILED);
+    case EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED:
+        return emaster_text(EMASTER_TEXT_CONTROL_SESSION_UNCONFIRMED);
     case EMASTER_CONTROL_SESSION_AUDIT_FAILED:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_FAILED);
     case EMASTER_CONTROL_SESSION_INTERFACE_OPEN_FAILED:
@@ -72,6 +74,21 @@ static const char *session_status_text(emaster_control_session_status_t status) 
 static const char *result_text(bool value) {
     return emaster_text(value ? EMASTER_TEXT_CONTROL_SESSION_MATCH
                               : EMASTER_TEXT_CONTROL_SESSION_MISMATCH);
+}
+
+/*
+ * 停用确认不是二值。判据没命中、但轴已经离开运行使能的那一档单独说"未确认"：
+ * 它与"失败"的处置相反（一个要查判据档，一个要查总线或驱动器），合成一个词会让
+ * 客户对惯常出现的红失去反应，真正危险的那次也就跟着被略过。
+ */
+static const char *stop_confirmation_text(const emaster_control_session_report_t *report) {
+    if (report->safe_state_reached) {
+        return emaster_text(EMASTER_TEXT_CONTROL_SESSION_MATCH);
+    }
+    if (report->status == EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED) {
+        return emaster_text(EMASTER_TEXT_CONTROL_SESSION_UNCONFIRMED);
+    }
+    return emaster_text(EMASTER_TEXT_CONTROL_SESSION_MISMATCH);
 }
 
 void emaster_master_console_result(const emaster_session_plan_t *plan,
@@ -160,7 +177,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                                          : result_text(report->motion_completed),
             (unsigned int)report->expected_wkc, report->actual_wkc,
             (unsigned long long)report->cycle_count, result_text(report->stop_requested),
-            result_text(report->safe_output_sent), result_text(report->safe_state_reached),
+            result_text(report->safe_output_sent), stop_confirmation_text(report),
             result_text(report->sync0_disabled), result_text(report->restore_init_succeeded));
     /*
      * 分类行紧跟在汇总行后面：汇总行给的是"走到哪一步"，这一行给的是"出了什么事"。
@@ -217,6 +234,10 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
     }
     if (report->status == EMASTER_CONTROL_SESSION_OK) {
         fputs(emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUCCESS), stdout);
+    } else if (report->status == EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED) {
+        /* 未确认不是"失败"：轴确实停了，只是没碰到判据。停在 stderr 上是因为
+         * 退出码仍非 0——脚本按失败处理，人看的这句得说清是哪一种。 */
+        fputs(emaster_text(EMASTER_TEXT_CONTROL_SESSION_UNCONFIRMED_DONE), stderr);
     } else {
         fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FAILED),
                 session_status_text(report->status));

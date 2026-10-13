@@ -90,6 +90,8 @@ MESSAGE_KEYS = [
     "control_session_error_class_line",
     "control_session_match",
     "control_session_mismatch",
+    "control_session_unconfirmed",
+    "control_session_unconfirmed_done",
     "control_session_not_configured",
     "control_session_sdo_write_failed",
     "control_session_sdo_readback_failed",

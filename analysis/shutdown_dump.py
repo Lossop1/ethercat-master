@@ -45,26 +45,26 @@ def first_mismatch(index, axis):
 def dump_disable(report):
     """停机时逐台走邮箱读 0x6041 的记录（不是 safe_state_reached 那种主站视角）。
 
-    bit2=0（报告里叫 verified）不代表已失能：真使能时也读到 0x1250。
-    bit2=1（still_enabled）才能证明还在使能。
+    键名说的是**读到了什么**，不是"失能成没成"：真使能时 bit2 也读到 0，
+    所以 statusword_bit2_clear 不等于已失能。真还使能的证据是 statusword_bit2_set。
     """
     block = report.get("shutdown_disable")
     if not block:
         print("  失能核对：报告里没有这一段（schema_version 8 及以前）")
         return
-    attempted = block.get("attempted", "?")
-    verified = block.get("verified", "?")
-    enabled = block.get("still_enabled", "?")
-    unverified = block.get("unverified", "?")
     print("  0x6041 核对：写入尝试 %s 台 / bit2=0 %s 台 / bit2=1 %s 台 / 读不回 %s 台"
-          % (attempted, verified, enabled, unverified))
-    print("            （bit2=0 不等于已失能）")
-    if enabled:
+          % (block.get("attempted", "?"), block.get("statusword_bit2_clear", "?"),
+             block.get("statusword_bit2_set", "?"),
+             block.get("statusword_unreadable", "?")))
+    print("            （bit2=0 不等于已失能；本轮停机判据=%s）"
+          % report.get("shutdown_stop_criterion", "?"))
+    if block.get("statusword_bit2_set"):
+        # 每轴那一块嵌在 shutdown_cia402 下（原来读的是扁平键，条件恒假）。
         print("            ！仍使能的轴：%s" % " ".join(
             "#%d" % (index + 1)
             for index, axis in enumerate(report.get("axes") or [])
-            if axis.get("shutdown_statusword_read")
-            and (axis.get("shutdown_statusword") or 0) & 0x0004))
+            if (axis.get("shutdown_cia402") or {}).get("statusword_read")
+            and ((axis.get("shutdown_cia402") or {}).get("statusword") or 0) & 0x0004))
 
 
 def dump_prologue(report):

@@ -60,6 +60,9 @@ typedef enum
     /* ── 其余 ── */
     EMASTER_ERROR_CLASS_MOTION,            /* 运动层：目标非法、跟随误差 */
     EMASTER_ERROR_CLASS_SHUTDOWN,          /* 停机阶段失败：安全停、恢复 INIT */
+    /* 停机未确认：轴已离开运行使能，但没命中配置的停机判据。与 SHUTDOWN 分开，
+     * 因为处置相反——这一档要查的是判据本身（掩码没填），那一档要查总线或驱动器。 */
+    EMASTER_ERROR_CLASS_SHUTDOWN_UNCONFIRMED,
     EMASTER_ERROR_CLASS_AUDIT,             /* 审计层失败 */
     EMASTER_ERROR_CLASS_INTERNAL           /* 内存等内部失败 */
 } emaster_error_class_t;

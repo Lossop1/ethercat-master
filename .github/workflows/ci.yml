@@ -82,6 +82,24 @@ jobs:
       - name: 停机路径检查的判别力（离线，期望不通过）
         run: python3 checks/stop_path_check.py --mutate
 
+      # 停机那两行结论本身也要立住：失能核对的键名说的是"读到了什么"（不是"已失能"），
+      # "未确认"靠末拍状态字判而不靠邮箱，且它在报告里落成单独一类。改回旧名、换判据、
+      # 把三值又抹成二值，都必须变红。
+      - name: 停机结论的三档与失能字段名（离线）
+        run: python3 checks/shutdown_verdict_check.py
+
+      - name: 停机结论检查的判别力（离线，期望不通过）
+        run: python3 checks/shutdown_verdict_check.py --mutate
+
+      # 丢失链计数是报告里唯一能把"链断过"与"收包超时"分开的读数。它必须真的被读到
+      # （0x0300 起 20 字节）、取自对的偏移（0x0310），并落进报告的键。偏移错一位、
+      # 块缩到够不着、键改名，都必须变红。
+      - name: 丢失链计数读得到、落得进报告（离线）
+        run: python3 checks/lost_link_counter_check.py
+
+      - name: 丢失链计数检查的判别力（离线，期望不通过）
+        run: python3 checks/lost_link_counter_check.py --mutate
+
       - name: 慢速遥测渲染的判别力（离线，期望不通过）
         run: python3 checks/report_telemetry_check.py --mutate
 

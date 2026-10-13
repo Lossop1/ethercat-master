@@ -41,6 +41,21 @@ static const char *direction_name(emaster_audit_direction_t direction)
     return direction == EMASTER_AUDIT_DIRECTION_WRITE ? "write" : "read";
 }
 
+/* 停机判据的稳定 ASCII 键：给分析脚本读，不随重构改名（与 error_class 同一套约定）。 */
+static const char *shutdown_criterion_key(emaster_shutdown_stop_criterion_t criterion)
+{
+    switch (criterion)
+    {
+    case EMASTER_SHUTDOWN_CRITERION_DEVICE_MASK:
+        return "device_mask";
+    case EMASTER_SHUTDOWN_CRITERION_STANDARD_CIA402:
+        return "standard_cia402";
+    case EMASTER_SHUTDOWN_CRITERION_NONE:
+        break;
+    }
+    return "none";
+}
+
 static uint64_t value_bits(const emaster_audit_access_t *access)
 {
     uint64_t value = access->value_kind == EMASTER_AUDIT_VALUE_SIGNED
@@ -733,6 +748,11 @@ static bool write_axis(FILE *stream,
         ",\"error_counters_read\":%s"
         ",\"rx_error_counter\":[%u,%u,%u,%u,%u,%u,%u,%u]"
         ",\"forwarded_rx_error_counter\":[%u,%u,%u,%u]"
+        /* 0x0310 起每端口一个字节：断链计数。first 是会话第一次读到的基准，
+         * 两者相减才是本轮；这个计数器上电以来一直累加。 */
+        ",\"lost_link_counter\":[%u,%u,%u,%u]"
+        ",\"lost_link_counter_first\":[%u,%u,%u,%u]"
+        ",\"lost_link_counter_first_valid\":%s"
         ",\"ecat_processing_unit_error_counter\":%u"
         ",\"pdi_error_counter\":%u,\"pdi_error_code\":%u"
         ",\"esc_registers_read\":%s"
@@ -807,6 +827,15 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->forwarded_rx_error_counter[1],
         (unsigned int)axis->forwarded_rx_error_counter[2],
         (unsigned int)axis->forwarded_rx_error_counter[3],
+        (unsigned int)axis->lost_link_counter[0],
+        (unsigned int)axis->lost_link_counter[1],
+        (unsigned int)axis->lost_link_counter[2],
+        (unsigned int)axis->lost_link_counter[3],
+        (unsigned int)axis->lost_link_counter_first[0],
+        (unsigned int)axis->lost_link_counter_first[1],
+        (unsigned int)axis->lost_link_counter_first[2],
+        (unsigned int)axis->lost_link_counter_first[3],
+        axis->lost_link_counter_first_valid ? "true" : "false",
         (unsigned int)axis->ecat_processing_unit_error_counter,
         (unsigned int)axis->pdi_error_counter,
         (unsigned int)axis->pdi_error_code,
@@ -1348,8 +1377,17 @@ bool emaster_run_report_write(FILE *stream,
      * 1C32/1C33 计数器。它回答的是"驱动器自己在这个时刻已经数到几次同步违例"，而
      * 已有的 sm2_/sm3_diagnostic 在停机后读，混了退出期事件。有了它，0x001A 才能和
      * 子机制对上；没有它的旧报告里这一层根本不存在，不可比。
+     *
+     * 12：shutdown_disable 的三个键改成它们真正数的东西（verified → statusword_bit2_clear
+     * 等），并新增结果级 shutdown_stop_criterion。改名也升版本：旧报告里叫 verified 的
+     * 那一列读起来像"已失能"，两份同版本的报告会被当成可比，而它们那一列的含义不同。
+     *
+     * 13：逐轴多出 lost_link_counter（ESC 0x0310，每端口一个字节）与它的 first 基准。
+     * 旧报告里"链断过"与"收包超时"长得一样，分不开——台架上环尾瞬断一直查不下去就
+     * 卡在这。顺带修 forwarded_rx_error_counter：0x0308 起是**四个单字节**，过去按
+     * 四个 16 位读，后两个值一直是 EPUECNT/PECNT 拼出来的假数。
      */
-REQUIRE_WRITE(fputs("{\"schema_version\":11,\"generated_at_utc\":", stream) != EOF);
+REQUIRE_WRITE(fputs("{\"schema_version\":13,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1661,11 +1699,15 @@ REQUIRE_WRITE(fputs("{\"schema_version\":11,\"generated_at_utc\":", stream) != E
         ",\"access_count\":%zu,\"cyclic_capacity\":%zu,\"final_capacity\":%zu},"
         "\"diagnostic_preop_reached\":%s,"
         /*
-         * attempted=写调用台数，verified=bit2=0 台数，still_enabled=bit2=1 台数，
-         * unverified=读不回台数。verified 不等于已失能：真使能时 bit2 同样为 0。
+         * attempted=写调用台数，statusword_bit2_clear=读回 bit2=0 台数，
+         * statusword_bit2_set=读回 bit2=1 台数，statusword_unreadable=读不回台数。
+         * 键名说的是**读到了什么**，不是"失能成没成"：真使能时 bit2 同样读到 0，
+         * 叫 verified 会让它与结论行的"停用确认"并排出现两个相反的结论。
          */
-        "\"shutdown_disable\":{\"attempted\":%zu,\"verified\":%zu,"
-        "\"still_enabled\":%zu,\"unverified\":%zu},",
+        "\"shutdown_disable\":{\"attempted\":%zu,\"statusword_bit2_clear\":%zu,"
+        "\"statusword_bit2_set\":%zu,\"statusword_unreadable\":%zu},"
+        /* 这一轮停机循环按哪条判据判的：device_mask / standard_cia402 / none。 */
+        "\"shutdown_stop_criterion\":\"%s\",",
         report->audit.omitted_pdo_samples,
         report->audit.omitted_final_samples,
         report->audit.access_count,
@@ -1673,9 +1715,10 @@ REQUIRE_WRITE(fputs("{\"schema_version\":11,\"generated_at_utc\":", stream) != E
         report->audit.final_capacity,
         report->diagnostic_preop_reached ? "true" : "false",
         report->shutdown_disable_attempted_count,
-        report->shutdown_disable_verified_count,
-        report->shutdown_still_enabled_count,
-        report->shutdown_enable_unverified_count) >= 0);
+        report->shutdown_statusword_bit2_clear_count,
+        report->shutdown_statusword_bit2_set_count,
+        report->shutdown_statusword_unreadable_count,
+        shutdown_criterion_key(report->shutdown_stop_criterion)) >= 0);
     REQUIRE_WRITE(fprintf(
         stream,
         "\"dc\":{\"required\":%s,\"configured\":%s,\"startup_stable\":%s,"

@@ -31,6 +31,8 @@ static const error_class_entry_t CLASS_TABLE[] = {
     [EMASTER_ERROR_CLASS_DRIVE_LIMIT] = {"DRIVE_LIMIT", "驱动器内部限位或限幅生效"},
     [EMASTER_ERROR_CLASS_MOTION] = {"MOTION", "运动层：目标非法或跟随误差"},
     [EMASTER_ERROR_CLASS_SHUTDOWN] = {"SHUTDOWN", "停机阶段失败"},
+    [EMASTER_ERROR_CLASS_SHUTDOWN_UNCONFIRMED] = {
+        "SHUTDOWN_UNCONFIRMED", "停机未确认：轴已离开运行使能，未满足停机判据"},
     [EMASTER_ERROR_CLASS_AUDIT] = {"AUDIT", "审计层失败"},
     [EMASTER_ERROR_CLASS_INTERNAL] = {"INTERNAL", "内部失败（内存等）"},
 };

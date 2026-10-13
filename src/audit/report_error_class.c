@@ -223,6 +223,9 @@ static emaster_error_class_t class_of_status(const emaster_control_session_repor
     case EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED:
         return EMASTER_ERROR_CLASS_SHUTDOWN;
 
+    case EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED:
+        return EMASTER_ERROR_CLASS_SHUTDOWN_UNCONFIRMED;
+
     case EMASTER_CONTROL_SESSION_AUDIT_FAILED:
         return EMASTER_ERROR_CLASS_AUDIT;
     }

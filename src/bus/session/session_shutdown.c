@@ -332,11 +332,25 @@ static void log_shutdown_attempts(const emaster_soem_session_t *session)
  * 被放弃的只有协调器的两项检查：序号单调和帧截止时间。两者都是为"继续驱动轴"
  * 服务的，在撤销使能的路径上没有对应风险。
  */
-static bool stop_process_data(emaster_soem_session_t *session) {
+/* 停机循环的三种结论。落成哪个见 emaster_shutdown_stop_criterion_t 与
+ * EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED 两处的说明。 */
+typedef enum {
+    STOP_RESULT_CONFIRMED = 0, /* 判据命中：全部轴都到了安全停止态 */
+    STOP_RESULT_UNCONFIRMED,   /* 跑满仍不命中判据，但末拍每轴都已离开运行使能 */
+    STOP_RESULT_FAILED         /* 交换失败、状态字读不出、或仍有轴在运行使能 */
+} stop_result_t;
+
+static stop_result_t stop_process_data(emaster_soem_session_t *session) {
     uint64_t timeout_ns;
     uint64_t max_cycles;
     uint64_t cycle_index;
     size_t axis_index;
+    /*
+     * 末拍的两项事实。跑满超时之后要靠它们分辨"轴停了只是没碰到判据"与"轴根本没停"，
+     * 所以每拍重算一次，留下的就是最后一拍的。
+     */
+    bool last_all_decoded = false;
+    bool last_any_operation_enabled = false;
     emaster_shutdown_cycle_trace_t *trace = &session->report->shutdown_cycles;
     /*
      * 首次 WKC 不符的基准。wkc_error_count 是整轮运行的累计值，周期阶段可能已经涨过；
@@ -355,8 +369,28 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                                                 EMASTER_CIA402_GOAL_SAFE_STOP)) {
             session->report->shutdown_stop_fault =
                 EMASTER_SHUTDOWN_STOP_FAULT_CONTROLLER_SETUP_FAILED;
-            return false;
+            return STOP_RESULT_FAILED;
         }
+    }
+    /*
+     * 这一轮按哪条判据判。只要有轴没填掩码，掩码那条判不了它，另一条才是唯一出口——
+     * 记成 NONE 会让"掩码没填"和"压根没跑到判据"混成一列。
+     */
+    {
+        bool every_axis_has_mask = true;
+
+        for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+            const emaster_slave_profile_t *profile =
+                session->plan->axes[axis_index].device_profile;
+
+            if (profile == NULL || profile->safe_stop_status_mask == 0U) {
+                every_axis_has_mask = false;
+                break;
+            }
+        }
+        session->report->shutdown_stop_criterion =
+            every_axis_has_mask ? EMASTER_SHUTDOWN_CRITERION_DEVICE_MASK
+                                : EMASTER_SHUTDOWN_CRITERION_STANDARD_CIA402;
     }
 
     for (cycle_index = 0U; cycle_index < max_cycles; ++cycle_index) {
@@ -365,6 +399,8 @@ static bool stop_process_data(emaster_soem_session_t *session) {
         emaster_shutdown_cycle_sample_t sample;
         emaster_shutdown_attempt_t *attempt;
 
+        last_all_decoded = true;
+        last_any_operation_enabled = false;
         ++trace->cycle_total;
         attempt = attempt_begin(session, trace);
 
@@ -382,7 +418,7 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                 trace->aborted_stage = 0;
                 session->report->shutdown_stop_fault =
                     EMASTER_SHUTDOWN_STOP_FAULT_ABORTED_BEFORE_EXCHANGE;
-                return false;
+                return STOP_RESULT_FAILED;
             }
             session->axes[axis_index].control_word =
                 session->controller_outputs[axis_index].control_word;
@@ -397,7 +433,7 @@ static bool stop_process_data(emaster_soem_session_t *session) {
                 trace->aborted_stage = 1;
                 session->report->shutdown_stop_fault =
                     EMASTER_SHUTDOWN_STOP_FAULT_ABORTED_BEFORE_EXCHANGE;
-                return false;
+                return STOP_RESULT_FAILED;
             }
         }
         emaster_control_session_status_t exchange_status =
@@ -479,7 +515,7 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             shutdown_cycle_append(trace, &sample);
             session->report->shutdown_stop_fault =
                 EMASTER_SHUTDOWN_STOP_FAULT_EXCHANGE_FAILED;
-            return false;
+            return STOP_RESULT_FAILED;
         }
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             const ec_slavet *slave = &session->context.slavelist[
@@ -502,9 +538,13 @@ static bool stop_process_data(emaster_soem_session_t *session) {
             if (!axis->input_decoded ||
                 !emaster_cia402_decode_status_word(axis->status_word, &state)) {
                 all_axes_safe = false;
+                last_all_decoded = false;
                 continue;
             }
             axis->cia402_state = state;
+            if (state == EMASTER_CIA402_STATE_OPERATION_ENABLED) {
+                last_any_operation_enabled = true;
+            }
             {
                 const emaster_slave_profile_t *profile =
                     session->plan->axes[axis_index].device_profile;
@@ -525,12 +565,57 @@ static bool stop_process_data(emaster_soem_session_t *session) {
         sample.all_axes_safe = all_axes_safe;
         shutdown_cycle_append(trace, &sample);
         if (all_axes_safe) {
-            return true;
+            return STOP_RESULT_CONFIRMED;
         }
     }
     /* 跑满 EC_TIMEOUTSTATE 仍没等到全部轴安全停止。交换本身没报错——要查的是驱动器。 */
     session->report->shutdown_stop_fault = EMASTER_SHUTDOWN_STOP_FAULT_TIMEOUT_NO_SAFE_STATE;
-    return false;
+    /*
+     * 末拍每轴都解得出状态、且没有一轴还在运行使能 —— 轴确实停了，只是没命中判据。
+     * 这既不是"已确认安全停止"，也不是"驱动器不配合"，单独报一档。判据本身没命中
+     * 就不能往"通过"靠，所以 safe_state_reached 仍是假、退出码仍非 0；
+     * "有轴读不出"与"仍有轴在运行使能"两条照旧走失败。
+     */
+    if (last_all_decoded && !last_any_operation_enabled) {
+        return STOP_RESULT_UNCONFIRMED;
+    }
+    return STOP_RESULT_FAILED;
+}
+
+/*
+ * "未确认"要和"没停"分开说，否则报告里只有一个没有下文的红，而客户能做的动作只有
+ * 一个：把这个型号的停机判据填进策略档。两行写清判据缺口与出路，末拍状态字照印——
+ * 那一列才是"轴真的已经离开运行使能"的证据。
+ */
+static void log_stop_unconfirmed(const emaster_soem_session_t *session) {
+    const emaster_control_session_report_t *report = session->report;
+    const size_t axis_count = session->plan->axis_count;
+    bool uniform = axis_count > 0U;
+
+    for (size_t index = 1U; index < axis_count; ++index) {
+        if (session->axes[index].status_word != session->axes[0].status_word) {
+            uniform = false;
+            break;
+        }
+    }
+    const bool no_mask =
+        report->shutdown_stop_criterion == EMASTER_SHUTDOWN_CRITERION_STANDARD_CIA402;
+
+    if (no_mask) {
+        fputs("[SHUTDOWN] 本型号停机判据掩码未填，退到标准 CiA 402 判据；", stdout);
+    } else {
+        fputs("[SHUTDOWN] 停机判据（策略档掩码）没命中；", stdout);
+    }
+    if (uniform) {
+        printf("末拍 %zu 台停在 0x%04X（已离开运行使能）\n", axis_count,
+               (unsigned)session->axes[0].status_word);
+    } else {
+        printf("末拍 %zu 台均已离开运行使能\n", axis_count);
+    }
+    if (no_mask) {
+        printf("[SHUTDOWN] 出路：实测该型号 0x6041 停机读数，填进策略档掩码后重跑 add-device 与 build\n");
+    }
+    fflush(stdout);
 }
 
 /*
@@ -906,6 +991,8 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         /* 与序言闸门共用同一份判据：两处若各写一份，迟早会出现"序言按一种理解
          * 融入了周期、停用确认按另一种理解被跳过"这种自相矛盾的收尾。 */
         const bool comm_usable = communication_usable(session);
+        /* 通信不可用时停机循环整个不执行，此处的默认值不会被读。 */
+        stop_result_t stop_result = STOP_RESULT_FAILED;
 
         if (session->report->status == EMASTER_CONTROL_SESSION_OK)
         {
@@ -917,7 +1004,11 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
          * WKC、DC 或截止时间失效后继续发送只能算尽力而为，不能伪造安全到达结论
          */
         if (comm_usable) {
-            session->report->safe_state_reached = stop_process_data(session);
+            stop_result = stop_process_data(session);
+            session->report->safe_state_reached = stop_result == STOP_RESULT_CONFIRMED;
+            if (stop_result == STOP_RESULT_UNCONFIRMED) {
+                log_stop_unconfirmed(session);
+            }
             if (session->report->shutdown_prologue_gap_ns != 0U)
             {
                 printf("[SHUTDOWN] 停机序言过程数据缺口 %.3f ms"
@@ -957,7 +1048,13 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         log_shutdown_attempts(session);
         if (comm_usable && !session->report->safe_state_reached &&
             session->report->status == EMASTER_CONTROL_SESSION_OK) {
-            session->report->status = EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED;
+            /*
+             * 未确认这一档照样锁存故障、照样不设成 STOPPED：判据没命中就不能宣称
+             * 安全停止。锁存还决定命令口回给外部的状态——不锁存的话它会退回 OK。
+             */
+            session->report->status = stop_result == STOP_RESULT_UNCONFIRMED
+                                          ? EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED
+                                          : EMASTER_CONTROL_SESSION_SAFE_STOP_FAILED;
             session->report->fault_latched = true;
             emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_FAULTED,
                                            session->report->status);
@@ -1011,9 +1108,9 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
      * 但"没到某个 AL 状态"不能成为不尝试的理由。
      */
     if (session->context_open) {
-        size_t still_enabled = 0U;
+        size_t bit2_set = 0U;
         size_t disable_attempted = 0U;
-        size_t disable_unreadable = 0U;
+        size_t unreadable = 0U;
 
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
@@ -1040,21 +1137,21 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
                 ++disable_attempted;
             }
             if (!axis_result->shutdown_statusword_read) {
-                ++disable_unreadable;
+                ++unreadable;
             } else if ((axis_result->shutdown_statusword & UINT16_C(0x0004)) != 0U) {
-                ++still_enabled;
+                ++bit2_set;
             }
         }
         /* 记录 0x6041 读数；bit2 不当失能判据。 */
         session->report->shutdown_disable_attempted_count = disable_attempted;
-        session->report->shutdown_disable_verified_count =
-            session->plan->axis_count - still_enabled - disable_unreadable;
-        session->report->shutdown_still_enabled_count = still_enabled;
-        session->report->shutdown_enable_unverified_count = disable_unreadable;
+        session->report->shutdown_statusword_bit2_clear_count =
+            session->plan->axis_count - bit2_set - unreadable;
+        session->report->shutdown_statusword_bit2_set_count = bit2_set;
+        session->report->shutdown_statusword_unreadable_count = unreadable;
         printf("[SHUTDOWN]%s 失能核对 0x6041：bit2=0 %zu 台 / bit2=1 %zu 台 / 读不回 %zu 台，"
                "写入尝试 %zu 台（共 %zu 台）\n",
-               (still_enabled > 0U || disable_unreadable > 0U) ? " ！" : "",
-               session->report->shutdown_disable_verified_count, still_enabled, disable_unreadable,
+               (bit2_set > 0U || unreadable > 0U) ? " ！" : "",
+               session->report->shutdown_statusword_bit2_clear_count, bit2_set, unreadable,
                disable_attempted, session->plan->axis_count);
         printf("[SHUTDOWN] bit2=0 不代表已失能（真使能时也读到）\n");
         fflush(stdout);

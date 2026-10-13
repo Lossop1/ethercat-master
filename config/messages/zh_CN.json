@@ -82,6 +82,8 @@
     "control_session_error_class_line": "错误分类：%s（%s），整帧缺失=%llu 次，不应答轴=%u，同步轴=%u\n",
     "control_session_match": "通过",
     "control_session_mismatch": "失败",
+    "control_session_unconfirmed": "未确认",
+    "control_session_unconfirmed_done": "CiA 402 周期控制会话已停止，但停机未确认：驱动器的末拍状态字已离开运行使能，未满足配置的停机判据。\n",
     "control_session_not_configured": "未配置",
     "control_session_sdo_write_failed": "CiA 402 SDO 写入失败",
     "control_session_sdo_readback_failed": "CiA 402 SDO 读回校验失败",

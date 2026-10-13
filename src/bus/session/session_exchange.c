@@ -602,9 +602,9 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         tail_timing_valid = false;
     }
 
-    /* P4.4: 周期内读取错误计数器（0x0300-0x030F）。
+    /* P4.4: 周期内读取错误计数器（0x0300-0x0313）。
      * FPRD 使用从站配置地址（configadr），不是位置序号。
-     * 0x0300 起始 16 字节覆盖全部计数器。
+     * 0x0300 起 20 字节：0x0300-0x030F 的四个计数器，加 0x0310 起的丢失链计数。
      *
      * **每拍只读一根轴，轮着来**（2026-09-29 改）。原先是一拍把全部轴读完，
      * 九轴时九次 FPRD 挤在同一拍里，实测该拍尾部最坏 930–1010 µs，越过整个
@@ -701,7 +701,7 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                              session->plan->axis_count);
                 uint16_t configadr =
                     session->context.slavelist[emaster_soem_session_axis_slave(session, axis)].configadr;
-                uint8_t error_block[16];
+                uint8_t error_block[20];
                 int wkc = ecx_FPRD(&session->context.port, configadr, 0x0300U, sizeof(error_block),
                                    error_block, fprd_timeout_us);
 
@@ -709,11 +709,18 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
                 {
                     session->axes[axis].error_counters_read = true;
                     memcpy(session->axes[axis].rx_error_counter, &error_block[0], 8);
-                    memcpy(session->axes[axis].forwarded_rx_error_counter, &error_block[8], 8);
+                    memcpy(session->axes[axis].forwarded_rx_error_counter, &error_block[8], 4);
                     session->axes[axis].ecat_processing_unit_error_counter = error_block[12];
                     session->axes[axis].pdi_error_counter = error_block[13];
                     session->axes[axis].pdi_error_code = error_block[14];
-                    /* 0x0310 lost_link_counter 是独立寄存器，当前跳过读取。后续可扩展。 */
+                    /* 0x0310 起每端口一个字节：断链计数。上面三个读数分不开断链与收包超时。 */
+                    memcpy(session->axes[axis].lost_link_counter, &error_block[16], 4);
+                    /* 累计值，只留第一次读到的做基准，差值才是本轮的。 */
+                    if (!session->axes[axis].lost_link_counter_first_valid)
+                    {
+                        memcpy(session->axes[axis].lost_link_counter_first, &error_block[16], 4);
+                        session->axes[axis].lost_link_counter_first_valid = true;
+                    }
 
                     /*
                      * 首周期的值原先在这里 fprintf 到 stderr。删掉：同样的字节刚刚

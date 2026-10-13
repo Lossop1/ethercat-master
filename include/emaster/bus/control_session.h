@@ -47,7 +47,14 @@ typedef enum
     EMASTER_CONTROL_SESSION_RESTORE_INIT_FAILED,
     EMASTER_CONTROL_SESSION_AUDIT_FAILED,
     EMASTER_CONTROL_SESSION_CYCLE_DEADLINE_MISSED,
-    EMASTER_CONTROL_SESSION_ALL_AXES_FAULTED
+    EMASTER_CONTROL_SESSION_ALL_AXES_FAULTED,
+    /*
+     * 停机循环跑满仍不满足判据，但末拍每轴都解得出状态、都不是 Operation enabled
+     * ——轴确实已经离开了运行使能，只是没碰到判据。与 SAFE_STOP_FAILED 分开，
+     * 是因为两者的处置相反：这一档要查的是判据（掩码没填），那一档要查的是总线或
+     * 驱动器不配合。合成一个词会让客户对惯常出现的红失去反应。
+     */
+    EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED
 } emaster_control_session_status_t;
 
 /*
@@ -71,6 +78,24 @@ typedef enum
     /* 循环跑满 EC_TIMEOUTSTATE 仍不见全部轴安全停止：通信本身没报错。 */
     EMASTER_SHUTDOWN_STOP_FAULT_TIMEOUT_NO_SAFE_STATE
 } emaster_shutdown_stop_fault_t;
+
+/*
+ * 停机循环按哪条判据判定"全部轴都已安全停止"。
+ *
+ * 两条判据：设备档给的掩码（safe_stop_status_mask / _value），或标准 CiA 402 的两个
+ * 状态（Switch-on-disabled / Not-ready-to-switch-on）。**只要有轴没填掩码，这一轮就
+ * 只能走标准判据**——那种轴在任何一拍上都可能只满足标准判据，而掩码为 0 时标准判据
+ * 是唯一出口。
+ *
+ * 单独立这一列，是因为"判据不合适"和"驱动器不配合"在报告里长得一样：掩码没填时
+ * 循环必然白等满超时，两种情形都是同一个超时值、同一组计数。
+ */
+typedef enum
+{
+    EMASTER_SHUTDOWN_CRITERION_NONE = 0,        /* 停机循环没跑到判据 */
+    EMASTER_SHUTDOWN_CRITERION_DEVICE_MASK,     /* 每轴都有掩码 */
+    EMASTER_SHUTDOWN_CRITERION_STANDARD_CIA402  /* 有轴没掩码，退到标准状态 */
+} emaster_shutdown_stop_criterion_t;
 
 /* 对外暴露稳定的产品生命周期，不要求调用者解析 SOEM 或 CiA 402 内部状态 */
 typedef enum
@@ -331,14 +356,24 @@ typedef struct
     uint16_t drive_error_code_decoded;
     uint8_t drive_error_code_origin; /* emaster_drive_error_origin_t */
     emaster_position_scale_t position_scale;
-    /* P4.4: 错误计数器（0x0300-0x030F），周期内 FPRD 读取 */
+    /* P4.4: 错误计数器（0x0300-0x0313），周期内 FPRD 读取。
+     * RXERR 0x0300 起 8 字节（4 端口 + 4 保留），FRXERR 0x0308 起**4 个单字节**。 */
     bool error_counters_read;
     uint8_t rx_error_counter[8];
-    uint16_t forwarded_rx_error_counter[4];
+    uint8_t forwarded_rx_error_counter[4];
     uint8_t ecat_processing_unit_error_counter;
     uint8_t pdi_error_counter;
     uint8_t pdi_error_code;
+    /*
+     * ESC 0x0310 起，每端口一个字节：断链计数。上面三个计数器说的是"链还在、
+     * 帧被收坏"，只有它说"链断过"。error_counters_read=false 时不更新。
+     *
+     * 它是**上电以来**的累计值，不是本周期的：清零要靠 ESC 复位。所以非零不等于
+     * "这一轮掉过链"——现场接拔线缆也会加。本轮掉没掉，看 first 到当前值的差。
+     */
     uint8_t lost_link_counter[4];
+    uint8_t lost_link_counter_first[4];
+    bool lost_link_counter_first_valid;
     /*
      * P8.4: ESC 的两个看门狗寄存器，进 OP 后各读一次（原始值，不换算）。
      *
@@ -1052,6 +1087,8 @@ typedef struct
      * ——那种情况的结论由 status/safe_output_sent 给出，不要从本字段读。
      */
     emaster_shutdown_stop_fault_t shutdown_stop_fault;
+    /* 这一轮的停机循环按哪条判据判的。见 emaster_shutdown_stop_criterion_t。 */
+    emaster_shutdown_stop_criterion_t shutdown_stop_criterion;
     /*
      * P8.3: 连续迟到动作的档位与结果。连续段本身记在每轴的 timing
      * （sync0_late_max_consecutive / max_sync0_late_run_exchange）里。
@@ -1075,22 +1112,24 @@ typedef struct
      * 这个形状：报告写安全停机完成，独立扫描读 0x6041 却是 0x1237（Operation enabled）。
      *
      * 所以停机时逐台走邮箱「读 6041 → 写 6040=0 → 再读 6041」，这四个数就是那次核对：
-     *   attempted  —— 写调用发出去了几台
-     *   verified   —— 读回来 bit2=0 的有几台
-     *   still_enabled —— 读回来仍然 bit2=1 的有几台
-     *   unverified —— 读不回来的有几台
-     * 不变式：verified + still_enabled + unverified == 轴数。
+     *   attempted             —— 写调用发出去了几台
+     *   statusword_bit2_clear —— 读回来 bit2=0 的有几台
+     *   statusword_bit2_set   —— 读回来仍然 bit2=1 的有几台
+     *   statusword_unreadable —— 读不回来的有几台
+     * 不变式：statusword_bit2_clear + statusword_bit2_set + statusword_unreadable == 轴数。
      *
-     * 注意：bit2 不是失能判据。实测真使能（current_state=8）时读回也是 0x1250，
-     * 所以 verified 按"bit2=0 的台数"读，不是"已失能的台数"。
+     * 名字说的是**读到了什么**，不是"失能成没成"。bit2 不是失能判据：实测真使能
+     * （current_state=8）时读回也是 0x1250。所以这一项不能叫 verified——那样它就会
+     * 和控制台那行"停用确认"并排出现两个互相矛盾的结论（报告里 11/11 已验证，而
+     * 结论行写失败），读者只能挑一个信。真还使能的证据是 statusword_bit2_set 那一项。
      *
      * 这一段不设任何前置条件（原先与停机诊断共用一个门槛，而那个门槛只在"到过 OP
      * 且成功切回 PRE-OP"时成立——最需要禁用的轴恰好被它挡住）。
      */
     size_t shutdown_disable_attempted_count;
-    size_t shutdown_disable_verified_count;
-    size_t shutdown_still_enabled_count;
-    size_t shutdown_enable_unverified_count;
+    size_t shutdown_statusword_bit2_clear_count;
+    size_t shutdown_statusword_bit2_set_count;
+    size_t shutdown_statusword_unreadable_count;
     /*
      * 停机序言里停止 SDO 观测线程（pthread_join）的耗时。该窗口内不发送任何过程
      * 数据，超过驱动器的同步容差即触发 AL 0x1A 掉出 OP（2026-09-14 台架证据）。

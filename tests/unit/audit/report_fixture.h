@@ -203,6 +203,37 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->axis_results[2].target_position_readback = INT32_C(955);
     /* 轴 3 的 read 保持 memset 的 false：这一条从没读回来过。 */
 
+    /*
+     * 停机时那次邮箱失能核对（schema_version 9 起）与它用的判据（12 起）。
+     *
+     * 计数按不变式配齐（三个数之和 == 轴数 = 3），attempted 故意给 2：写调用只发出去了
+     * 两台——若哪个绑定串了位，这一列立刻露馅。判据给 standard_cia402，因为掩码没填的
+     * 退化路径才是要钉住的那一条：枚举值到 ASCII 键的映射错了，报告里读起来仍然像真的。
+     */
+    fixture->report.shutdown_disable_attempted_count = 2U;
+    fixture->report.shutdown_statusword_bit2_clear_count = 1U;
+    fixture->report.shutdown_statusword_bit2_set_count = 1U;
+    fixture->report.shutdown_statusword_unreadable_count = 1U;
+    fixture->report.shutdown_stop_criterion = EMASTER_SHUTDOWN_CRITERION_STANDARD_CIA402;
+
+    /*
+     * 丢失链计数（13 起）。轴 1 本轮真断过一跳、轴 2 干净、轴 3 read=false 但留非零诱饵：
+     * 判据是 error_counters_read，不是值是否为 0。
+     *
+     * 轴 1 的 first 比当前值小 1，差值才是"本轮断过一次"；first 与当前值相等时本轮
+     * 一次没断——只看绝对值会把上电以来的累计当成本轮的。
+     */
+    fixture->axis_results[0].error_counters_read = true;
+    fixture->axis_results[0].lost_link_counter[3] = 3U;
+    fixture->axis_results[0].lost_link_counter_first[3] = 2U;
+    fixture->axis_results[0].lost_link_counter_first_valid = true;
+    fixture->axis_results[1].error_counters_read = true;
+    fixture->axis_results[1].lost_link_counter[1] = 5U;
+    fixture->axis_results[1].lost_link_counter_first[1] = 5U;
+    fixture->axis_results[1].lost_link_counter_first_valid = true;
+    fixture->axis_results[2].error_counters_read = false;
+    fixture->axis_results[2].lost_link_counter[0] = 7U;
+
     fixture->report.axis_count = FIXTURE_AXIS_COUNT;
     fixture->report.axes = fixture->axis_results;
     fixture->report.status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;

@@ -165,9 +165,13 @@ def main():
                 problems.append("%s 的身份缺 %s" % (rel, key))
         telemetry = device.get("slow_telemetry")
         if not telemetry:
-            # 慢速遥测清单是观测线程的输入，缺了它对运行没有影响，
-            # 但会让所有"运行时读到了什么"的问题都无解 —— 所以在这里拦。
-            problems.append("%s 没有 slow_telemetry 清单" % rel)
+            # 慢速遥测清单是可选的：add-device 从 ESI 推不出它，生成时会明说"未声明"
+            # 并让现场按 config/README.md 补（validate_device_config 也这么判）。
+            # 当成问题拦下来，会把"照文档走完 add-device"的每一棵客户树都判红。
+            notes.append(
+                "%s 没有 slow_telemetry 清单，报告里温度、母线电压、电流那几栏会是空的"
+                % rel
+            )
 
     for line in notes:
         print("提示：%s" % line)
