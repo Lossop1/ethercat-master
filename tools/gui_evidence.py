@@ -69,7 +69,7 @@ def parse(block):
         "takeover": None,       # True/False/None
         "cmd_endpoint": None,
         "sent": None,           # 已发目标条数
-        "max_step": None,
+        "max_increment": None,
         "peak_deg": [],         # 各轴"曾到过"
         "actual_deg": [],
         "error_codes": [],
@@ -102,7 +102,7 @@ def parse(block):
     match = re.search(rf"已发 (\d+) 条目标，相邻目标最大增量 (\d+) counts", block)
     if match:
         out["sent"] = int(match.group(1))
-        out["max_step"] = int(match.group(2))
+        out["max_increment"] = int(match.group(2))
 
     for line in block.splitlines():
         axis = re.search(rf"轴(\d+): 实际=({_NUM})° .*曾到过=({_NUM})° "

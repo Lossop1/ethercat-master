@@ -85,5 +85,4 @@ print(f"   进入 EXTERNAL {switches} 次 / 超时回 HOLD {timeouts} 次"
 bad = [line for line in LOG if "released" in line.lower() or "abort" in line.lower()
        or "MOTION_INVALID" in line]
 print("   断连/中止字样：" + ("无" if not bad else "；".join(bad[:3])))
-print("   ⚠ 日志没有时间戳，打字窗口与 [MODE] 事件的对应关系判不出来"
-      "（见 layering-plan.md P10.4）")
+print("   ⚠ 日志没有时间戳，打字窗口与 [MODE] 事件的对应关系判不出来")

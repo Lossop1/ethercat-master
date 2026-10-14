@@ -2,11 +2,13 @@
 
 #include "console.h"
 #include "emaster/audit/run_report.h"
+#include "emaster/bus/command_socket_path.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_load.h"
 #include "emaster/messages.h"
 #include "emaster/motion/relative_position.h"
+#include "emaster/setpoint/server.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -73,23 +75,41 @@ static bool external_target_torque_mode = false;
 static uint64_t external_target_timeout_ns = EMASTER_EXTERNAL_TARGET_TIMEOUT_DEFAULT_NS;
 
 /*
- * 外部目标路径跟随误差上限：2° 输出轴（负载侧）。
- * P2.2 要求此值非零，否则 session_control.c 中的检查被完全跳过。
- * 当前硬编码为 2°，P3.3 完成后改为从 plan 的硬件比例参数动态推算。
+ * 这里原先放着两个毫度常量（外部目标路径的跟随误差上限与单步限幅），都已删除。
+ * 它们的去处不同，值得记一笔：
+ *   - 单步限幅比的是相邻两条目标的差，与客户端发送频率绑定，主站不再判它；
+ *   - 跟随误差上限在这条路径上从来没有生效过（阈值只由运动方案路径写入）；
+ *   - 取而代之的只有一条：目标离实际位置太远就拒收，上限逐轴取自运行时的
+ *     608F/6091 读回值，在 session_setup.c 里折算，不在这个文件里。
  */
-#define EMASTER_EXTERNAL_FOLLOWING_ERROR_DEGREES  2
-
-/*
- * 外部目标路径单步限幅：相邻两条目标之间的最大增量。
- * 取值与跟随误差上限相同：目标单步超过该值时驱动器无论如何无法在一个周期内跟上，
- * 提前拒绝比事后触发 FOLLOWING_ERROR 更清晰。P3.3 完成后应改为从硬件比例参数推算。
- */
-#define EMASTER_EXTERNAL_MAX_STEP_DEGREES  EMASTER_EXTERNAL_FOLLOWING_ERROR_DEGREES
 
 /* 外部目标双缓冲区：命令线程写入，周期回调读取，互斥锁保护。 */
 static emaster_external_target_buffer_t external_target_buffer = {
     .mutex = PTHREAD_MUTEX_INITIALIZER
 };
+
+/*
+ * 设点通道（只写套接字）的开关，默认关。取值集合与另两个开关一致。
+ *
+ * 默认关是交付面的要求：不开这条通道时，主站的行为与加装之前逐字一致，多出来的
+ * 只有一个套接字文件。外部控制器要连它，得由部署方显式打开。
+ *
+ * 不用 session_internal.h 的 emaster_soem_env_flag_enabled：那是总线层的内部头，
+ * 而这里是应用层。为了十行判断把 SOEM 的私有边界拉到应用里不值得，两边取值集合
+ * 要一致，改动时一起改。
+ */
+static bool setpoint_channel_enabled(void)
+{
+    const char *value = getenv("EMASTER_SETPOINT");
+
+    if (value == NULL)
+    {
+        return false;
+    }
+    return strcmp(value, "1") == 0 || strcmp(value, "on") == 0 || strcmp(value, "ON") == 0 ||
+           strcmp(value, "true") == 0 || strcmp(value, "TRUE") == 0 ||
+           strcmp(value, "yes") == 0 || strcmp(value, "YES") == 0;
+}
 
 /*
  * 实时位置目标源回调：每个周期被主站调用以获取位置目标。
@@ -368,6 +388,8 @@ int main(int argc, char **argv) {
     emaster_control_session_axis_result_t *results;
     emaster_control_session_report_t report;
     emaster_control_session_callbacks_t callbacks;
+    emaster_setpoint_server_t *setpoint_server = NULL;
+    emaster_setpoint_stats_t setpoint_stats;
     emaster_session_plan_status_t plan_status;
     emaster_control_session_status_t session_status;
     bool report_published;
@@ -505,87 +527,91 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* P6.3：跟随误差和单步限幅从 plan 的硬件参数和配置字段推算，不再硬编码为测试值。
-     * 取第一轴的硬件参数作为全轴统一值（当前台架双轴同型号）。
-     * 公式：counts_per_degree = (encoder_increments / encoder_motor_revolutions)
-     *                          × (gear_motor_revolutions / gear_shaft_revolutions) / 360
-     * max_following_error_millidegrees 来自 motion_axis_config，若为 0 则默认为 2000 (2°)。 */
-    uint64_t following_error_counts = 0;
-    uint64_t max_step_counts = 0;
-    if (plan.axis_count > 0 && plan.axes[0].motion_axis != NULL) {
-        const emaster_motion_axis_config_t *motion_axis = plan.axes[0].motion_axis;
-        /* 编码器分辨率（counts/motor_rev）× 减速比（motor_rev/shaft_rev）/ 360° */
-        double counts_per_motor_rev = (double)motion_axis->expected_encoder_increments /
-                                      (double)motion_axis->expected_encoder_motor_revolutions;
-        double gear_ratio = (double)motion_axis->expected_gear_motor_revolutions /
-                           (double)motion_axis->expected_gear_shaft_revolutions;
-        double counts_per_degree = counts_per_motor_rev * gear_ratio / 360.0;
-        /* 限幅值：从配置读取，0 时默认 2° 负载侧 */
-        uint32_t limit_millidegrees = motion_axis->max_following_error_millidegrees;
-        if (limit_millidegrees == 0) {
-            limit_millidegrees = 2000;  /* 默认 2° */
+    /*
+     * P6.3 的那一段在这里算过两个数：跟随误差窗与单步限幅。两者都已删除，
+     * 所以这里不再需要从首轴的硬件参数折算系数。
+     *
+     * 删掉的直接理由：单步限幅比的是相邻两条目标的差，于是同一个配置在 200 Hz
+     * 与 1 kHz 下允许的速度差四倍——那是客户端该定的数；跟随误差窗在这条路径上
+     * 从来没被赋过值，是一道永远不跳的闸。
+     *
+     * 保留下来的那一条判据（目标离实际位置太远就拒收）不在这里算系数：它按**每轴**
+     * 自己的运行时 608F/6091 读回值折算，在 session_setup.c 里逐轴做。用一个首轴
+     * 系数套给所有轴会得到假逐轴——台架第 8、12 席是 25:1，其余 28:1。
+     */
+
+    /*
+     * 设点通道必须在 install_rt_primitives() **之后**建：它的监听线程要从本线程继承
+     * 调度策略与绑核，然后自己退掉实时调度（理由见 server.c 与 thread_sched.h）。
+     * 提前建等于让它在未配置的调度策略下出生。
+     *
+     * 建不起来不拦会话：这条通道是外部输入，没有它主站照样跑（文本动词仍是入口）。
+     */
+    if (setpoint_channel_enabled()) {
+        char setpoint_path[EMASTER_SOCKET_PATH_CAPACITY];
+        int8_t expected_modes[EMASTER_EXTERNAL_TARGET_MAX_AXES];
+        size_t mode_index;
+
+        for (mode_index = 0U; mode_index < EMASTER_EXTERNAL_TARGET_MAX_AXES; ++mode_index) {
+            expected_modes[mode_index] = EMASTER_SETPOINT_MODE_UNCHECKED;
         }
-        /*
-         * P12.22：单步上限是**独立**的一道闸，不再借用跟随误差窗的值。
-         * 两者量级上必须满足 跟随误差窗 ≥ 单步上限（见 runtime_config.h 的说明
-         * 与校验器），但相等只是巧合，不是关系——单步上限由外部控制器的发送
-         * 频率决定，跟随误差窗由轴的跟随能力决定。
-         */
-        uint32_t step_millidegrees = motion_axis->max_step_millidegrees;
-        if (step_millidegrees == 0) {
-            step_millidegrees = 2000;  /* 默认 2° */
+        for (mode_index = 0U; mode_index < plan.axis_count; ++mode_index) {
+            if (plan.axes[mode_index].operation_mode != NULL) {
+                expected_modes[mode_index] = plan.axes[mode_index].operation_mode->value;
+            }
         }
-        following_error_counts = (uint64_t)(counts_per_degree * (double)limit_millidegrees / 1000.0);
-        max_step_counts = (uint64_t)(counts_per_degree * (double)step_millidegrees / 1000.0);
-        if (max_step_counts > following_error_counts) {
-            /* 配置校验器已经拦住这一条；这里是主站自己的最后一道，因为生成的 C
-             * 有可能来自一份没过校验的配置。宁可拒跑，也不要带着一道会误跳的闸进 OP。 */
-            fprintf(stderr, "[P6.3] 错误：单步上限 %.2f° 大于跟随误差窗 %.2f°，"
-                            "合法的大步进会立刻触发跟随误差保护，拒绝启动\n",
-                    (double)step_millidegrees / 1000.0,
-                    (double)limit_millidegrees / 1000.0);
-            free(plan_axes);
-            free(results);
-            return 1;
+        if (plan.axis_count <= EMASTER_EXTERNAL_TARGET_MAX_AXES &&
+            emaster_setpoint_socket_path(deployment->deployment_id, setpoint_path,
+                                         sizeof(setpoint_path))) {
+            setpoint_server = emaster_setpoint_server_create(setpoint_path,
+                                                             &external_target_buffer,
+                                                             plan.axis_count, expected_modes);
+        } else {
+            fprintf(stderr, "警告：设点通道未开：轴数 %zu 超过上限 %u，或部署 ID 推不出路径\n",
+                    plan.axis_count, (unsigned)EMASTER_EXTERNAL_TARGET_MAX_AXES);
         }
-        fprintf(stderr, "[P6.3] 跟随误差限幅: %.2f° = %lu counts；单步上限: %.2f° = %lu counts "
-                        "(enc=%u/%u, gear=%u:%u, %.2f counts/deg)%s\n",
-                (double)limit_millidegrees / 1000.0,
-                (unsigned long)following_error_counts,
-                (double)step_millidegrees / 1000.0,
-                (unsigned long)max_step_counts,
-                motion_axis->expected_encoder_increments,
-                motion_axis->expected_encoder_motor_revolutions,
-                motion_axis->expected_gear_motor_revolutions,
-                motion_axis->expected_gear_shaft_revolutions,
-                counts_per_degree,
-                motion_axis->max_following_error_millidegrees == 0 ||
-                        motion_axis->max_step_millidegrees == 0
-                    ? " (default)"
-                    : "");
-    } else {
-        /* 兜底：无 motion_axis 配置时仍给一个保守值。6400 counts 折算成多少度，
-         * 随每台设备的编码器分辨率和减速比变化，这里不作数；它的作用是给两道闸
-         * 一个有限的数，好让会话能起动，而不是一个按角度核算过的限幅。真值必须
-         * 从运动方案里读——配置校验器会拦住没写这一项的部署。
-         * 两道闸在这里取同一个保守值——是"没有配置信息"时的兜底，不是两者的
-         * 关系；有运动方案时它们各自从配置读自己的值。 */
-        following_error_counts = 6400;
-        max_step_counts = 6400;
-        fprintf(stderr, "[P6.3] 警告：无 motion_axis 配置，使用兜底限幅 %lu counts\n",
-                (unsigned long)following_error_counts);
     }
 
     memset(&report, 0, sizeof(report));
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.stop_requested = application_stop_requested;
-    callbacks.position_target_source = position_target_source;
-    callbacks.position_target_source_user_data = &external_target_buffer;
-    callbacks.external_target_buffer = &external_target_buffer;
-    callbacks.position_target_max_following_error_counts = following_error_counts;
-    callbacks.position_target_max_step_counts = max_step_counts;
+    /*
+     * 绑定外部目标源有两个前提，缺一不绑。
+     *
+     * 一、部署没有引用固定运动方案。两条路径在周期里二选一，且外部目标源优先；
+     * 部署已经写死了轨迹，再挂一个外部源进去，动的是回调，不是配置——记录下来的
+     * "本次按部署跑"就是假话（target_probe 存在的理由就是这条约定）。
+     *
+     * 二、设点通道开着。外部目标只有这一个生产者：通道不开，缓冲区这辈子收不到
+     * 一条记录，回调唯一的出路是生成演示正弦波。空转部署因此会自己动起来。
+     *
+     * 两条都不成立时不绑。会话按期"没有运动"处理：不要求设备声明 608F/6091/607D、
+     * 不建换算表、不写目标。设备只要给得出 PDO，就能进 OP 并被观测——这才是
+     * "空转"该有的代价。
+     */
+    if (plan.motion_profile == NULL && setpoint_channel_enabled()) {
+        callbacks.position_target_source = position_target_source;
+        callbacks.position_target_source_user_data = &external_target_buffer;
+        callbacks.external_target_buffer = &external_target_buffer;
+    }
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
                                                   &callbacks, &report);
+
+    /*
+     * 先停通道再发报告：销毁停掉监听线程之后不会再有记录到达，所以那一份计数就是
+     * 整轮的（理由见 setpoint/server.h）。反过来先发报告再停，报告里的数就是个中途
+     * 快照，而且窗口多长取决于报告写多久。
+     */
+    emaster_setpoint_server_destroy(setpoint_server, &setpoint_stats);
+    report.setpoint_enabled = setpoint_stats.enabled;
+    report.setpoint_records_accepted = setpoint_stats.records_accepted;
+    report.setpoint_records_rejected = setpoint_stats.records_rejected;
+    report.setpoint_sequence_gaps = setpoint_stats.sequence_gaps;
+    report.setpoint_last_sequence = setpoint_stats.last_sequence;
+    report.setpoint_last_client_time_ns = setpoint_stats.last_client_time_ns;
+    report.setpoint_last_record_age_ns = setpoint_stats.last_record_age_ns;
+    report.setpoint_last_reject_reason = setpoint_stats.last_reject_reason;
+    report.setpoint_last_reject_axis = setpoint_stats.last_reject_axis;
 
     /*
      * 报告路径先解成绝对路径再发布。相对路径按进程 CWD 解析，而主站不做 chdir——

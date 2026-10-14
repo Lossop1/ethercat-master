@@ -24,9 +24,11 @@
  * 而且它只提供 context 版 API（ecx_*），没有 ec_init／ec_slave 那一套。 */
 #include "soem/soem.h"
 
+#include <net/if.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <time.h>
+#include <unistd.h>
 
 /* 读一个 u32 对象。ecx_SDOread 返回的是工作计数器：>0 才算这一条真的回来了；
  * 宽度也必须相符，"读回来 2 个字节"不等于"读到了一个 u32"。 */
@@ -99,10 +101,26 @@ int main(int argc, char *argv[])
     }
 
     printf("interface=%s\n", argv[1]);
+    /*
+     * 先把 ecx_init 失败的两种常见原因分开说。它自己只会回一句失败，而这两件事的
+     * 处置完全不同：非 root 是"换个方式重来"，网卡名错是"名字打错了"。
+     * 不提权限时，权限不足会一直被读成"网卡名或 up 状态有问题"，照着这条线索查下去
+     * 永远查不到。两个判据都只在本工具里问，不引新依赖。
+     */
+    if (geteuid() != 0)
+    {
+        fprintf(stderr, "错误：需要 root —— 扫描要开原始套接字，用 sudo 重跑\n");
+        return 1;
+    }
+    if (if_nametoindex(argv[1]) == 0U)
+    {
+        fprintf(stderr, "错误：网卡 %s 不存在（用不带参数的 %s 列出可用的网卡）\n",
+                argv[1], argv[0]);
+        return 1;
+    }
     if (!ecx_init(&context, argv[1]))
     {
-        fprintf(stderr, "错误：ecx_init 失败，接口 %s 打不开（网卡名对不对？网卡 up 了吗？）\n",
-                argv[1]);
+        fprintf(stderr, "错误：ecx_init 失败，接口 %s 打不开（网卡 up 了吗？）\n", argv[1]);
         return 1;
     }
 

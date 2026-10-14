@@ -67,7 +67,7 @@ class MockServer(threading.Thread):
                         line, _, buffer = buffer.partition(b"\n")
                         cmd = line.decode().strip()
                         if cmd == "topology":
-                            reply = b"OK|axes=2,max_step=6400|a1:bus=1,enc=16384/1,gear=28/1,torque=0|a2:bus=2,enc=16384/1,gear=28/1,torque=0\n"
+                            reply = b"OK|axes=2,max_offset=114688|a1:bus=1,enc=16384/1,gear=28/1,torque=0|a2:bus=2,enc=16384/1,gear=28/1,torque=0\n"
                         elif cmd == "status":
                             reply = b"OK|state=4 cycle=1 axes=2 enabled=1 completed=0|a1:pos=0,vel=0,torque=0,status=0x1237,target_pos=0,planned=0,err=0x0000,state=5|a2:pos=0,vel=0,torque=0,status=0x1237,target_pos=0,planned=0,err=0x0000,state=5\n"
                         else:
@@ -141,11 +141,11 @@ def main():
                               server.accepted > accepted_before,
                               f"accepted {accepted_before} -> {server.accepted}")
 
-        # --- 拓扑解析（含 max_step）---
+        # --- 拓扑解析（含 max_offset）---
         print("\n[4] 拓扑解析")
         failures += not check("topology 成功", client.refresh_topology())
-        failures += not check("max_step = 6400", client.max_step == 6400,
-                              str(client.max_step))
+        failures += not check("max_offset = 114688", client.max_offset == 114688,
+                              str(client.max_offset))
         failures += not check("axis_count = 2", client.axis_count == 2,
                               str(client.axis_count))
         factor = client.counts_per_degree()
@@ -153,15 +153,14 @@ def main():
                               factor is not None and abs(factor - 1274.3111) < 0.01,
                               str(factor))
 
-        # --- 步长与限幅的关系 ---
+        # --- 斜坡步长只由速度定 ---
         print("\n[5] 斜坡步长")
         step = client.step_counts_for(20.0, 50.0)
         failures += not check("20°/s@50Hz 步长 ≈ 509.7", abs(step - 509.72) < 0.1,
                               f"{step:.2f}")
         step_fast = client.step_counts_for(400.0, 50.0)
-        failures += not check("400°/s@50Hz 被限幅到 5120",
-                              abs(step_fast - 5120.0) < 0.1, f"{step_fast:.2f}")
-        failures += not check("步长不超过 max_step", step_fast <= client.max_step)
+        failures += not check("400°/s@50Hz 步长 ≈ 10194.5（不限幅）",
+                              abs(step_fast - 10194.49) < 0.5, f"{step_fast:.2f}")
 
         # --- 解析多行/粘包 ---
         print("\n[6] 响应分帧（连续快速命令）")

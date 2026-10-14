@@ -7,7 +7,12 @@
   1. 这一轮跑了多久（timing.first_exchange / last_exchange，按 1 ms 周期折成秒）；
   2. 故障是什么形态（整帧未回 wkc=-1 / WKC 不符 / 只是迟发），发生在第几次交换，
      那一帧和紧邻几帧的帧距、尾部各段耗时是多少；
-  3. 四轴在故障点的 AL 状态与状态码，以及停机时各轴的 AL 收尾状态。
+  3. 四轴在故障点的 AL 状态与状态码，以及停机时各轴的 AL 收尾状态；
+  4. 有目标被拒时（target_rejected_count > 0），最后一次是第几轴、超出去多少。
+     拒收不是故障、会话照常跑，所以只在真拒过时才印——健康轮里这一行不出现。
+  5. 开过设点通道时（setpoint_enabled），收了多少条、丢了多少、客户端在收尾时
+     还活着吗。同样只在真开过时才印：没开的轮里这一整块不存在，印一排零会让
+     "没开"与"开了但没连上"长得一样。
 """
 import json
 import sys
@@ -47,6 +52,27 @@ def summarize(path):
     print("frame_interval_max=%s ns @%s（停机序言 %s ns）"
           % (delivery.get("frame_interval_max_ns"), delivery.get("frame_interval_max_exchange"),
              result.get("shutdown_prologue_gap_ns")))
+    rejected = result.get("target_rejected_count") or 0
+    if rejected:
+        print("被拒目标 %s 条，最后一次 axes[%s] 偏移 %s counts"
+              % (rejected, result.get("target_rejection_axis"),
+                 result.get("target_rejection_offset_counts")))
+    if result.get("setpoint_enabled"):
+        rejected_setpoints = result.get("setpoint_records_rejected") or 0
+        age = result.get("setpoint_last_record_age_ns")
+        # 年龄 -1 是"整轮没收到过一条"，与"收尾时刚收到"（0 附近）必须分开说。
+        if isinstance(age, int) and age >= 0:
+            age_text = "%.1f ms" % (age / 1e6)
+        else:
+            age_text = "整轮没有一条被采纳"
+        print("设点通道：收 %s 条 拒 %s 条 序号缺口 %s 最后客户端时标 %s 收尾时最后一条记录 %s"
+              % (result.get("setpoint_records_accepted"), rejected_setpoints,
+                 result.get("setpoint_sequence_gaps"),
+                 result.get("setpoint_last_client_time_ns"), age_text))
+        if rejected_setpoints:
+            print("  最后一次被拒：axes[%s] %s"
+                  % (result.get("setpoint_last_reject_axis"),
+                     result.get("setpoint_last_reject_reason")))
     print("交接段：sliced=%s 交换 %s 拍 单片上限 %s ns（看门狗 %s / 起点 %s / 线程 %s）"
           % (delivery.get("handover_sliced"), delivery.get("handover_exchanges"),
              delivery.get("handover_max_slice_ns"),

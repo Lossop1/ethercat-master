@@ -5,7 +5,8 @@
 position_target_source -> 6071 target_torque。不绕过命令协议，也不碰主站内部状态。
 
 流程（每一步都把现场打出来）：
-  1. 从部署配置读 external_target_torque_limit_per_mille 当自己的上限（唯一真源）。
+  1. 取 --torque-limit 当自己的上限。主站不查力矩大小（部署里那个力矩上限已删），
+     所以这一次冒烟的上限只能由操作者在命令行当场声明，不给就不跑。
   2. 等 state=4，读一轮基线：每轴的 mode（6061）、torque（6077）、pos（6064）。
   3. 零力矩段：全程按 --rate 发全 0，同时监控。人在场的话这时推一下轴，
      确认是自由状态——"能安全地什么都不做"要先证明。
@@ -16,13 +17,13 @@ position_target_source -> 6071 target_torque。不绕过命令协议，也不碰
 
 安全（写在这里也写在操作步骤里）：
   - 力矩单位是额定力矩的千分比（6071 相对 6076），5% 额定 = 50。
-  - --torque 超过部署里配的上限就直接拒绝运行，本脚本自己也不发越限的值。
-    （越限在协议那一头是 MOTION_INVALID，会打掉整个会话，没有"只拒这一条"。）
+  - --torque 超过 --torque-limit 就直接拒绝运行，本脚本自己也不发越限的值。
+    **主站不查力矩大小**：越限了它照发。这是本脚本唯一的一道闸，没有第二道。
   - 任何异常（目标被拒、连接断开、模式对不上）都立刻尽力补发一条全 0 目标。
   - 本脚本不停主站。收尾靠人工 SIGINT——正常的停机流程才会写报告。
 
 用法:
-  python3 scripts/cst_smoke.py <socket_path> --deployment <部署ID> [选项]
+  python3 scripts/cst_smoke.py <socket_path> --deployment <部署ID> --torque-limit T [选项]
 
 选项:
   --axis N       加力矩的轴号（总线序号，从 1 起；默认 1）
@@ -223,8 +224,10 @@ class Report:
 def load_plan(args):
     """从部署配置里取模式和上限。返回 (mode, limit)。
 
-    先判模式再判上限：模式不对的部署（位置模式那份就没有力矩上限）要报"模式不对"，
-    不能报成"没有上限"——那会让人以为是配置缺了个字段。
+    先判模式再判上限。上限必须由命令行给：部署里那个
+    external_target_torque_limit_per_mille 已经删了——主站不管力矩大小，那是
+    客户端与驱动器的活。**所以现在没有任何一层会替这次冒烟把关，上限只能由
+    操作者当场声明**，不给就不跑。
     """
     deployment = find_config_document(
         str(REPO_ROOT), "deployments", "deployment_id", args.deployment)
@@ -235,11 +238,11 @@ def load_plan(args):
         raise SystemExit(
             f"这个部署选的是 {mode or '(读不出模式)'} 模式，不是 cst。"
             f"本脚本只发力矩，模式不对就别跑。")
-    limit = deployment.get("external_target_torque_limit_per_mille")
+    limit = args.torque_limit
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise SystemExit(
-            f"部署 {args.deployment} 没有可用的 external_target_torque_limit_per_mille"
-            f"（读到 {limit!r}）。力矩冒烟拒绝在没有上限的部署上跑。")
+            f"--torque-limit 必须是 1..1000 的整数（读到 {limit!r}）。"
+            f"主站不查力矩大小，力矩冒烟拒绝在没有当场声明的上限时运行。")
     return mode, limit
 
 
@@ -296,6 +299,9 @@ def main(argv=None):
     parser.add_argument("--deployment", help="部署 ID（读模式和上限）")
     parser.add_argument("--axis", type=int, default=1, help="加力矩的轴号（从 1 起）")
     parser.add_argument("--torque", type=int, default=50, help="力矩目标（额定千分比）")
+    parser.add_argument("--torque-limit", dest="torque_limit", type=int, default=None,
+                        help="本次冒烟允许的最大力矩（额定千分比），必填。"
+                             "主站不查力矩大小，这个上限只能由操作者当场声明")
     parser.add_argument("--hold", type=float, default=2.0, help="加力矩保持时长（秒）")
     parser.add_argument("--zero", type=float, default=3.0, help="零力矩段时长（秒）")
     parser.add_argument("--zero-back", dest="zero_back", type=float, default=1.0,
@@ -318,10 +324,9 @@ def main(argv=None):
         raise SystemExit("--torque 超出千分比量程（±1000）")
 
     mode, limit = load_plan(args)
-    print(f"部署 {args.deployment}：模式 {mode}，力矩上限 ±{limit} 千分比")
+    print(f"部署 {args.deployment}：模式 {mode}，本次力矩上限 ±{limit}（--torque-limit）")
     if abs(args.torque) > limit:
-        raise SystemExit(
-            f"--torque {args.torque} 超过部署上限 {limit}；越限在协议那头会打掉整个会话。")
+        raise SystemExit(f"--torque {args.torque} 超过当场声明的上限 {limit}。")
 
     if args.dry_run:
         print(f"计划：零力矩段 {args.zero:g}s → 轴{args.axis} 发 {args.torque} 千分比 "

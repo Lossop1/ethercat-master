@@ -302,9 +302,9 @@ class CommandSession(QThread):
     def _track(self, engine):
         """记下"轴走到过哪儿"和"真正发出的最大单步"。
 
-        最大单步是从**发出去的那串目标**上算的，不是从本地账上算的：主站的单步限幅
-        比的是相邻两条已提交目标，本地账算得再准也不算数。engine.last_sent 是主站
-        真正收到的那一条。
+        最大单步是从**发出去的那串目标**上算的，不是从本地账上算的——本地账只是
+        打算发什么，engine.last_sent 是主站真正收到的那一条。主站不限制相邻增量，
+        这个数反映的是界面自己的点动速度档位有没有真的生效。
         """
         if not self.peak_deg or len(self.peak_deg) != engine.axis_count:
             self.peak_deg = [0.0] * engine.axis_count

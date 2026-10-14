@@ -41,13 +41,7 @@ enum
     EMASTER_PROBE_RAMP_CYCLES = 5000,
     EMASTER_PROBE_HOLD_CYCLES = 1000,
     EMASTER_PROBE_TARGET_MILLIDEGREES = 36000,
-    EMASTER_PROBE_MAX_AXES = 32,
-    /*
-     * 回调路径的跟随误差保护上限（原始位置计数）。基于真机实测峰值（1274 counts）
-     * 取约 2 倍余量（1274 * 2 ≈ 2550，取整为 2560）。与固定方案的 2000 毫度
-     * 上限（2548 counts）属于同一量级，能可靠检测驱动器完全不动的场景。
-     */
-    EMASTER_PROBE_MAX_FOLLOWING_ERROR_COUNTS = 2560
+    EMASTER_PROBE_MAX_AXES = 32
 };
 
 /*
@@ -388,11 +382,11 @@ static void print_probe_summary(const emaster_probe_ramp_t *ramp,
                 axis->internal_limit_active ? "是" : "否",
                 axis->voltage_enabled ? "是" : "否");
         fprintf(stdout,
-                "轴 %u 限位：读回=%s 最小=%d 最大=%d 换算读回=%s 608F=%u/%u 6091=%u/%u\n",
+                "轴 %u 限位：读回=%s 最小=%d 最大=%d 换算来源=%s 608F=%u/%u 6091=%u/%u\n",
                 (unsigned int)(axis_index + 1U),
                 axis->software_position_limits_read ? "是" : "否",
                 axis->software_position_limit_min, axis->software_position_limit_max,
-                axis->position_scale.read_succeeded ? "是" : "否",
+                emaster_fact_source_label(axis->position_scale.source),
                 (unsigned int)axis->position_scale.encoder_increments,
                 (unsigned int)axis->position_scale.encoder_motor_revolutions,
                 (unsigned int)axis->position_scale.gear_motor_revolutions,
@@ -544,8 +538,6 @@ int main(int argc, char **argv)
     callbacks.stop_user_data = &ramp;
     callbacks.position_target_source = probe_position_target_source;
     callbacks.position_target_source_user_data = &ramp;
-    callbacks.position_target_max_following_error_counts =
-        EMASTER_PROBE_MAX_FOLLOWING_ERROR_COUNTS;
     session_status = emaster_soem_control_session(&plan, results, axis_capacity,
                                                   &callbacks, &report);
     /*

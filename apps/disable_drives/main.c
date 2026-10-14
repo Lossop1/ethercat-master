@@ -13,9 +13,11 @@
 
 #include "soem/soem.h"
 
+#include <net/if.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 /* CiA 402 下行序列（厂商手册）。 */
 static const uint16_t CIA_CONTROLWORD_SEQUENCE[] = {0x0006U, 0x0007U, 0x0000U};
@@ -145,9 +147,23 @@ int main(int argc, char *argv[])
     read_only = (argc == 3);
 
     printf("interface=%s mode=%s\n", argv[1], read_only ? "read" : "disable");
+    /*
+     * 非 root 与网卡名错是两件事，处置也不同，先把它们分开说。否则权限不足会被一路
+     * 读成"网卡打不开"，顺着这条线索查下去永远查不到。两个判据都只在本工具里问。
+     */
+    if (geteuid() != 0)
+    {
+        fprintf(stderr, "错误：需要 root —— 访问总线要开原始套接字，用 sudo 重跑\n");
+        return 1;
+    }
+    if (if_nametoindex(argv[1]) == 0U)
+    {
+        fprintf(stderr, "错误：网卡 %s 不存在（不带参数运行可列出可用的网卡）\n", argv[1]);
+        return 1;
+    }
     if (!ecx_init(&context, argv[1]))
     {
-        fprintf(stderr, "错误：ecx_init 失败，接口 %s 打不开\n", argv[1]);
+        fprintf(stderr, "错误：ecx_init 失败，接口 %s 打不开（网卡 up 了吗？）\n", argv[1]);
         return 1;
     }
 

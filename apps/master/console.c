@@ -45,6 +45,8 @@ static const char *session_status_text(emaster_control_session_status_t status) 
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_SAFE_STOP_FAILED);
     case EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_UNCONFIRMED);
+    case EMASTER_CONTROL_SESSION_TARGET_REJECTED:
+        return emaster_text(EMASTER_TEXT_CONTROL_SESSION_TARGET_REJECTED);
     case EMASTER_CONTROL_SESSION_AUDIT_FAILED:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_FAILED);
     case EMASTER_CONTROL_SESSION_INTERFACE_OPEN_FAILED:
@@ -119,6 +121,20 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                     (unsigned long)axis->safeop_drive_diagnostic.servo_error_code,
                     result_text(axis->safeop_drive_diagnostic.read_succeeded));
         }
+        if (axis->pdo_device_mapping_adopted) {
+            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PDO_ADOPTED_LINE),
+                    (unsigned int)axis->position,
+                    (unsigned int)axis->pdo_device_mapping_difference_count,
+                    (unsigned int)axis->pdo_device_mapping_differences[0].mapping_index,
+                    (unsigned int)axis->pdo_device_mapping_differences[0].subindex,
+                    (unsigned long)axis->pdo_device_mapping_differences[0].declared_descriptor,
+                    (unsigned long)axis->pdo_device_mapping_differences[0].device_descriptor);
+        }
+        if (axis->sm_sync_type_substituted) {
+            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SM_SYNC_TYPE_LINE),
+                    (unsigned int)axis->position, (unsigned int)axis->sm2_sync_type_used,
+                    (unsigned int)axis->sm3_sync_type_used);
+        }
         if (axis->pdo_assignment_failed_index != 0U) {
             fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PDO_ASSIGNMENT_LINE),
                     (unsigned int)axis->position, (unsigned int)axis->pdo_assignment_failed_index,
@@ -152,7 +168,8 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                                 !axis->sm3_diagnostic.sync_error));
         }
         fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SCALE_LINE),
-                (unsigned int)axis->position, result_text(axis->position_scale.read_succeeded),
+                (unsigned int)axis->position,
+                emaster_fact_source_label(axis->position_scale.source),
                 (unsigned long)axis->position_scale.encoder_increments,
                 (unsigned long)axis->position_scale.encoder_motor_revolutions,
                 (unsigned long)axis->position_scale.gear_motor_revolutions,

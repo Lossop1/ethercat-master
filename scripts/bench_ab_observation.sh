@@ -89,8 +89,8 @@ sockpath, seconds, traverse, degrees, rate, cpd = sys.argv[1], float(sys.argv[2]
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.connect(sockpath)
 # 起手先读一次 status 拿**当前实际位置**当起点。"不读响应"这条臂针对的是持续命令流，
-# 起手读一次不改变它的性质；反过来，把起点写死会在轴停在别处时触发单步限幅，
-# 主站直接故障停机——那样测到的就不是背压，而是我自己的客户端在乱报目标。
+# 起手读一次不改变它的性质；反过来，把起点写死会在轴停在别处时让第一条目标离实际
+# 位置太远，那一条被主站拒收——那样测到的就不是背压，而是我自己的客户端在乱报目标。
 sock.sendall(b"status\n")
 buf = b""
 while b"\n" not in buf:
