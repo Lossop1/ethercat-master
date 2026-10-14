@@ -109,7 +109,7 @@ ERROR|<正文>
 
 完整的字段表由构造它们的那段代码定义（`src/bus/session/session_control.c` 中三个
 `case EMASTER_COMMAND_QUERY_*`），仓库里参考的解析实现是 `tools/closed_loop_client.py`
-与 `scripts/test_external_motion_client.py`。
+与 `tools/bench/test_external_motion_client.py`。
 
 ## 设点通道
 
@@ -123,7 +123,7 @@ ERROR|<正文>
 
 小端，定长，一条记录一次 `send`。**不 memcpy 结构体**：偏移、对齐、字节序都由这张表
 定格，两端各写一份实现（`src/setpoint/wire.c` 与 `tools/setpoint_send.py`），
-`checks/setpoint_channel_check.py` 逐字节核对两者一致。
+`tests/checks/setpoint_channel_check.py` 逐字节核对两者一致。
 
 头部 24 字节：
 

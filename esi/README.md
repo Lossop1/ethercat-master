@@ -22,18 +22,18 @@ esi/
 ## 拿它做什么
 
 ```
-python gen/emaster_config.py add-device esi/你的型号/xxx.xml
+python tools/gen/emaster_config.py add-device esi/你的型号/xxx.xml
 ```
 
 这一步把 ESI 里的硬件事实（身份、PDO 映射、条目位宽、支持的模式）抽出来，生成一份
 设备档草稿和一份策略档草稿。然后人和台架补上推不出来的那几个字段，再跑：
 
 ```
-python gen/emaster_config.py build
+python tools/gen/emaster_config.py build
 ```
 
 四族扁平文件写到 `config-runtime/`，主站 `--config-dir config-runtime` 读它。
-完整流程见 `gen/device/README.md` 与 `README.md` 的"快速上手"一节。
+完整流程见 `tools/gen/device/README.md` 与 `README.md` 的"快速上手"一节。
 
 ## 为什么不入库
 

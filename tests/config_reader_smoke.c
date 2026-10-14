@@ -3,7 +3,7 @@
  * 缺失语义和注释/空行处理。
  *
  * 为什么样本自己写：交付的仓库里不含任何设备配置，读器的输入由客户跑
- * gen/emaster_config.py 现生成。所以这里不问"某个型号的某个键是多少"，
+ * tools/gen/emaster_config.py 现生成。所以这里不问"某个型号的某个键是多少"，
  * 只问读器对**任意**一份扁平文件的行为 —— 那也是它在现场唯一需要成立的东西。
  */
 #include "emaster/config/config_reader.h"

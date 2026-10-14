@@ -376,7 +376,7 @@ class AxisChart(QWidget):
         **上端刻度值的基线必须落在标题基线以下。** 标题和刻度值都从 x=6 起画，标题
         在 `top + 12`；曲线区上边要是跑到标题基线上面去（`TITLE_H` 没让出来就是），
         刻度值就压在标题上——P12.18 就是这个，两个只差一个像素，看着像字糊了。
-        几何单独拿出来，就是为了让 `checks/chart_check.py` 能钉住这一条。
+        几何单独拿出来，就是为了让 `tests/checks/chart_check.py` 能钉住这一条。
         """
         title_baseline = top + 12
         plot_top = top + TITLE_H + HEADROOM

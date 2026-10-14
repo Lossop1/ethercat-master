@@ -11,7 +11,7 @@
 `motion_profiles/` `deployments/` 六族一个文件都没有**，`esi/` 也是空的。仓库里只有代码
 和与电机无关的那三族（`error_recovery_policies/`、`messages/`，以及本文件）。
 
-客户拿自己那台电机的 ESI 从零生成这六族（见 `gen/device/README.md`）。因此本文件里凡是举到
+客户拿自己那台电机的 ESI 从零生成这六族（见 `tools/gen/device/README.md`）。因此本文件里凡是举到
 具体型号、轴数、网口的地方都只是**举例说明字段语义**，不是仓库的实际内容。空不是错：
 一族可以一个文件都没有，校验器只抓真正的不一致（引用了不存在的 ID）。
 
@@ -84,7 +84,7 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 `devices/` 不手写，由 `config/device_policies/<型号>.json` 合成：策略档只写人做的选择
 （`pdo_sets` 里选哪几套、每套的模式值、`supported_modes`、停机判据、换算与遥测对象），
 身份、PDO 映射、位宽、数据类型全部由 `esi/` 里那份设备描述推导。推导和合成的命令见
-`gen/device/README.md`。策略档里没有的事实不许在这里臆造 —— 合成器直接报错退出。
+`tools/gen/device/README.md`。策略档里没有的事实不许在这里臆造 —— 合成器直接报错退出。
 
 ## 拓扑配置
 
@@ -201,7 +201,7 @@ PRE-OP 指纹工具不会读取它来提高状态。目标位置由启动时的 
 
 ## 提示资源
 
-`messages/zh_CN.json` 是当前中文提示的唯一正文来源。构建阶段由 `gen/generate_messages.py` 生成
+`messages/zh_CN.json` 是当前中文提示的唯一正文来源。构建阶段由 `tools/gen/generate_messages.py` 生成
 只读 C 表，并校验每条 `printf` 格式参数；业务代码只引用消息 ID，不得嵌入操作者提示文本。
 
 ## 运行记录

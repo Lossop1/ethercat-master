@@ -17,7 +17,7 @@
 正式系列以台架自己的部署为基准（下文记作 `<你的部署ID>`）：12 轴、1 ms、DC、CSP、30°输出轴往返、单程 5 s、100 Hz 客户端、triangle、全部轴运动、观测开启、轮间 60 s。保持测试沿用同一部署但不发运动目标。先确认实际拓扑及各轴换算与部署匹配；12 轴并非其它台架可直接照搬的条件。
 
 `<你的部署ID>` 不是仓库里的常量 —— 交付时六族配置是空的，这一份由你在现场用
-`python gen/emaster_config.py init-site` 生成（见 `README.md` 的"快速上手"与"配置模型"两节）。
+`python tools/gen/emaster_config.py init-site` 生成（见 `README.md` 的"快速上手"与"配置模型"两节）。
 **带轨迹的系列还要把运动方案挂到这份部署上**（`init-site --motion <运动方案 ID>`），
 不然部署是空闲档，客户端发目标才动、内置轨迹一次都不跑。换台架就换一份，
 所以本文的命令里出现的都是这个占位符，不是某个具体名字。
@@ -85,15 +85,15 @@ F9 开始前先估算审计容量、报告体积、磁盘空间与归档保留�
 先按 README 构建到 `build/`。以下命令在 Linux 台架仓库根目录执行。bench 脚本会清理其它主站，执行前必须确认专用台架没有活动会话。每轮结束先核对证据，再进行下一轮；如无法证明已停用则暂停系列，检查装置。
 
 ```bash
-python3 gen/validate_project.py
-python3 gen/emaster_config.py build --config config --out /tmp/config-runtime
+python3 tools/gen/validate_project.py
+python3 tools/gen/emaster_config.py build --config config --out /tmp/config-runtime
 diff -r config-runtime /tmp/config-runtime          # 逐字节相同 = 生成与配置内容无关
 ctest --test-dir build --output-on-failure
-python3 checks/config_chain_check.py
-python3 checks/analysis_tools_check.py
-python3 checks/report_telemetry_check.py
-python3 checks/device_facts_check.py
-python3 checks/pdo_assignment_check.py
+python3 tests/checks/config_chain_check.py
+python3 tests/checks/analysis_tools_check.py
+python3 tests/checks/report_telemetry_check.py
+python3 tests/checks/device_facts_check.py
+python3 tests/checks/pdo_assignment_check.py
 ```
 
 第二条是"换电机不重编主站"的主断言：客户改配置只重新生成，不动二进制。所以生成物
@@ -107,7 +107,7 @@ python3 checks/pdo_assignment_check.py
 
 ```bash
 # 用客户自己的配置生成一套 flat（先跑 add-device / init-site，见 README 的"配置模型"一节）
-python3 gen/emaster_config.py build --config config --out /tmp/customer-runtime
+python3 tools/gen/emaster_config.py build --config config --out /tmp/customer-runtime
 
 # 不改一行 C、不重编，同一个可执行文件读两套
 ./build/tests/test_public_api_swap config-runtime/topologies.flat config-runtime/catalog.flat \
@@ -126,7 +126,7 @@ python3 gen/emaster_config.py build --config config --out /tmp/customer-runtime
 ```bash
 sudo env REPO="$PWD" DEPLOYMENT=<你的部署ID> \
   SERIES=f3_idle60_v1_20261009a MODE=idle ROUNDS=3 GAP=60 \
-  IDLE=60 OBSERVATION=1 bash scripts/bench_series.sh
+  IDLE=60 OBSERVATION=1 bash tools/bench/bench_series.sh
 ```
 
 运动示例（对应 F4 第一组）：
@@ -136,8 +136,8 @@ sudo env REPO="$PWD" DEPLOYMENT=<你的部署ID> \
   SERIES=f4_motion60_v1_20261009a MODE=reciprocate ROUNDS=10 GAP=60 \
   DURATION=60 TRAVERSE=5 DEGREES=30 RATE=100 WAVE=triangle \
   ONLY_AXIS=0 OBSERVATION=1 SETTLE_TICKS=10 REPORT_INTERVAL=10 \
-  bash scripts/bench_series.sh
-python3 analysis/series_verdict.py evidence/_f4_motion60_v1_20261009a
+  bash tools/bench/bench_series.sh
+python3 tools/analysis/series_verdict.py evidence/_f4_motion60_v1_20261009a
 ```
 
 后续按 D 表改变时长/轮数并新建 SERIES。F5 每个轴独立命名并显式设置 `ONLY_AXIS`；F6 显式设置 `OBSERVATION`。故障注入、单轴保持和长时容量目前不能直接由 `series_verdict.py` 完成最终判断，须按 C 节逐项复核。
@@ -258,7 +258,7 @@ CiA 402（IEC 61800-7-201）的位定义，**没有厂商状态表佐证** —�
 
 两态读完之后：状态字在同一段掩码下取值不同的那些位就是掩码；取不出任何有区分度的位，
 就把 `safe_stop_status_mask` 填 0（含义是"没有可靠的设备侧判据"，停机退化为标准 CiA 402
-判据），**并在设备档和台架记录里写明这台设备属于这一类**。`gen/validate_project.py` 在
+判据），**并在设备档和台架记录里写明这台设备属于这一类**。`tools/gen/validate_project.py` 在
 掩码为 0 时会打印一条告警，不是错误 —— 合法，但必须有人知道自己选了什么。
 
 ---
@@ -271,7 +271,7 @@ CiA 402（IEC 61800-7-201）的位定义，**没有厂商状态表佐证** —�
 
 ```bash
 sudo env DEPLOYMENT=<你的部署ID> IDLE=60 OBSERVATION=1 TAG=idle1 \
-  bash scripts/bench_idle.sh
+  bash tools/bench/bench_idle.sh
 ```
 
 **单轮往返**（电机往复）：
@@ -279,14 +279,14 @@ sudo env DEPLOYMENT=<你的部署ID> IDLE=60 OBSERVATION=1 TAG=idle1 \
 ```bash
 sudo env DEPLOYMENT=<你的部署ID> DURATION=60 TRAVERSE=5 DEGREES=30 \
   RATE=100 ONLY_AXIS=0 OBSERVATION=1 TAG=recip30 \
-  bash scripts/bench_reciprocate_30deg.sh
+  bash tools/bench/bench_reciprocate_30deg.sh
 ```
 
 **多轮**（把证据收进仓库）：
 
 ```bash
 sudo env DEPLOYMENT=<你的部署ID> SERIES=<系列名> ROUNDS=3 GAP=20 \
-  MODE=idle IDLE=900 OBSERVATION=1 bash scripts/bench_series.sh
+  MODE=idle IDLE=900 OBSERVATION=1 bash tools/bench/bench_series.sh
 ```
 
 **`SERIES` 决定证据目录 `evidence/_<SERIES>/`。换个名字就不会覆盖上一批。**
@@ -384,7 +384,7 @@ evidence/_<SERIES>/
 
 ## 3.5 报告读取工具
 
-`analysis/` 下共 19 个脚本。常用的是：
+`tools/analysis/` 下共 19 个脚本。常用的是：
 
 | 工具 | 用途 |
 | --- | --- |
@@ -406,9 +406,9 @@ evidence/_<SERIES>/
 | `panel_transcript.py` | 终端面板会话转录 |
 | `uprobe_offsets.py` | uprobe 偏移计算（开发用） |
 
-另有两条在 `scripts/` 顶层：`nic_counters.py --diff`（网卡收发计数差分）、`capture_identity.py`（装置身份 + 主机上下文）。
+另有两条在 `tools/bench/` 顶层：`nic_counters.py --diff`（网卡收发计数差分）、`capture_identity.py`（装置身份 + 主机上下文）。
 
-`analysis/`、`scripts/`、`checks/`、`tests/`、`evidence/`、`runtime/` 是同一棵交付树里的开发与验证部分，产品仓与开发仓在这里是同一棵树。客户可以不看它们；`tests/` 例外，`ctest` 要用。
+`tools/analysis/`、`tools/bench/`、`tests/checks/`、`tests/`、`evidence/`、`runtime/` 是同一棵交付树里的开发与验证部分，产品仓与开发仓在这里是同一棵树。客户可以不看它们；`tests/` 例外，`ctest` 要用。
 
 ## 3.6 报告字段层级
 
@@ -438,7 +438,7 @@ evidence/_<SERIES>/
 **审计段记录的是主站真的读过的对象。** 所以必须按阶段取，不能把停机后的读数当作运行期的值。
 
 ```bash
-sudo python3 analysis/extract_report.py runtime/reports/<部署>-latest.json |
+sudo python3 tools/analysis/extract_report.py runtime/reports/<部署>-latest.json |
   grep -E '^axis[0-9]+\.(status_word|mode_display|target_position)\.'
 ```
 
@@ -558,7 +558,7 @@ axis1.target_position.cyclic_operation=462644
 ## T5 第一现场采集 —— 能力已建成，尚未用于探查
 
 主站现在在报告里留**首个异常前后各 200 拍**的逐拍记录（`cycle_trace`），
-`analysis/trace_window.py` 把它读成表。字段：交换号、WKC、各段耗时、距 Sync0 的裕量。
+`tools/analysis/trace_window.py` 把它读成表。字段：交换号、WKC、各段耗时、距 Sync0 的裕量。
 **这个能力已在一个真实异常上验证过**，但**还没有用它得出任何探查结论**。
 
 ## T6 条件扫描 —— 只做了"重启间隔"一项
@@ -732,7 +732,7 @@ PRE-OP → SAFE-OP → OP 整段（控制字要到 OP 才发得出去，SAFE-OP 
     失败率仍需再跑若干轮才有。
 
     **2026-10-13 带载补测（12 轴，正弦 30° 往返，非空转）。**接线加到 12 台后，从零走
-    客户路径起主站，用 `scripts/bench_reciprocate_30deg.sh` 跑
+    客户路径起主站，用 `tools/bench/bench_reciprocate_30deg.sh` 跑
     `WAVE=sine DEGREES=30 TRAVERSE=3 RATE=100 DURATION=60`。同样的参数连跑两轮：
 
     | 轮 | 结果 | 周期数 | 期望/最后 WKC | 错误分类 | 停止原因 |
@@ -765,7 +765,7 @@ PRE-OP → SAFE-OP → OP 整段（控制字要到 OP 才发得出去，SAFE-OP 
     | 8 | 0 | 77903 | 36/36 | 广播读齐 `wkc=12`、12 台全 `state=8`、无错误位 |
     | 10 | 0 | 77917 | 36/36 | 同上 |
 
-    交付面自带的判定工具给出：**9/10 通过**（`python3 analysis/series_verdict.py
+    交付面自带的判定工具给出：**9/10 通过**（`python3 tools/analysis/series_verdict.py
     evidence/_stab12`，退出码 1）。十轮 `deadline_missed=0`、`over_budget_cycle_count=0`、
     `frame_interval_gap_count=0`，帧间隔上限 1.03–1.10 ms。
 

@@ -3,12 +3,12 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}"
     COMMAND
         "${Python3_EXECUTABLE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../gen/generate_messages.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/gen/generate_messages.py"
         --input "${EMASTER_MESSAGE_CONFIG_FILE}"
         --output "${EMASTER_GENERATED_MESSAGES}"
     DEPENDS
         "${EMASTER_MESSAGE_CONFIG_FILE}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../gen/generate_messages.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/gen/generate_messages.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../include/emaster/messages.h"
     COMMENT "生成编译期消息资源"
     VERBATIM)

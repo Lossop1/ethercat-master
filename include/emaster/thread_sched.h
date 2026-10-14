@@ -43,7 +43,7 @@
  * 会说明它没摆脱。要判断"到底摆脱没有"，别信这一行，看报告里 thread_schedstat
  * 的 policy——那是内核的实况。
  *
- * 新增线程时别忘了调它：checks/master_thread_sched_check.py 盯着这件事。
+ * 新增线程时别忘了调它：tests/checks/master_thread_sched_check.py 盯着这件事。
  */
 static inline bool emaster_thread_leave_realtime(const char *who)
 {

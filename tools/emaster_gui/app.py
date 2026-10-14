@@ -870,12 +870,12 @@ def _selftest_positions(window):
 def _schedule_selftest_reciprocate(window, seconds, degrees, traverse_s):
     """自检：全轴同时走经典的来回（默认 30°，每趟 3 秒），按自检总时长摊开。
 
-    **波形跟经典那条一致：起点 → +A → 起点 → +A**（scripts/test_external_motion_client.py
+    **波形跟经典那条一致：起点 → +A → 起点 → +A**（tools/bench/test_external_motion_client.py
     的 triangle，周期 2×单程，全程匀速）。不是 ±A 来回摆：经典那条只在正方向一侧走，
     每一趟都回到起点，所以这里也是"去、回起点、去、回起点"。
 
     **为什么要这一段。** 台架上经典那条往返是**另一个客户端**发的
-    （scripts/bench_reciprocate_30deg.sh）。这一轮要证的是"界面发的命令也能把轴走到位"，
+    （tools/bench/bench_reciprocate_30deg.sh）。这一轮要证的是"界面发的命令也能把轴走到位"，
     所以复用界面上本来就有的那个动作（相对启动位置的多轴移动），不加新协议、不改控制律，
     只加一段节奏。
 

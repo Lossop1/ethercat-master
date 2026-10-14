@@ -4,7 +4,7 @@
 主站的设点口是 AF_UNIX + **SOCK_SEQPACKET**、**只写不回**。这个工具照着
 `include/emaster/setpoint/wire.h` 的记录格式打包发送：一条记录一次 send，发完就走。
 它同时是 rl_sar 那一侧的实现样板——**协议在这两处各有一份实现**（这里与
-`src/setpoint/wire.c`），改格式时一起改，`checks/setpoint_channel_check.py` 拿同一组
+`src/setpoint/wire.c`），改格式时一起改，`tests/checks/setpoint_channel_check.py` 拿同一组
 用例对两边。
 
 用法（路径由部署 ID 推出来，与主站同一套命名）：

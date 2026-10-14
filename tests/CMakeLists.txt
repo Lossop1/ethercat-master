@@ -120,7 +120,7 @@ add_test(NAME target_guard COMMAND test_target_guard)
 # 而那种错只在台架上看得出来、还看不准。拒收判据（魔数/版本/长度自洽）同样在这里钉。
 #
 # tools/setpoint_send.py 是同一份格式的 Python 实现，改偏移表时两处一起改；
-# checks/setpoint_channel_check.py 拿同一组用例对两边。
+# tests/checks/setpoint_channel_check.py 拿同一组用例对两边。
 add_executable(test_setpoint_wire unit/setpoint/test_setpoint_wire.c)
 target_link_libraries(test_setpoint_wire PRIVATE emaster::setpoint_wire)
 emaster_enable_strict_warnings(test_setpoint_wire)
@@ -152,7 +152,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # ——两边各造一份，迟早问的不是同一份报告。
     #
     # 只在 Linux 上建，与 src/audit 的 report 库同因（那个库本身就这么门控着）。
-    # 报告主体份数/日志那半边的判别力由 checks/report_archive_check.py
+    # 报告主体份数/日志那半边的判别力由 tests/checks/report_archive_check.py
     # 用变异对照另外看住：删除留声是子进程 stderr 的事，在 C 里判得重定向再恢复 fd，
     # 反而更容易把要验的东西写歪。
     add_executable(test_report_fault_fields unit/audit/test_report_fault_fields.c)

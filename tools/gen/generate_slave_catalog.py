@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""根据设备事实配置生成编译期只读的设备目录。"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+
+def parse_unsigned(value: object, field: str, maximum: int) -> int:
+    """解析十六进制无符号字段，并在生成前拒绝超范围输入。"""
+    if not isinstance(value, str) or not value.startswith("0x"):
+        raise ValueError(f"{field} 必须是十六进制字符串")
+    number = int(value, 16)
+    if not 0 <= number <= maximum:
+        raise ValueError(f"{field} 超出范围")
+    return number
+
+
+def required_string(document: dict[str, Any], field: str, kind: str) -> str:
+    """读取非空字符串；配置错误必须在构建期失败。"""
+    value = document.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{kind}缺少非空字段 {field}")
+    return value
+
+
+def c_string(value: object) -> str:
+    """使用 JSON 转义规则生成 C 字符串字面量。"""
+    return json.dumps(str(value), ensure_ascii=True)
+
+
+def direction_values(direction: dict[str, Any], field: str) -> dict[str, object]:
+    """提取一个 PDO 方向中的全部映射表，保留配置声明顺序。"""
+    mappings = []
+    for mapping_ordinal, mapping in enumerate(direction["mappings"], start=1):
+        entries = []
+        bit_length = 0
+        for entry_ordinal, entry in enumerate(mapping["entries"], start=1):
+            bits = int(entry["bits"])
+            bit_length += bits
+            entries.append(
+                {
+                    "index": parse_unsigned(
+                        entry["index"],
+                        f"{field}.mappings[{mapping_ordinal}].entries[{entry_ordinal}].index",
+                        0xFFFF,
+                    ),
+                    "subindex": int(entry["subindex"]),
+                    "bits": bits,
+                    "data_type": c_string(entry["data_type"]),
+                    "name": c_string(entry["name"]),
+                }
+            )
+        mappings.append(
+            {
+                "index": parse_unsigned(
+                    mapping["index"], f"{field}.mappings[{mapping_ordinal}].index", 0xFFFF
+                ),
+                "entries": entries,
+                "bit_length": bit_length,
+            }
+        )
+    return {"bytes": int(direction["bytes"]), "mappings": mappings}
+
+
+# 设备档里的写法 → C 枚举符号。与遥测的类型/语义同一套做法：扁平文件存符号文本，
+# 生成的 strcmp 链把它还原成符号，枚举的数值只由 C 编译器决定。
+ASSIGNMENT_STYLE_VALUES = {
+    "module_slot": "EMASTER_PDO_ASSIGNMENT_MODULE_SLOT",
+    "direct_1c12": "EMASTER_PDO_ASSIGNMENT_DIRECT",
+}
+
+
+def pdo_set_values(pdo_set: dict[str, Any], profile_id: str) -> dict[str, object]:
+    """生成一个设备 PDO 方案的结构化值，保留所有可选方案。"""
+    pdo_id = required_string(pdo_set, "id", f"设备 {profile_id} 的 PDO 方案")
+    # 缺省模块化：既有设备档没有这个字段，行为不能因为加它而变。
+    assignment_style = pdo_set.get("assignment_style", "module_slot")
+    if assignment_style not in ASSIGNMENT_STYLE_VALUES:
+        raise ValueError(
+            f"设备 {profile_id} PDO 方案 {pdo_id} 的 assignment_style 无效：{assignment_style!r}"
+        )
+    if assignment_style == "direct_1c12":
+        # 直连设备没有模块槽位这回事，声明了就是配置写错，不许留着当摆设。
+        if pdo_set.get("module_ident") is not None or pdo_set.get("module_slot", 0) != 0:
+            raise ValueError(
+                f"设备 {profile_id} PDO 方案 {pdo_id} 是直连分配，"
+                "不应声明 module_ident 或非零 module_slot"
+            )
+        module_ident = 0
+        module_slot = 0
+    else:
+        module_ident = parse_unsigned(
+            pdo_set["module_ident"], f"设备 {profile_id} PDO 方案 {pdo_id} 的 module_ident", 0xFFFFFFFF
+        )
+        module_slot = int(pdo_set["module_slot"])
+    mode_initialization = pdo_set.get("mode_initialization")
+    mode_init_enabled = mode_initialization is not None
+    mode_init_index = 0
+    mode_init_subindex = 0
+    mode_init_value = 0
+    if mode_init_enabled:
+        if not isinstance(mode_initialization, dict) or mode_initialization.get("transition") != "safeop_to_op":
+            raise ValueError(f"设备 {profile_id} PDO 方案 {pdo_id} 的 mode_initialization 必须声明 safeop_to_op")
+        mode_init_index = parse_unsigned(
+            mode_initialization.get("index"),
+            f"设备 {profile_id} PDO 方案 {pdo_id} mode_initialization.index",
+            0xFFFF,
+        )
+        mode_init_subindex = int(mode_initialization.get("subindex", 0))
+        if not 0 <= mode_init_subindex <= 0xFF:
+            raise ValueError(f"设备 {profile_id} PDO 方案 {pdo_id} mode_initialization.subindex 超出范围")
+        mode_init_value = int(mode_initialization.get("value"))
+        if not -128 <= mode_init_value <= 127:
+            raise ValueError(f"设备 {profile_id} PDO 方案 {pdo_id} mode_initialization.value 超出范围")
+    return {
+        "id": pdo_id,
+        "module_ident": module_ident,
+        "module_slot": module_slot,
+        "assignment_style": ASSIGNMENT_STYLE_VALUES[assignment_style],
+        "rx": direction_values(pdo_set["rx"], f"设备 {profile_id} PDO 方案 {pdo_id} rx"),
+        "tx": direction_values(pdo_set["tx"], f"设备 {profile_id} PDO 方案 {pdo_id} tx"),
+        "mode_init_on_safeop_to_op": mode_init_enabled,
+        "mode_init_index": mode_init_index,
+        "mode_init_subindex": mode_init_subindex,
+        "mode_init_value": mode_init_value,
+    }
+
+
+TELEMETRY_TYPE_VALUES = {
+    "u8": "EMASTER_TELEMETRY_TYPE_U8",
+    "i8": "EMASTER_TELEMETRY_TYPE_I8",
+    "u16": "EMASTER_TELEMETRY_TYPE_U16",
+    "i16": "EMASTER_TELEMETRY_TYPE_I16",
+    "u32": "EMASTER_TELEMETRY_TYPE_U32",
+    "i32": "EMASTER_TELEMETRY_TYPE_I32",
+}
+
+TELEMETRY_SEMANTIC_VALUES = {
+    "none": "EMASTER_TELEMETRY_NONE",
+    "actual_current": "EMASTER_TELEMETRY_ACTUAL_CURRENT",
+    "error_code": "EMASTER_TELEMETRY_ERROR_CODE",
+    "bus_voltage": "EMASTER_TELEMETRY_BUS_VOLTAGE",
+    "mosfet_temperature": "EMASTER_TELEMETRY_MOSFET_TEMPERATURE",
+    "motor_temperature": "EMASTER_TELEMETRY_MOTOR_TEMPERATURE",
+    "actual_velocity": "EMASTER_TELEMETRY_ACTUAL_VELOCITY",
+    "target_velocity": "EMASTER_TELEMETRY_TARGET_VELOCITY",
+    "extended_error_code": "EMASTER_TELEMETRY_EXTENDED_ERROR_CODE",
+    "servo_error_code": "EMASTER_TELEMETRY_SERVO_ERROR_CODE",
+    "target_position_readback": "EMASTER_TELEMETRY_TARGET_POSITION_READBACK",
+    "max_torque": "EMASTER_TELEMETRY_MAX_TORQUE",
+    "max_motor_speed": "EMASTER_TELEMETRY_MAX_MOTOR_SPEED",
+}
+
+
+def slow_telemetry_values(document: dict[str, Any], profile_id: str) -> list[dict[str, object]]:
+    """提取可选的慢速遥测对象表；缺省表示该设备不声明遥测对象，生成 NULL。"""
+    entries = document.get("slow_telemetry")
+    if entries is None:
+        return []
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"设备 {profile_id} 的 slow_telemetry 必须是非空数组")
+    values = []
+    names: set[str] = set()
+    addresses: set[tuple[int, int]] = set()
+    for ordinal, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条必须是对象")
+        kind = f"设备 {profile_id} 的 slow_telemetry 第 {ordinal} 条"
+        name = required_string(entry, "name", kind)
+        index = parse_unsigned(entry.get("index"), f"{kind} index", 0xFFFF)
+        subindex = entry.get("subindex")
+        if not isinstance(subindex, int) or isinstance(subindex, bool) or not 0 <= subindex <= 0xFF:
+            raise ValueError(f"{kind} subindex 超出范围")
+        telemetry_type = entry.get("type")
+        if telemetry_type not in TELEMETRY_TYPE_VALUES:
+            raise ValueError(f"{kind} 类型无效")
+        semantic = entry.get("semantic")
+        if semantic not in TELEMETRY_SEMANTIC_VALUES:
+            raise ValueError(f"{kind} 语义无效")
+        unit = entry.get("unit")
+        if not isinstance(unit, str):
+            raise ValueError(f"{kind} unit 必须是字符串")
+        address = (index, subindex)
+        if name in names or address in addresses:
+            raise ValueError(f"{kind} 名称或地址重复")
+        names.add(name)
+        addresses.add(address)
+        values.append(
+            {
+                "name": c_string(name),
+                "index": index,
+                "subindex": subindex,
+                "type": TELEMETRY_TYPE_VALUES[telemetry_type],
+                "semantic": TELEMETRY_SEMANTIC_VALUES[semantic],
+                "unit": c_string(unit),
+            }
+        )
+    return values
+
+
+def profile_values(document: dict[str, Any]) -> dict[str, object]:
+    """提取设备事实，并保留全部 PDO 方案供运行方案选择。"""
+    profile_id = required_string(document, "profile_id", "设备配置")
+    identity = document["identity"]
+    pdo_sets = document["pdo_sets"]
+    protocol = document["protocol"]
+    conversion = document.get("conversion")
+    if not all(isinstance(item, dict) for item in (identity, protocol)) or (
+        conversion is not None and not isinstance(conversion, dict)
+    ):
+        raise ValueError(
+            f"设备 {profile_id} 的 identity、protocol、pdo_sets 或 conversion 类型无效"
+        )
+    if not isinstance(pdo_sets, list) or not pdo_sets:
+        raise ValueError(f"设备 {profile_id} 的 pdo_sets 必须是非空数组")
+
+    reference_id = required_string(document, "reference_pdo_set_id", f"设备 {profile_id}")
+    pdo_values = [pdo_set_values(item, profile_id) for item in pdo_sets]
+    if reference_id not in {item["id"] for item in pdo_values}:
+        raise ValueError(f"设备 {profile_id} 的 reference_pdo_set_id 不存在")
+    safe_stop_status_mask = parse_unsigned(
+        protocol["safe_stop_status_mask"], "protocol.safe_stop_status_mask", 0xFFFF
+    )
+    safe_stop_status_value = parse_unsigned(
+        protocol["safe_stop_status_value"], "protocol.safe_stop_status_value", 0xFFFF
+    )
+    # 掩码为 0 是合法且含义明确的：这台设备没有可靠的设备侧停机判据。运行期据此
+    # 只走标准 CiA 402 状态判据（session_shutdown.c 里 device_safe 本来就带非零检查）。
+    # 禁止它反而是逼人写一个假的位；期望值必须同时为 0，否则那句话自相矛盾。
+    if safe_stop_status_mask == 0:
+        if safe_stop_status_value != 0:
+            raise ValueError(f"设备 {profile_id} 的空停用状态字掩码要求期望值也为 0")
+    elif safe_stop_status_value & ~safe_stop_status_mask:
+        raise ValueError(f"设备 {profile_id} 的停用状态字条件无效")
+
+    return {
+        "profile_id": c_string(profile_id),
+        "model": c_string(document["model"]),
+        "vendor_id": parse_unsigned(identity["vendor_id"], "identity.vendor_id", 0xFFFFFFFF),
+        "product_code": parse_unsigned(
+            identity["product_code"], "identity.product_code", 0xFFFFFFFF
+        ),
+        "revision": parse_unsigned(identity["revision"], "identity.revision", 0xFFFFFFFF),
+        "reference_pdo_set_id": c_string(reference_id),
+        "pdo_sets": pdo_values,
+        # 厂商资料没给换算期望时写 0 / -1：0 表示"没有这个事实"，不是"每转 0 个计数"。
+        # 设备实现了 608F/6091 时，运行期以读回为准，这三项只作对账；设备不实现它们时
+        # （MT 的对象字典里就没有），运行期用这三项，报告里写来源是"设备档声明"。
+        "encoder_counts": 0
+        if not conversion
+        else int(conversion["encoder_counts_per_motor_revolution_default"]),
+        "gear_motor_revolutions": 0
+        if not conversion
+        else int(conversion.get("gear_motor_revolutions_default", 0)),
+        "gear_shaft_revolutions": 0
+        if not conversion
+        else int(conversion.get("gear_shaft_revolutions_default", 0)),
+        # -1 = 设备档没声明方向。607E 的合法取值是 0/1，所以 -1 不会与真值撞车。
+        "polarity": -1
+        if not conversion
+        else int(conversion.get("polarity_default", -1)),
+        "supports_pdo_assignment": "true"
+        if protocol.get("supports_pdo_assignment", False)
+        else "false",
+        "supports_pdo_configuration": "true"
+        if protocol["supports_pdo_configuration"]
+        else "false",
+        "supports_dc": "true"
+        if protocol["supports_distributed_clocks"]
+        else "false",
+        "safe_stop_status_mask": safe_stop_status_mask,
+        "safe_stop_status_value": safe_stop_status_value,
+        "slow_telemetry": slow_telemetry_values(document, profile_id),
+    }
+
+
+def mapping_declarations(
+    pdo_set: dict[str, object], profile_ordinal: int, pdo_set_ordinal: int
+) -> list[str]:
+    """生成一个 PDO 方案的条目数组和映射表数组。"""
+    declarations = []
+    for direction_name in ("rx", "tx"):
+        direction = pdo_set[direction_name]
+        mapping_initializers = []
+        for mapping_ordinal, mapping in enumerate(direction["mappings"]):
+            entries_name = (
+                f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_{direction_name}_mapping_"
+                f"{mapping_ordinal}_entries"
+            )
+            rendered_entries = ",\n".join(
+                "    {"
+                f"UINT16_C(0x{entry['index']:04X}), UINT8_C({entry['subindex']}), "
+                f"UINT8_C({entry['bits']}), {entry['data_type']}, {entry['name']}"
+                "}"
+                for entry in mapping["entries"]
+            )
+            declarations.append(
+                f"static const emaster_pdo_entry_t {entries_name}[] = {{\n"
+                f"{rendered_entries}\n}};"
+            )
+            mapping_initializers.append(
+                "    {"
+                f"UINT16_C(0x{mapping['index']:04X}), {entries_name}, "
+                f"sizeof({entries_name}) / sizeof({entries_name}[0]), "
+                f"UINT32_C({mapping['bit_length']})"
+                "}"
+            )
+        mappings_name = (
+            f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_{direction_name}_mappings"
+        )
+        declarations.append(
+            f"static const emaster_pdo_mapping_profile_t {mappings_name}[] = {{\n"
+            + ",\n".join(mapping_initializers)
+            + "\n};"
+        )
+    return declarations
+
+
+def pdo_set_initializer(pdo_set: dict[str, object], profile_ordinal: int, pdo_set_ordinal: int) -> str:
+    """生成一个 PDO 方案结构体初始化器。"""
+    rx = pdo_set["rx"]
+    tx = pdo_set["tx"]
+    return (
+        "    {"
+        f"{c_string(pdo_set['id'])}, UINT32_C(0x{pdo_set['module_ident']:08X}), "
+        f"UINT8_C({pdo_set['module_slot']}), "
+        f"{pdo_set['assignment_style']}, "
+        f"UINT16_C({rx['bytes']}), UINT16_C({tx['bytes']}), "
+        f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings, "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings) / "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_rx_mappings[0]), "
+        f"profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings, "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings) / "
+        f"sizeof(profile_{profile_ordinal}_pdo_{pdo_set_ordinal}_tx_mappings[0]), "
+        f"{'true' if pdo_set['mode_init_on_safeop_to_op'] else 'false'}, "
+        f"UINT16_C(0x{pdo_set['mode_init_index']:04X}), "
+        f"UINT8_C({pdo_set['mode_init_subindex']}), "
+        f"INT8_C({pdo_set['mode_init_value']})"
+        "}"
+    )
+
+
+def profile_initializer(values: dict[str, object], ordinal: int) -> str:
+    """生成一个设备事实目录结构体初始化器。"""
+    if values["slow_telemetry"]:
+        telemetry_initializer = (
+            f"        .slow_telemetry = profile_{ordinal}_slow_telemetry,\n"
+            f"        .slow_telemetry_count = sizeof(profile_{ordinal}_slow_telemetry) / "
+            f"sizeof(profile_{ordinal}_slow_telemetry[0]),\n"
+        )
+    else:
+        telemetry_initializer = (
+            "        .slow_telemetry = NULL,\n        .slow_telemetry_count = 0U,\n"
+        )
+    return f"""    {{
+        .profile_id = {values['profile_id']},
+        .model = {values['model']},
+        .identity = {{
+            .vendor_id = UINT32_C(0x{values['vendor_id']:08X}),
+            .product_code = UINT32_C(0x{values['product_code']:08X}),
+            .revision = UINT32_C(0x{values['revision']:08X}),
+        }},
+        .reference_pdo_set_id = {values['reference_pdo_set_id']},
+        .pdo_sets = profile_{ordinal}_pdo_sets,
+        .pdo_set_count = sizeof(profile_{ordinal}_pdo_sets) / sizeof(profile_{ordinal}_pdo_sets[0]),
+        .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
+        .gear_motor_revolutions_default = UINT32_C({values['gear_motor_revolutions']}),
+        .gear_shaft_revolutions_default = UINT32_C({values['gear_shaft_revolutions']}),
+        .polarity_default = {values['polarity']},
+        .supports_pdo_assignment = {values['supports_pdo_assignment']},
+        .supports_pdo_configuration = {values['supports_pdo_configuration']},
+        .supports_distributed_clocks = {values['supports_dc']},
+        .safe_stop_status_mask = UINT16_C(0x{values['safe_stop_status_mask']:04X}),
+        .safe_stop_status_value = UINT16_C(0x{values['safe_stop_status_value']:04X}),
+{telemetry_initializer}    }}"""
+
+
+def generate(documents: list[dict[str, Any]]) -> str:
+    """按稳定设备 ID 生成目录，保证相同输入产生逐字节一致的输出。"""
+    if not documents:
+        raise ValueError("至少需要一个设备配置")
+
+    ordered = sorted(documents, key=lambda item: str(item.get("profile_id", "")))
+    profile_ids = [str(item.get("profile_id", "")) for item in ordered]
+    if len(profile_ids) != len(set(profile_ids)):
+        raise ValueError("设备配置的 profile_id 必须唯一")
+
+    values = [profile_values(item) for item in ordered]
+    declarations: list[str] = []
+    for profile_ordinal, value in enumerate(values):
+        for pdo_set_ordinal, pdo_set in enumerate(value["pdo_sets"]):
+            declarations.extend(mapping_declarations(pdo_set, profile_ordinal, pdo_set_ordinal))
+        declarations.append(
+            f"static const emaster_pdo_set_profile_t profile_{profile_ordinal}_pdo_sets[] = {{\n"
+            + ",\n".join(
+                pdo_set_initializer(pdo_set, profile_ordinal, pdo_set_ordinal)
+                for pdo_set_ordinal, pdo_set in enumerate(value["pdo_sets"])
+            )
+            + "\n};"
+        )
+        if value["slow_telemetry"]:
+            declarations.append(
+                f"static const emaster_slow_telemetry_t "
+                f"profile_{profile_ordinal}_slow_telemetry[] = {{\n"
+                + ",\n".join(
+                    "    {"
+                    f"{entry['name']}, UINT16_C(0x{entry['index']:04X}), "
+                    f"UINT8_C({entry['subindex']}), {entry['type']}, "
+                    f"{entry['semantic']}, {entry['unit']}"
+                    "}"
+                    for entry in value["slow_telemetry"]
+                )
+                + "\n};"
+            )
+
+    initializers = ",\n".join(
+        profile_initializer(value, ordinal) for ordinal, value in enumerate(values)
+    )
+    return f"""/* 由 tools/gen/generate_slave_catalog.py 生成，禁止手工修改。 */
+#include "emaster/catalog/slave_profile.h"
+
+#include <stddef.h>
+
+{"\n\n".join(declarations)}
+
+static const emaster_slave_profile_t profiles[] = {{
+{initializers},
+}};
+
+size_t emaster_slave_profile_count(void)
+{{
+    return sizeof(profiles) / sizeof(profiles[0]);
+}}
+
+const emaster_slave_profile_t *emaster_slave_profile_at(size_t index)
+{{
+    if (index >= emaster_slave_profile_count())
+    {{
+        return NULL;
+    }}
+    return &profiles[index];
+}}
+"""
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True, type=Path, nargs="+")
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args()
+
+    documents = [json.loads(path.read_text(encoding="utf-8-sig")) for path in args.input]
+    output = generate(documents)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(output, encoding="utf-8", newline="\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

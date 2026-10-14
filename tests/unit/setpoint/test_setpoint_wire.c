@@ -7,7 +7,7 @@
  *
  * 红了先看这里再改 include/emaster/setpoint/wire.h：偏移表在 wire.c 顶上，两处
  * 一起改。tools/setpoint_send.py 是同一份格式的 Python 实现，也要一起改——
- * checks/setpoint_channel_check.py 会拿同一个用例对两边。
+ * tests/checks/setpoint_channel_check.py 会拿同一个用例对两边。
  */
 
 #include <stdio.h>

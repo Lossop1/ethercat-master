@@ -30,7 +30,7 @@ option(EMASTER_BUILD_TESTS "构建离线单元测试" ON)
 # 避免在构建脚本中维护单个设备文件名。
 #
 # 空目录是合法状态，不是错误：这个项目交付时不含任何电机配置，客户用自己的 ESI 跑
-# gen/emaster_config.py 生成。构建必须先于配置成立 —— 生成出来的 C 与配置内容无关
+# tools/gen/emaster_config.py 生成。构建必须先于配置成立 —— 生成出来的 C 与配置内容无关
 # （条目数在运行期从扁平文件读），所以二进制建得出来，只是启动时说"没有部署"。
 file(GLOB EMASTER_DEVICE_CONFIG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/config/devices/*.json")
@@ -87,13 +87,13 @@ add_custom_command(
            "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/topologies.flat"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}/emaster/config"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_config_apply.py"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_config_apply.py"
             --topologies "${CMAKE_CURRENT_SOURCE_DIR}/config/topologies"
             --c-output "${EMASTER_GENERATED_DIR}/topologies.c"
             --h-output "${EMASTER_GENERATED_DIR}/emaster/config/generated_apply.h"
             --flat-output "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/topologies.flat"
     DEPENDS ${EMASTER_TOPOLOGY_CONFIG_FILES}
-            "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_config_apply.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_config_apply.py"
     COMMENT "生成拓扑族的填充代码与运行时配置"
     VERBATIM)
 
@@ -102,14 +102,14 @@ add_custom_command(
            "${EMASTER_GENERATED_DIR}/emaster/config/generated_catalog.h"
            "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/catalog.flat"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}/emaster/config"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_catalog_apply.py"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_catalog_apply.py"
             --devices "${CMAKE_CURRENT_SOURCE_DIR}/config/devices"
             --c-output "${EMASTER_GENERATED_DIR}/catalog.c"
             --h-output "${EMASTER_GENERATED_DIR}/emaster/config/generated_catalog.h"
             --flat-output "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/catalog.flat"
     DEPENDS ${EMASTER_DEVICE_CONFIG_FILES}
-            "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_catalog_apply.py"
-            "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_slave_catalog.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_catalog_apply.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_slave_catalog.py"
     COMMENT "生成设备目录族的填充代码与运行时配置"
     VERBATIM)
 
@@ -118,15 +118,15 @@ add_custom_command(
            "${EMASTER_GENERATED_DIR}/emaster/config/generated_runtime.h"
            "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/runtime.flat"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}/emaster/config"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_runtime_apply.py"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_runtime_apply.py"
             --operations "${CMAKE_CURRENT_SOURCE_DIR}/config/operation_profiles"
             --motions "${CMAKE_CURRENT_SOURCE_DIR}/config/motion_profiles"
             --c-output "${EMASTER_GENERATED_DIR}/runtime.c"
             --h-output "${EMASTER_GENERATED_DIR}/emaster/config/generated_runtime.h"
             --flat-output "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/runtime.flat"
     DEPENDS ${EMASTER_OPERATION_PROFILE_CONFIG_FILES} ${EMASTER_MOTION_PROFILE_CONFIG_FILES}
-            "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_runtime_apply.py"
-            "${CMAKE_CURRENT_SOURCE_DIR}/gen/runtime_config_model.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_runtime_apply.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/runtime_config_model.py"
     COMMENT "生成运行方案与运动方案族的填充代码与运行时配置"
     VERBATIM)
 
@@ -135,7 +135,7 @@ add_custom_command(
            "${EMASTER_GENERATED_DIR}/emaster/config/generated_deployment.h"
            "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/deployments.flat"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}/emaster/config"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_deployment_apply.py"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_deployment_apply.py"
             --deployments "${CMAKE_CURRENT_SOURCE_DIR}/config/deployments"
             --topologies "${CMAKE_CURRENT_SOURCE_DIR}/config/topologies"
             --operations "${CMAKE_CURRENT_SOURCE_DIR}/config/operation_profiles"
@@ -145,8 +145,8 @@ add_custom_command(
             --flat-output "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/deployments.flat"
     DEPENDS ${EMASTER_DEPLOYMENT_CONFIG_FILES} ${EMASTER_TOPOLOGY_CONFIG_FILES}
             ${EMASTER_OPERATION_PROFILE_CONFIG_FILES} ${EMASTER_MOTION_PROFILE_CONFIG_FILES}
-            "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_deployment_apply.py"
-            "${CMAKE_CURRENT_SOURCE_DIR}/gen/runtime_config_model.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/generate_deployment_apply.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen/runtime_config_model.py"
     COMMENT "生成部署族的填充代码与运行时配置"
     VERBATIM)
 

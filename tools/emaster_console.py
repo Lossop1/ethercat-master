@@ -3,7 +3,7 @@
 EtherCAT 主站手动控制台（香橙派上的全屏面板）
 
 用法：
-    sudo bash scripts/console.sh [--start]
+    sudo bash tools/bench/console.sh [--start]
     python3 tools/emaster_console.py --deployment <你的部署ID> --start
     python3 tools/emaster_console.py --selftest --deployment ...   # 不开面板，跑一遍引擎
 
