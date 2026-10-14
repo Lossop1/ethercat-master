@@ -9,14 +9,15 @@ Python 没有 AF_UNIX，而主站套接字只有 AF_UNIX，所以离线测这一
 
 **复刻的是真主站的行为，不是它的实现。** 刻意保真的六条（每条都是踩过的）：
 
-1. **一次 read 就是一条命令。** 主站不按行累积（command_server.c:176,198-276），
-   两条命令挤进一次 read 时后面那条被静默丢弃。这里照做，并把丢掉的那几条记进
-   counters.dropped_tail——测试拿它断言"客户端没有 pipeline"。这是唯一能证伪
-   "客户端会不会图快把两条命令塞进一个包"的办法。
-2. **单步超限先回 OK，然后打掉整个会话。** 真主站里那条 set_external_target 已经
-   回成功了，判 MOTION_INVALID 与中止会话发生在其后的周期线程里
-   （session_target.c:97-111 → note_runtime_failure）。这条是有意保真的：内存替身
-   在这条上比真主站**宽容**（它直接回 ERROR），而宽容的替身测不出真问题。
+1. **命令口按行分帧。** 主站把读进来的字节攒着，按 '\n' 切，剩下的半个留到下一次
+   读（command_server.c 的 listen_thread）。所以一次 read 带两条命令是两条，一条
+   被拆成两次到的还是一条。这里照做——替身若按 read 的返回值当边界，"客户端图快
+   连发"与"客户端慢、半条半条发"这两种真主站都能处理的情况就会在离线测里失败。
+2. **目标过远只拒收那一条，会话继续。** 真主站里那条 set_external_target 已经回了
+   OK（判据跑在其后的周期线程里，session_target.c → target_guard.c）：目标离**实际
+   位置**超过上限就丢掉这一条，上一目标继续保持，其余轴照常跑，计数 +1。这条是有意
+   保真的：内存替身在这条上比真主站**宽容**（它直接回 ERROR），而宽容的替身测不出
+   "客户端按 OK 继续推进、底下这条根本没被采纳"这个序列。
 3. **双前缀。** set_external_target 的回复线上是 "OK|OK|Updated N external targets"
    （session_control.c:1028 写一遍，command_server.c:528 再包一层）。不照抄它，
    客户端那套"只按 OK/ERROR 开头判"的写法就测不到。
@@ -40,7 +41,7 @@ struct 布局在这里**独立写一遍**，不从 tools/observation_client.py �
     from fake_master import FakeMaster
     master = FakeMaster(port=0)        # 端口 0 = 让内核挑
     master.start()
-    ... master.counters["aborts"] ...
+    ... master.counters["target_rejected"] ...
     master.stop()
 """
 
@@ -100,7 +101,7 @@ COMMAND_READ_MAX = 511              # 一次 read 的上限（buffer 512）
 COMMAND_CLIENT_IDLE_TIMEOUT_S = 5.0  # command_server.c:96
 
 DEFAULT_AXES = 5
-DEFAULT_MAX_STEP = 6400             # counts，与台架五轴部署同量级
+DEFAULT_MAX_OFFSET = 114688         # counts，90° @ 16384×28:1，与部署默认值同口径
 DEFAULT_ENCODER = 16384
 DEFAULT_ENCODER_REVS = 1
 DEFAULT_GEAR = "28/1"
@@ -128,14 +129,12 @@ class FakeMaster:
     """
 
     def __init__(self, host="127.0.0.1", port=0, obs_port=None, axes=DEFAULT_AXES,
-                 max_step=DEFAULT_MAX_STEP, publish_hz=200.0, ready_after=0.0,
-                 session_aborts_on_step=True,
+                 max_offset=DEFAULT_MAX_OFFSET, publish_hz=200.0, ready_after=0.0,
                  idle_timeout=COMMAND_CLIENT_IDLE_TIMEOUT_S):
         self.host = host
         self.axes_count = axes
-        self.max_step = max_step
+        self.max_offset = max_offset
         self.publish_hz = publish_hz
-        self.session_aborts_on_step = session_aborts_on_step
         self.idle_timeout = idle_timeout
 
         self.lock = threading.Lock()
@@ -143,14 +142,12 @@ class FakeMaster:
         self.cycle = 0
         self.axes = [_Axis() for _ in range(axes)]
         self.halted = False
-        self.aborts = []
+        self.rejects = []
 
         self.stats_lock = threading.Lock()
         self.counters = {
-            "commands": 0,          # 被当命令处理的 read 次数
-            "dropped_tail": 0,      # 同一次 read 里跟在第一条后面的（真主站静默丢弃）
-            "step_violations": 0,
-            "aborts": 0,
+            "commands": 0,          # 处理掉的命令条数（不是 read 次数）
+            "target_rejected": 0,
             "rejects_not_running": 0,
             "unknown_commands": 0,
             # 命令口 stop/shutdown 收到几次。停机之后命令面就收了摊，所以这个数
@@ -318,6 +315,8 @@ class FakeMaster:
         conn.setblocking(False)
         self._open_conns.append(conn)
         idle_deadline = time.monotonic() + self.idle_timeout
+        # 跨 recv 保留的字节：半条命令在这里等下一次读补全，与真主站同一套。
+        pending = b""
         while self.running:
             # 分小片等，而不是一次等满 5 秒：等满的话 stop() 得陪着等 5 秒才收得回线程。
             try:
@@ -338,26 +337,22 @@ class FakeMaster:
                 return              # 对端关了
             idle_deadline = time.monotonic() + self.idle_timeout
 
-            text = chunk.decode("utf-8", errors="replace")
-            newline = text.find("\n")
-            if newline >= 0:
-                tail = text[newline + 1:]
-                # 真主站对后面几条是静默丢弃的。这里记一笔，好让测试断言客户端
-                # 从来没这么发过——丢掉的条数不为 0 就意味着有一次真的丢了。
-                extra = [line for line in tail.split("\n") if line.strip()]
-                if extra:
-                    self.bump("dropped_tail", len(extra))
-                text = text[:newline]
-
-            self.bump("commands")
-            reply = self._handle(text.strip())
-            if not self._write(conn, reply + "\n"):
-                self.bump("clients_kicked_unread")
-                return
-            if self.stopping:
-                # 回复先出去、再收摊：客户端的正确观测是"收到 OK，然后连接断了"，
-                # 与真主站停机后进程退出的观测顺序一致。
-                return
+            pending += chunk
+            while True:
+                newline = pending.find(b"\n")
+                if newline < 0:
+                    break               # 半条：留着等下一次读
+                raw = pending[:newline]
+                pending = pending[newline + 1:]
+                self.bump("commands")
+                reply = self._handle(raw.decode("utf-8", errors="replace").strip())
+                if not self._write(conn, reply + "\n"):
+                    self.bump("clients_kicked_unread")
+                    return
+                if self.stopping:
+                    # 回复先出去、再收摊：客户端的正确观测是"收到 OK，然后连接断了"，
+                    # 与真主站停机后进程退出的观测顺序一致。
+                    return
 
     @staticmethod
     def _write(conn, payload):
@@ -394,7 +389,7 @@ class FakeMaster:
                 return self._reply_status()
 
             if name == "topology":
-                body = f"OK|axes={self.axes_count},max_step={self.max_step}"
+                body = f"OK|axes={self.axes_count},max_offset={self.max_offset}"
                 for index in range(self.axes_count):
                     body += (f"|a{index + 1}:bus={index + 1},"
                              f"enc={DEFAULT_ENCODER}/{DEFAULT_ENCODER_REVS},"
@@ -460,17 +455,14 @@ class FakeMaster:
         except ValueError:
             return "ERROR|ERROR|Invalid position value"
 
-        deltas = [abs(target - axis.planned)
-                  for target, axis in zip(targets, self.axes)]
-        largest = max(deltas) if deltas else 0
-        if largest > self.max_step and self.session_aborts_on_step:
-            # 保真点：**先**照常接受（真主站那条命令确实回了 OK），**再**中止会话。
-            for target, axis in zip(targets, self.axes):
-                axis.planned = target
-            self.bump("step_violations")
-            self.bump("aborts")
-            self.aborts.append(largest)
-            self.state = STATE_INITIALIZING      # 整个会话没了
+        # 保真点：**先**回 OK（真主站那条命令确实回了 OK），**再**在"周期线程"里
+        # 按 |目标 - 实际位置| 判该不该采纳。拒收这一条，上一目标继续保持。
+        offsets = [abs(target - int(axis.actual))
+                   for target, axis in zip(targets, self.axes)]
+        largest = max(offsets) if offsets else 0
+        if largest > self.max_offset:
+            self.bump("target_rejected")
+            self.rejects.append(largest)
             return f"OK|OK|Updated {len(targets)} external targets"
 
         for target, axis in zip(targets, self.axes):
@@ -750,8 +742,8 @@ def _main():
         master.stop()
     for key, value in sorted(master.snapshot_counters().items()):
         print(f"  {key:26s} {value}")
-    if master.aborts:
-        print(f"  单步违规的增量            {master.aborts}")
+    if master.rejects:
+        print(f"  被拒目标的偏移            {master.rejects}")
     return 0
 
 

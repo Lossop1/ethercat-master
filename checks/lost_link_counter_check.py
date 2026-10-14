@@ -17,7 +17,8 @@
   3. 它带着会话第一次读到的基准。这个计数器**上电以来一直累加**，绝对值非零只说明
      "曾经断过"，现场接拔线缆也会加；本轮掉没掉要看差值，所以基准丢了这份读数就
      退回"说不清"。
-  4. 报告里有这两个键，且 schema_version 是 13。
+  4. 报告里有这两个键，且 schema_version 是个正整数（本检查不钉具体版本号，
+     理由见下面那段注释）。
 
 同一个块里还读出 forwarded_rx_error_counter：ESC 0x0308 起是**四个单字节**，不是四个
 16 位。按 16 位读会把后两个值算成 EPUECNT/PECNT 拼出来的假数——台架干净轮里它们都是
@@ -27,6 +28,7 @@
 """
 
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -130,10 +132,14 @@ def check(files):
             ok(f"JSON 里有 {key[2:-2]} 这个键")
         else:
             bad(f"JSON 里有 {key[2:-2]} 这个键", key, "没找到")
-    if '\\"schema_version\\":13' in sections:
-        ok("schema_version 是 13")
+    # 版本号不在这里抄一遍：抄了就得两处一起改，而漏改的那次不会红。这里只要求
+    # 它是个正整数——本检查钉的是丢失链计数，不是版本号；版本由报告自身的 changelog
+    # 与 test_report_fault_fields 管。
+    match = re.search(r'\\"schema_version\\":(\d+)', sections)
+    if match and int(match.group(1)) >= 1:
+        ok(f"schema_version 是个正整数（{match.group(1)}）")
     else:
-        bad("schema_version 是 13", '\\"schema_version\\":13', "不是")
+        bad("schema_version 是个正整数", '\\"schema_version\\":<正整数>', sections[:80])
 
 
 def mutate(files):

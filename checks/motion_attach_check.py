@@ -92,7 +92,6 @@ MOTION = {
             "axis_id": f"axis_{position:02d}",
             "relative_angle_millidegrees": 30000,
             "max_following_error_millidegrees": 2000,
-            "max_step_millidegrees": 500,
             "expected_position_scale": {
                 "encoder_increments": 16384,
                 "encoder_motor_revolutions": 1,

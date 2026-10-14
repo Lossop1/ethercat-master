@@ -25,7 +25,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "gen", "device"))
 
 from derive_device_facts import derive  # noqa: E402
-from esi_facts import extract_esi_facts  # noqa: E402
+from esi_facts import extract_esi_facts, select_device  # noqa: E402
 
 
 def _entry(index: str, bits: int, data_type: str = "UINT") -> str:
@@ -110,14 +110,14 @@ MODULAR_EXPECTED = [
 ]
 MODULAR_RX_A_ORDER = ["0x6040", "0x607A", "0x60FF", "0x6071"]
 
-# 非模块化 ESI：没有 <Module>，PDO 直挂 <Device>，靠对象字典的出厂默认分配
-# （0x1C12 = 0x1600、0x1C13 = 0x1A00）与 PDO 上的 Sm 属性互相印证出唯一一套。
-DIRECT_ESI = """<EtherCATInfo Version="1.0">
-<Vendor><Id>#x00000001</Id><Name>检查用厂商</Name></Vendor>
-<Descriptions>
-<Devices>
-  <Device>
-    <Type ProductCode="#x00000022" RevisionNo="#x00000001">check-direct</Type>
+def _direct_device(product_code: str, revision: str, model: str) -> str:
+    """一台能推导成功的非模块化设备：没有 <Module>，PDO 直挂 <Device>，靠对象字典的
+    出厂默认分配（0x1C12 = 0x1600、0x1C13 = 0x1A00）与 PDO 上的 Sm 属性互相印证出
+    唯一一套。抽成函数是为了让"一台"和"多台"两份样本用同一个设备定义 —— 多设备那份
+    要是自己另抄一遍，两边就会各自漂。
+    """
+    return """  <Device>
+    <Type ProductCode="#x{product}" RevisionNo="#x{revision}">{model}</Type>
     <Mailbox><CoE PdoAssign="true" PdoConfig="true"/></Mailbox>
     <Profile><Dictionary><Objects>
       <Object><Index>#x1C12</Index><Info>
@@ -132,22 +132,42 @@ DIRECT_ESI = """<EtherCATInfo Version="1.0">
     {rx}
     {tx}
   </Device>
-</Devices>
+""".format(
+        product=product_code, revision=revision, model=model,
+        rx=_wrap("RxPdo", _pdo("#x1600", [
+            _entry("#x6040", 16), _entry("#x607A", 32, "INT32"),
+            _entry("#x60FF", 32, "INT32"), _entry("#x6071", 16, "INT16"),
+            _entry("#x6072", 16, "INT16"), _entry("#x6060", 8, "SINT"),
+            _entry("#x2FFD", 16),
+        ], sm=2)),
+        tx=_wrap("TxPdo", _pdo("#x1A00", [
+            _entry("#x6041", 16), _entry("#x6064", 32, "INT32"),
+            _entry("#x606C", 32, "INT32"), _entry("#x6077", 16, "INT16"),
+            _entry("#x603F", 16), _entry("#x6061", 8, "SINT"),
+            _entry("#x2FFE", 16),
+        ], sm=3)),
+    )
+
+
+def _esi(devices: list[str]) -> str:
+    return """<EtherCATInfo Version="1.0">
+<Vendor><Id>#x00000001</Id><Name>检查用厂商</Name></Vendor>
+<Descriptions>
+<Devices>
+%s</Devices>
 </Descriptions>
-</EtherCATInfo>""".format(
-    rx=_wrap("RxPdo", _pdo("#x1600", [
-        _entry("#x6040", 16), _entry("#x607A", 32, "INT32"),
-        _entry("#x60FF", 32, "INT32"), _entry("#x6071", 16, "INT16"),
-        _entry("#x6072", 16, "INT16"), _entry("#x6060", 8, "SINT"),
-        _entry("#x2FFD", 16),
-    ], sm=2)),
-    tx=_wrap("TxPdo", _pdo("#x1A00", [
-        _entry("#x6041", 16), _entry("#x6064", 32, "INT32"),
-        _entry("#x606C", 32, "INT32"), _entry("#x6077", 16, "INT16"),
-        _entry("#x603F", 16), _entry("#x6061", 8, "SINT"),
-        _entry("#x2FFE", 16),
-    ], sm=3)),
-)
+</EtherCATInfo>""" % "".join(devices)
+
+
+DIRECT_ESI = _esi([_direct_device("00000022", "00000001", "check-direct")])
+
+# 一份 ESI 描述同一厂商的整个产品线是常态（厂商给的往往就是这一份）。顶层键只在设备数
+# 为 1 时铺平，多设备时下游读顶层会撞 KeyError，所以这里钉住"要么挑、要么说清楚"。
+MULTI_DEVICE_ESI = _esi([
+    _direct_device("00000022", "00000001", "check-direct"),
+    _direct_device("00000023", "00000002", "check-direct-large"),
+])
+MULTI_DEVICE_IDENTITIES = [("0x00000022", "0x00000001"), ("0x00000023", "0x00000002")]
 
 DIRECT_EXPECTED_RX = ["0x6040", "0x607A", "0x60FF", "0x6071", "0x6072", "0x6060", "0x2FFD"]
 DIRECT_EXPECTED_TX = ["0x6041", "0x6064", "0x606C", "0x6077", "0x603F", "0x6061", "0x2FFE"]
@@ -186,12 +206,16 @@ def _facts_of(text):
     return extract_esi_facts(ET.fromstring(text))
 
 
-def _run(argv):
+def _run_capture(argv):
     done = subprocess.run(
         [sys.executable] + argv, capture_output=True, text=True, cwd=REPO,
         encoding="utf-8", errors="replace",
     )
-    return done.returncode
+    return done.returncode, done.stdout, done.stderr
+
+
+def _run(argv):
+    return _run_capture(argv)[0]
 
 
 def _write(path, payload):
@@ -420,6 +444,67 @@ def check_supported_modes_conflict(failures):
             failures.append("策略引用了不存在的模块，merge 却返回 0（应非零）")
 
 
+def _derive_cli(esi_path, *extra):
+    """跑一次 derive_device_facts.py，回（退出码, stdout, stderr）。"""
+    return _run_capture(["gen/device/derive_device_facts.py", esi_path, *extra])
+
+
+def check_multi_device(failures):
+    """一份 ESI 里有多台设备：不挑就列清单退出，挑了就得挑准。"""
+    with tempfile.TemporaryDirectory() as scratch:
+        single = _write(os.path.join(scratch, "single.xml"), DIRECT_ESI)
+        multi = _write(os.path.join(scratch, "multi.xml"), MULTI_DEVICE_ESI)
+
+        # 单设备这条路是客户日常走的那条：挑设备这一步必须透明，不能要求给 --select。
+        code, out, err = _derive_cli(single)
+        if code != 0:
+            failures.append("单设备 ESI 直接推导失败（%d）：%s" % (code, err.strip()[:200]))
+        else:
+            identity = json.loads(out)["identity"]
+            if identity["product_code"] != "0x00000022":
+                failures.append("单设备 ESI 推导出的产品码变了：%s" % identity["product_code"])
+
+        # 不挑：非零退出，且清单里两台都要看得见 —— 只报个 KeyError 等于让人自己去猜。
+        code, out, err = _derive_cli(multi)
+        if code == 0:
+            failures.append("多设备 ESI 没挑设备却返回 0（应非零）")
+        for product in ("0x00000022", "0x00000023"):
+            if product not in err:
+                failures.append("多设备 ESI 的清单里没列出 %s：%s" % (product, err.strip()[:200]))
+
+        # 按序号挑第二台。
+        code, out, err = _derive_cli(multi, "--select", "2")
+        if code != 0:
+            failures.append("--select 2 失败（%d）：%s" % (code, err.strip()[:200]))
+        else:
+            identity = json.loads(out)["identity"]
+            if identity["product_code"] != "0x00000023":
+                failures.append("--select 2 挑错了设备：%s" % identity["product_code"])
+            if identity["revision"] != "0x00000002":
+                failures.append("--select 2 的版本号不对：%s" % identity["revision"])
+            # 挑完必须仍是"一台"的形状：下游一律读顶层，这里掉了顶层键就白挑。
+            picked = select_device(_facts_of(MULTI_DEVICE_ESI), "2")
+            if picked.get("device", {}).get("product_code") != "0x00000023" or "modules" not in picked:
+                failures.append("select_device 挑完没给出与单设备 ESI 相同的形状：%s" % sorted(picked))
+
+        # 按身份挑（厂商:产品:版本）、按型号挑：两种写法都要认。
+        for selector, expected in (
+            ("0x00000001:0x00000023:0x00000002", "0x00000023"),
+            ("check-direct", "0x00000022"),
+        ):
+            code, out, err = _derive_cli(multi, "--select", selector)
+            if code != 0:
+                failures.append("--select %s 失败（%d）：%s" % (selector, code, err.strip()[:200]))
+            elif json.loads(out)["identity"]["product_code"] != expected:
+                failures.append("--select %s 挑错了设备" % selector)
+
+        # 挑不中一律非零：越界、对不上的身份，都不能"随便给一台"。
+        for selector in ("9", "0x00000001:0x00000099:0x00000001", "不存在的型号"):
+            code, out, err = _derive_cli(multi, "--select", selector)
+            if code == 0:
+                failures.append("--select %s 挑不中却返回 0（应非零）" % selector)
+
+
 def main():
     failures = []
     check_modular(failures)
@@ -428,6 +513,7 @@ def main():
     check_optional_facts_round_trip(failures)
     check_broken_esi(failures)
     check_supported_modes_conflict(failures)
+    check_multi_device(failures)
 
     for failure in failures:
         print("不合格：%s" % failure)

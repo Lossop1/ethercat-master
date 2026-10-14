@@ -4,7 +4,9 @@
 本机 Python 没有 AF_UNIX，跑不起假主站的进程版，所以这里把"假主站"做成一个
 内存里的客户端替身：command() 直接返回按同一套协议拼出来的响应串，
 refresh_status/refresh_topology 用的仍是控制台里那套真解析代码。
-假主站复刻了真主站两条要命的行为：单步超限打掉整个会话、状态字 bit11 = 限位。
+假主站复刻了真主站两条要命的行为：目标过远只拒收那一条（回 OK、会话继续）、
+状态字 bit11 = 限位。前者是控件最容易踩的坑——发出去的命令全回 OK，底下有几条
+根本没被采纳。
 
 改一次 `tools/emaster_console.py` 就跑一次，用法（在仓库根目录）：
 
@@ -70,7 +72,7 @@ from emaster_console import (ConsoleClient, Engine, Panel,  # noqa: E402
                              parse_axis_targets, selftest)
 
 AXES = 5
-MAX_STEP = 6400
+MAX_OFFSET = 114688          # counts，90° @ 16384×28:1
 COUNTS_PER_DEG = 16384.0 * 28.0 / 360.0
 
 
@@ -84,7 +86,7 @@ class FakeMaster:
         self.actual = [0.0] * AXES
         self.halted = False
         self.last_update = 0.0
-        self.aborts = []
+        self.rejects = []
         self.steps = []          # 每次 set_external_target 的相邻增量，供核对
         self._last = time.monotonic()
 
@@ -118,7 +120,7 @@ class FakeMaster:
                          f"planned={self.planned[i]},err=0x0000,state=6")
             return body
         if name == "topology":
-            body = f"OK|axes={AXES},max_step={MAX_STEP}"
+            body = f"OK|axes={AXES},max_offset={MAX_OFFSET}"
             for i in range(AXES):
                 body += f"|a{i + 1}:bus={i + 1},enc=16384/1,gear=28/1,torque=0"
             return body
@@ -135,10 +137,10 @@ class FakeMaster:
             values = [int(v) for v in parts[1:]]
             deltas = [abs(v - p) for v, p in zip(values, self.planned)]
             self.steps.append(max(deltas))
-            if max(deltas) > MAX_STEP:
-                self.state = 0     # 真主站：中止整个会话
-                self.aborts.append(max(deltas))
-                return f"ERROR|MOTION_INVALID（单步 {max(deltas)} > {MAX_STEP}）"
+            # 真主站：过远就丢掉这一条，会话照常跑，回复仍是 OK。
+            if max(abs(v - a) for v, a in zip(values, self.actual)) > MAX_OFFSET:
+                self.rejects.append(max(deltas))
+                return "OK|target accepted"
             self.planned = values
             self.last_update = time.monotonic()
             return "OK|target accepted"
@@ -203,23 +205,23 @@ def main():
     master = created[-1].master
     worst = max(master.steps) if master.steps else 0
     print(f"\n假主站记录：发出 {len(master.steps)} 条目标，"
-          f"最大相邻增量 {worst} counts（上限 {MAX_STEP}），"
-          f"会话中止 {len(master.aborts)} 次")
+          f"最大相邻增量 {worst} counts，"
+          f"被拒 {len(master.rejects)} 次")
 
-    # 负对照：直接给假主站一步大跳，确认它的中止判据是活的、不是摆设。
-    # 它要是不会中止，上面"最大相邻增量 ≤ 上限"这条通过就说明不了任何事。
+    # 负对照：直接给假主站一个远超偏移上限的目标，确认它的拒收判据是活的。
+    # 它要是不拒，上面"每一步都落在判据内"这条通过就说明不了任何事。
+    before = master.state
     jumped = master.handle("set_external_target " + " ".join(["999999"] * AXES))
-    print(f"负对照：故意发一步 999999 → {jumped[:60]}…  state={master.state}")
-    if master.state != 0 or not master.aborts:
-        print("负对照失败：假主站没有中止，说明抑制判据没接上")
+    print(f"负对照：故意发 999999 → {jumped[:60]}…  state={master.state}")
+    if not master.rejects or master.state != before:
+        print(f"负对照失败：假主站没拒收（rejects={len(master.rejects)}，"
+              f"state {before}→{master.state}），说明判据没接上")
         return 1
-    print("负对照通过：假主站确实会因单步超限打掉会话")
+    print("负对照通过：假主站拒收过远目标，且会话不受影响")
 
     if code != 0:
         return code
 
-    # 负对照刚刚把假主站打到 state=0，按键层要重新起一个能跑的引擎。
-    master.state = 4
     engine = Engine(created[-1], args.deployment, args.jog_speed, args.range,
                     repo_root=args.repo)
     if not engine.wait_attached(5.0):
@@ -268,7 +270,7 @@ def startup_window_check():
              ("软范围", lambda: engine.range_limits(0)),
              ("角度换算", lambda: engine.counts_to_deg(0, 1234)),
              ("角度→counts", lambda: engine.deg_to_counts(0, 30.0)),
-             ("单步上限", lambda: engine.step_limit_counts(0))]
+             ("步长上限", lambda: engine.step_limit_counts(0))]
     for label, call in calls:
         try:
             call()

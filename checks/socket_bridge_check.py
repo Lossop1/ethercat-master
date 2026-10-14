@@ -224,10 +224,10 @@ def check_command_pump(context):
                 want(reply.startswith("OK|OK|"),
                      f"经桥之后双前缀没了：{reply!r}")
                 counters = master.snapshot_counters()
-                want(counters["dropped_tail"] == 0,
-                     f"经桥之后出现了被丢弃的命令：{counters}")
+                # 命令按行分帧之后"commands"数的是命令条数。发两条就该是 2——
+                # 桥把两条粘成一条或拆成三条都会在这里露馅。
                 want(counters["commands"] == 2,
-                     f"经桥之后命令计数不对：{counters}")
+                     f"经桥之后命令条数不对：{counters}")
             finally:
                 sock.close()
 

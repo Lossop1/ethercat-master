@@ -10,9 +10,10 @@
   一模一样），而它一旦坏了，后果是"主站开着的时候台架脚本再也连不上命令口"——
   而且表现为挂住，不报错。所以要用假主站的**命令计数**去证明：没点接管之前，
   命令口一个字节都不该收到。
-- 第二要紧的是**限幅**。单步超限在真主站上不是报错，是打掉整个会话，而那条命令
-  早就回了 OK。这一层要是把步长算大了，检查里看得见的只有"会话没了"。
-  所以直接对着**真发出去的目标序列**量相邻增量。
+- 第二要紧的是**目标不许被打回**。主站在目标离实际位置太远时只拒收那一条，而那条
+  命令早回了 OK——界面上什么都不会变。这一层要是把步长算大了，离线看得见的只有
+  假主站的一个计数多了一次。所以既对着**真发出去的目标序列**量相邻增量，也核
+  "一条都没被拒、会话也没被打断"。
 
 假主站是 checks/fake_master.py（它自己另有一个忠实性检查）。界面在这条
 链路上是黑盒：只看假主站的计数和界面自己在自检里打出来的那些事实。
@@ -43,10 +44,6 @@ import emaster_client  # noqa: E402
 import rt_affinity  # noqa: E402
 
 TOOLS = os.path.join(ROOT, "tools")
-
-# 假主站的单步限幅，与配置里那个 6400 一致。界面的步长必须落在它的 0.8 倍以内。
-MAX_STEP_MARGIN = 0.8
-
 
 class CheckFailed(AssertionError):
     pass
@@ -135,24 +132,23 @@ def check_observation_keeps_up(context):
 # ---------------------------------------------------------------- 接管
 
 def check_takeover_moves_within_limits(context):
-    """接管 → 动起来 → 释放。要同时钉住：真的发了目标、单步没超限、轴真的动过。"""
+    """接管 → 动起来 → 释放。要同时钉住：真的发了目标、一条都没被拒、轴真的动过。"""
     with fake_master.FakeMaster(publish_hz=1000.0) as master:
         _, report = run_gui(master, ["--selftest-takeover"], 7.0)
         counters = master.snapshot_counters()
         want(counters["commands"] > 0, "接管了却一条命令都没发")
-        want(counters["step_violations"] == 0,
-             f"发出去的目标超过了单步限幅：{counters['step_violations']} 次")
-        want(counters["aborts"] == 0,
-             f"会话被打掉了（单步超限的后果）：{counters['aborts']} 次")
+        want(counters["target_rejected"] == 0,
+             f"有目标被主站拒收：{counters['target_rejected']} 次")
 
         sent = int(field(report, "主站：state").split("已发")[1].split("条")[0].strip())
         want(sent > 0, f"自检报告说一条目标都没发：{report}")
         largest = int(field(report, "主站：state").split("最大增量")[1]
                       .split("counts")[0].strip())
-        ceiling = int(fake_master.DEFAULT_MAX_STEP * MAX_STEP_MARGIN)
-        want(largest <= ceiling,
-             f"相邻目标最大增量 {largest} counts 超过了上限 {ceiling}"
-             f"（max_step {fake_master.DEFAULT_MAX_STEP} × {MAX_STEP_MARGIN}）")
+        # 主站不再限制相邻增量，这条线由界面自己的点动速度档位定。这里只断言增量
+        # 没有冲到主站的偏移上限——冲到了说明界面在乱跳，而不是在按档位切步长。
+        want(largest < fake_master.DEFAULT_MAX_OFFSET,
+             f"相邻目标最大增量 {largest} counts 碰到了主站的目标偏移上限 "
+             f"（{fake_master.DEFAULT_MAX_OFFSET}）")
 
         # 轴到底动没动。收尾时各轴都在起点，只有"曾到过"能证明。
         moved = [line for line in report.splitlines() if "曾到过" in line]
@@ -209,10 +205,12 @@ def check_selftest_reciprocate_lands_every_trip(context):
                             seconds)
         counters = master.snapshot_counters()
         want(counters["commands"] > 0, "接管了却一条命令都没发")
-        want(counters["step_violations"] == 0,
-             f"发出去的目标超过了单步限幅：{counters['step_violations']} 次")
-        want(counters["aborts"] == 0,
-             f"会话被打掉了（单步超限的后果）：{counters['aborts']} 次")
+        # 主站只留一条判据：目标离**实际位置**超过偏移上限就拒收那一条。界面这条路
+        # 幅度小、步长自己按档位切，不该有一条被拒；真拒了说明界面发的目标跳得太远。
+        want(counters["target_rejected"] == 0,
+             f"发出去的目标被主站拒收了：{counters['target_rejected']} 次")
+        want(master.state == fake_master.STATE_RUNNING,
+             f"这一轮结束时会话不该被打断（state={master.state}）")
 
         legs = _leg_lines(report)
         want(len(legs) >= 2,
@@ -629,7 +627,7 @@ def check_client_failure_does_not_touch_stdout(context):
 CHECKS = [
     ("默认只读：没点接管，命令口一个字节都不收", check_readonly_by_default),
     ("观测取数跟得上产出，且只连一次", check_observation_keeps_up),
-    ("接管后真的动了、且单步没超限", check_takeover_moves_within_limits),
+    ("接管后真的动了、目标没被主站拒收", check_takeover_moves_within_limits),
     ("自带往返：每趟都走到位，收尾回起点并放手", check_selftest_reciprocate_lands_every_trip),
     ("曲线收到帧、抽了稀、只喂当前那根轴", check_charts_receive_and_decimate),
     ("窗口最小宽度放得进普通屏（急停按钮不能被挤出屏幕）", check_window_fits_on_a_normal_screen),
@@ -656,8 +654,8 @@ NOT_COVERED = [
     "**和主站抢不抢资源**：本机没有主站的实时线程可躲，A/B 只能在台架上做"
     "（scripts/bench_gui_e2e.sh 里那段）。",
     "**台架上的 30° 一档**：离线证的是「命令 → 实际位置」这条链和收尾纪律，幅度取的"
-    "是 2°。30° 下五根轴真能不能跟上、跟随误差会不会摸到 50° 那道限幅（摸到就是主站"
-    "中止会话），假主站里没有这个模型——只有台架知道。",
+    "是 2°。30° 下五根轴真能不能跟上、驱动器的跟随误差窗（6065/6066）会不会触发，"
+    "假主站里没有这个模型——只有台架知道。",
 ]
 
 

@@ -6,9 +6,9 @@
 的恰恰是台架上才会发作的东西。所以这里逐条钉的是**刻意的保真点**，每条都对应真
 主站的一处实现：
 
-- 单步超限**先回 OK 再打掉会话**（session_target.c:97-111 → note_runtime_failure）
+- 目标过远**先回 OK，再只拒收那一条**（session_target.c → target_guard.c）
 - 回复的**双前缀**（session_control.c:1028 + command_server.c:528）
-- **一次 read 一条命令**，多出来的静默丢弃（command_server.c:176,198-276）
+- **命令口按行分帧**：一次 read 带多条、一条分两次到，都按 '\n' 切
 - **空闲断开**（command_server.c:96）
 - 观测口**新连接顶掉旧的**（server.c:489）
 - HEAD 的 `newest` 是**开区间上界**（ring.c:155）
@@ -52,17 +52,22 @@ def _cmd_connect(master):
     return sock
 
 
-def _ask(sock, command):
-    """发一条、读一整行。**绝不 pipeline**——本条通道一次 read 只当一条命令。"""
-    sock.sendall((command + "\n").encode())
+def _read_reply(sock, what):
+    """读一整行回复（不含换行符）。"""
     data = bytearray()
     while True:
         byte = sock.recv(1)
         if not byte:
-            raise CheckFailed(f"{command!r} 的回复中途断了（收到 {bytes(data)!r}）")
+            raise CheckFailed(f"{what!r} 的回复中途断了（收到 {bytes(data)!r}）")
         if byte == b"\n":
             return data.decode("utf-8", "replace")
         data += byte
+
+
+def _ask(sock, command):
+    """发一条、读一整行。"""
+    sock.sendall((command + "\n").encode())
+    return _read_reply(sock, command)
 
 
 def check_cmd_basic(context):
@@ -78,8 +83,8 @@ def check_cmd_basic(context):
                  f"轴行数不等于轴数：{status!r}")
 
             topology = _ask(sock, "topology")
-            want(f"max_step={fake_master.DEFAULT_MAX_STEP}" in topology,
-                 f"topology 没带 max_step：{topology!r}")
+            want(f"max_offset={fake_master.DEFAULT_MAX_OFFSET}" in topology,
+                 f"topology 没带 max_offset：{topology!r}")
 
             unknown = _ask(sock, "no_such_verb")
             want(emaster_client.reply_kind(unknown) == "error",
@@ -107,62 +112,64 @@ def check_double_prefix(context):
             sock.close()
 
 
-def check_step_violation_is_faithful(context):
-    """本检查的重点：超限那条命令**回 OK**，然后会话才没。
+def check_target_rejection_is_faithful(context):
+    """本检查的重点：过远那条命令**回 OK**，会话却照常跑，只有那一条没被采纳。
 
     内存替身（console_engine_check.FakeMaster）在这一点上直接回 ERROR，比真主站
-    宽容。宽容的替身测不出"客户端按 OK 继续推进、底下会话已经没了"这个序列。
+    宽容。宽容的替身测不出"客户端按 OK 继续推进、底下这条根本没被采纳"这个序列。
     """
-    with fake_master.FakeMaster(max_step=6400) as master:
+    with fake_master.FakeMaster(max_offset=6400) as master:
         sock = _cmd_connect(master)
         try:
             reply = _ask(sock, f"set_external_target {6400 * 4} 0 0 0 0")
             want(emaster_client.reply_kind(reply) == "ok",
-                 f"超限那条命令真主站回的是 OK，这里却是 {reply!r}")
+                 f"过远那条命令真主站回的是 OK，这里却是 {reply!r}")
             status = _ask(sock, "status")
-            want("state=0" in status,
-                 f"超限之后会话应当被打掉（state=0），实际 {status!r}")
+            want("state=4" in status,
+                 f"拒收不该动会话（应当仍是 state=4），实际 {status!r}")
             again = _ask(sock, "set_external_target 0 0 0 0 0")
-            want(emaster_client.reply_kind(again) == "error",
-                 f"会话没了还接受目标：{again!r}")
+            want(emaster_client.reply_kind(again) == "ok",
+                 f"拒收之后同一条连接应当照常接受目标：{again!r}")
             counters = master.snapshot_counters()
-            want(counters["aborts"] == 1, f"中止计数不对：{counters}")
-            want(counters["step_violations"] == 1, f"违规计数不对：{counters}")
-            want(counters["rejects_not_running"] == 1, f"拒绝计数不对：{counters}")
+            want(counters["target_rejected"] == 1, f"拒收计数不对：{counters}")
+            want(counters["rejects_not_running"] == 0,
+                 f"会话没被打掉，不该出现 not-running 拒绝：{counters}")
         finally:
             sock.close()
 
 
-def check_no_pipelining(context):
-    """两条命令挤进一次 write：真主站静默丢弃后一条。这里要能**看出来**丢了。
+def check_line_framing(context):
+    """命令口按行分帧：一次 write 带两条，一条分两次到，都不该出错。
 
-    这条计数器就是"客户端有没有图快"的唯一证据——没有它，客户端 pipeline 了也
-    只是表现为偶尔少一条回复，很难归因。
+    改这条之前主站是把 read 的返回值当命令边界的：连发两条会粘成一条认不出的命令
+    （后一条静默消失），一条被拆成两次到的会被当成两条错的。两个方向都要钉住——
+    只测"粘连"那一侧，"半条命令"那一侧照样会错，而它只在客户端慢的时候出现。
     """
-    # 正型：规规矩矩一次一条。计数器必须停在 0——否则下面那条断言就没有意义了。
     with fake_master.FakeMaster() as master:
         sock = _cmd_connect(master)
         try:
-            for _ in range(3):
-                want(emaster_client.reply_kind(_ask(sock, "status")) == "ok",
-                     "一条一条发也该正常")
-            counters = master.snapshot_counters()
-            want(counters["dropped_tail"] == 0,
-                 f"一次一条不该有丢弃：{counters}")
-            want(counters["commands"] == 3, f"命令计数不对：{counters}")
-        finally:
-            sock.close()
-
-    with fake_master.FakeMaster() as master:
-        sock = _cmd_connect(master)
-        try:
+            # 方向一：两条命令挤进一次 write，两条回复按顺序各来一行。
             sock.sendall(b"status\nstatus\n")
-            time.sleep(0.3)
+            first = _read_reply(sock, "status#1")
+            second = _read_reply(sock, "status#2")
+            want(emaster_client.reply_kind(first) == "ok" and
+                 emaster_client.reply_kind(second) == "ok",
+                 f"两条命令都该有回复：{first!r} / {second!r}")
             counters = master.snapshot_counters()
-            want(counters["dropped_tail"] >= 1,
-                 f"同一次 read 里的第二条应当被记成丢弃：{counters}")
-            want(counters["commands"] == 1,
-                 f"只该当一条命令处理：{counters}")
+            want(counters["commands"] == 2, f"两条都该被处理：{counters}")
+
+            # 方向二：一条命令分两次到，中间隔着一次写。
+            sock.sendall(b"stat")
+            time.sleep(0.2)
+            mid = master.snapshot_counters()
+            want(mid["commands"] == 2,
+                 f"半条命令不该被当成一条处理：{mid}")
+            sock.sendall(b"us\n")
+            want(emaster_client.reply_kind(_read_reply(sock, "status")) == "ok",
+                 "补全之后那一条应当正常回复")
+            after = master.snapshot_counters()
+            want(after["commands"] == 3,
+                 f"补全后应当正好多一条：{after}")
         finally:
             sock.close()
 
@@ -463,8 +470,8 @@ def check_obs_single_client_replaced(context):
 CHECKS = [
     ("命令口：基本动词与状态形状", check_cmd_basic),
     ("命令口：双前缀 OK|OK|", check_double_prefix),
-    ("命令口：单步超限先回 OK 再打掉会话", check_step_violation_is_faithful),
-    ("命令口：一次 read 一条命令，多的记成丢弃", check_no_pipelining),
+    ("命令口：目标过远回 OK 但只拒收那一条", check_target_rejection_is_faithful),
+    ("命令口：按行分帧（多条一批、一条分两批）", check_line_framing),
     ("命令口：空闲超时单方面断开", check_idle_timeout),
     ("命令口：stop/shutdown 之后命令面收摊（P12.1）", check_shutdown_stops_the_command_face),
     ("观测口：INFO/HEAD/LATEST 与 newest 是开区间上界", check_obs_info_head_latest),

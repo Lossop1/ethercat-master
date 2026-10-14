@@ -100,6 +100,14 @@ jobs:
       - name: 丢失链计数检查的判别力（离线，期望不通过）
         run: python3 checks/lost_link_counter_check.py --mutate
 
+      # 设点通道的线格式在 C 与 Python 各有一份实现，对端（rl_sar）不与主站共享代码，
+      # 靠约定对齐。偏移表、魔数、版本、SOCK_SEQPACKET、无回写，任何一处漂了就变红。
+      - name: 设点通道的线格式与只写语义（离线）
+        run: python3 checks/setpoint_channel_check.py
+
+      - name: 设点通道检查的判别力（离线，期望不通过）
+        run: python3 checks/setpoint_channel_check.py --mutate
+
       - name: 慢速遥测渲染的判别力（离线，期望不通过）
         run: python3 checks/report_telemetry_check.py --mutate
 
@@ -174,6 +182,15 @@ jobs:
 
       - name: 启动窗口检查的判别力（离线，期望不通过）
         run: python3 checks/console_engine_check.py --mutate-startup-window
+
+      # 声明与实现之间的缝：上手流程漏 sudo、文档引用不存在的文件或声称能吃 EDS、
+      # recover_axis 的枚举与解析分支对不上、已删的配置字段长回来、消息资源三份
+      # 副本漂开、CI 与它的本机复刻不同步。这些都不在任何一条编译路径上。
+      - name: 交付面一致性（离线）
+        run: python3 checks/delivery_consistency_check.py
+
+      - name: 交付面一致性检查的判别力（离线，期望不通过）
+        run: python3 checks/delivery_consistency_check.py --mutate
 
       - name: 配置
         run: cmake --preset linux-debug

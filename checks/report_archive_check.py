@@ -41,7 +41,8 @@ SOURCES = ("src/audit/run_report.c", "src/audit/report_sections.c",
            "src/audit/json_writer.c", "src/cyclic/histogram.c",
            "src/diagnostics/error_class.c", "src/diagnostics/cia402_error.c",
            "src/diagnostics/al_status.c",
-           "src/audit/report_error_class.c")
+           "src/audit/report_error_class.c",
+           "src/setpoint/wire.c")
 
 # 用例里的形状：25 份旧的 + 刚发布那一份，保留 20 份 ⇒ 削掉 6 份，正是最旧的那 6 份。
 DELETED = 6

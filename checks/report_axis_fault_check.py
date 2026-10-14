@@ -36,7 +36,8 @@ SOURCES = ("src/audit/run_report.c", "src/audit/report_sections.c",
            "src/audit/json_writer.c", "src/cyclic/histogram.c",
            "src/diagnostics/error_class.c", "src/diagnostics/cia402_error.c",
            "src/diagnostics/al_status.c",
-           "src/audit/report_error_class.c")
+           "src/audit/report_error_class.c",
+           "src/setpoint/wire.c")
 
 # 变异：把 runtime 对象收尾的两个括号去掉一个。这是"加字段时数错了括号"的真实长相，
 # C 照样编得过、C 用例的子串断言照样全过，只有 JSON 会解析不了。
