@@ -12,8 +12,17 @@
  *
  * 断言的性质（不含任何魔数）：
  *   1. 下一次发包距上一次不超过 停顿时长 + 一个周期 —— 恢复最多只该赔一个周期，
- *      且这一个周期是"等回节拍边界"的代价，不是放大；
- *   2. 该间隔是周期的整数倍 —— 落点仍在本来的 DC 节拍网格上，相位没有被带偏。
+ *      且这一个周期是"等回节拍边界"的代价，不是放大。这一条量的是**真实发包时刻**：
+ *      容差本来就有一个周期那么宽，调度抖动吃不掉它。
+ *   2. 落点仍在本来的 DC 节拍网格上，相位没有被带偏。这一条量的是**时钟自己的那个
+ *      边界**（wait 睡到的那个绝对时刻），不是发包时刻。
+ *
+ * 第 2 条为什么换个量法。发包时刻 = 边界 + 唤醒抖动，而抖动是主机的噪音：本机在 WSL
+ * 里量到过 162 µs 的唤醒偏迟，而判据的容差是 100 µs——于是"落点在网格上"这件事本身
+ * 成立，却有三成的轮次报红。2026-10-14 本机连跑两次，两次都红，红的是余数 879757 ns
+ * 这种"离网格还差 120 µs"的形状。换成量边界，抖动就进不来了：边界是纯单调时钟算出来
+ * 的，只剩 recover 里那道 100 µs 边界保护会主动把落点挪开，而它挪的正是一个 guard 的
+ * 量，落在容差之内。放大那一条（性质 1）仍量真实发包时刻——它要的就是现场那个量。
  *
  * 编译与运行（本机 MinGW 与 Pi 都适用；不依赖 SOEM）：
  *   gcc -std=c11 -O2 -Isrc -o tmp/test_recovery_gap \
@@ -64,6 +73,8 @@ int main(void)
     uint64_t last_send_ns = 0U;
     uint64_t gap_ns = 0U;
     uint64_t stall_start_ns = 0U;
+    uint64_t grid_before_ns = 0U;
+    uint64_t grid_after_ns = 0U;
     uint32_t wake_late_max_ns = 0U;
     int failures = 0;
 
@@ -93,6 +104,15 @@ int main(void)
             return 1;
         }
         send_ns = monotonic_ns();
+        /* 网格判据量的是边界，不是发包时刻：wait 睡到的那个绝对时刻没有唤醒抖动。 */
+        if (cycle == WARMUP_CYCLES)
+        {
+            grid_before_ns = deadline_ns;
+        }
+        else if (cycle == WARMUP_CYCLES + 1)
+        {
+            grid_after_ns = deadline_ns;
+        }
         if (last_send_ns != 0U)
         {
             uint64_t gap = send_ns - last_send_ns;
@@ -154,24 +174,38 @@ int main(void)
     printf("停顿起点 %" PRIu64 " ns，停顿时长 %d ns\n", stall_start_ns, STALL_NS);
     printf("唤醒偏迟峰值 %" PRIu32 " ns\n", wake_late_max_ns);
     printf("停顿后的帧距 %" PRIu64 " ns（周期 %d ns）\n", gap_ns, CYCLE_NS);
+    printf("停顿前后两个边界相隔 %" PRIu64 " ns，除以周期余 %" PRIu64 " ns\n",
+           grid_after_ns - grid_before_ns,
+           (grid_after_ns - grid_before_ns) % (uint64_t)CYCLE_NS);
 
     if (gap_ns == 0U)
     {
         fprintf(stderr, "没有取到停顿后的帧距\n");
         return 1;
     }
-    /* 性质 1：放大不得超过一个周期。 */
+    if (grid_after_ns <= grid_before_ns)
+    {
+        fprintf(stderr, "没有取到停顿前后的两个边界\n");
+        return 1;
+    }
+    /* 性质 1：放大不得超过一个周期。量的是真实发包时刻，容差本来就为一个周期。 */
     if (gap_ns > STALL_NS + CYCLE_NS)
     {
         fprintf(stderr, "帧距 %" PRIu64 " ns 超过 停顿时长+一个周期 = %d ns\n",
                 gap_ns, STALL_NS + CYCLE_NS);
         ++failures;
     }
-    /* 性质 2：落点仍在原节拍网格上。 */
-    if (gap_ns % CYCLE_NS > 100000U && gap_ns % CYCLE_NS < (uint64_t)CYCLE_NS - 100000U)
+    /* 性质 2：落点仍在原节拍网格上。量的是时钟自己的边界，抖动进不来。 */
     {
-        fprintf(stderr, "帧距 %" PRIu64 " ns 不是周期的整数倍，相位被带偏\n", gap_ns);
-        ++failures;
+        uint64_t span_ns = grid_after_ns - grid_before_ns;
+        uint64_t remainder_ns = span_ns % (uint64_t)CYCLE_NS;
+
+        if (remainder_ns > 100000U && remainder_ns < (uint64_t)CYCLE_NS - 100000U)
+        {
+            fprintf(stderr, "两个边界相隔 %" PRIu64 " ns 不是周期的整数倍，相位被带偏\n",
+                    span_ns);
+            ++failures;
+        }
     }
 
     if (failures != 0)
