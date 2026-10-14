@@ -101,6 +101,7 @@ add_custom_command(
     OUTPUT "${EMASTER_GENERATED_DIR}/catalog.c"
            "${EMASTER_GENERATED_DIR}/emaster/config/generated_catalog.h"
            "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/catalog.flat"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}/emaster/config"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_catalog_apply.py"
             --devices "${CMAKE_CURRENT_SOURCE_DIR}/config/devices"
             --c-output "${EMASTER_GENERATED_DIR}/catalog.c"
@@ -116,6 +117,7 @@ add_custom_command(
     OUTPUT "${EMASTER_GENERATED_DIR}/runtime.c"
            "${EMASTER_GENERATED_DIR}/emaster/config/generated_runtime.h"
            "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/runtime.flat"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}/emaster/config"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_runtime_apply.py"
             --operations "${CMAKE_CURRENT_SOURCE_DIR}/config/operation_profiles"
             --motions "${CMAKE_CURRENT_SOURCE_DIR}/config/motion_profiles"
@@ -132,6 +134,7 @@ add_custom_command(
     OUTPUT "${EMASTER_GENERATED_DIR}/deployments.c"
            "${EMASTER_GENERATED_DIR}/emaster/config/generated_deployment.h"
            "${CMAKE_CURRENT_SOURCE_DIR}/config-runtime/deployments.flat"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${EMASTER_GENERATED_DIR}/emaster/config"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen/generate_deployment_apply.py"
             --deployments "${CMAKE_CURRENT_SOURCE_DIR}/config/deployments"
             --topologies "${CMAKE_CURRENT_SOURCE_DIR}/config/topologies"
@@ -178,6 +181,8 @@ add_subdirectory(src/diagnostics)
 add_subdirectory(src/catalog)
 add_subdirectory(src/config)
 add_subdirectory(src/messages)
+# 排在 audit 前：报告要调 setpoint_wire 里那句拒收原因的文本，目标得先存在。
+add_subdirectory(src/setpoint)
 add_subdirectory(src/audit)
 add_subdirectory(src/session)
 add_subdirectory(src/motion)

@@ -13,9 +13,10 @@
 改、逐个漏。这里收成一份：客户端只认 Endpoint，不再自己拼路径、也不再自己挑
 地址族。
 
-**路径规则仍是两处。** `deployment_sockets()` 与 command_socket_path.h 说的是同一
-条规则，但一个在 C 构建里、一个在 Python 里，共享不了那个头文件。改命名时两处
-一起改——这一条是照着 closed_loop_client.py 原来的注释留的，不是新问题。
+**路径规则仍是两处。** `deployment_sockets()` / `deployment_setpoint_socket()` 与
+command_socket_path.h 说的是同一条规则，但一个在 C 构建里、一个在 Python 里，共享
+不了那个头文件。改命名时两处一起改——这一条是照着 closed_loop_client.py 原来的
+注释留的，不是新问题。
 
 **端口约定**：桥的命令口与观测口是连着的两个端口，`--tcp host:5001` 意味着命令在
 5001、观测在 5002。要单独指定观测口用 `--obs-tcp`。
@@ -50,6 +51,16 @@ def deployment_sockets(deployment_id):
     """
     return (f"/tmp/emaster-{deployment_id}.sock",
             f"/tmp/emaster-{deployment_id}-obs.sock")
+
+
+def deployment_setpoint_socket(deployment_id):
+    """由部署 ID 推出**设点**通道路径（第三个通道，只写）。
+
+    单列一个函数而不并进 deployment_sockets，是因为设点口是给外部控制器用的，
+    绝大多数客户端根本不碰它；把它塞进所有人都在解的那个二元组只会让每个调用点
+    都要多写一个 `_`。与 C 侧的三个构造点一一对应。
+    """
+    return f"/tmp/emaster-{deployment_id}-sp.sock"
 
 
 class EndpointError(Exception):

@@ -79,6 +79,33 @@ static inline bool emaster_observation_socket_path(const char *deployment_id,
 }
 
 /*
+ * 由部署 ID 构造**设点**套接字路径（第三个通道）。
+ *
+ * 与前两个通道同一理由：命令口可写、影响控制且是文本；观测口只读、二进制；设点口
+ * 只写、二进制、是周期路径唯一的输入。三条路径由同一个部署 ID 推导、格式串各自只写
+ * 一份，拼错一个字就是把设点发到别的部署上去。用 -sp 后缀，与 -obs 一样不可能与
+ * 命令口碰撞。
+ */
+static inline bool emaster_setpoint_socket_path(const char *deployment_id,
+                                                char *buffer,
+                                                size_t capacity)
+{
+    int written;
+
+    if (buffer == NULL || capacity == 0U)
+    {
+        return false;
+    }
+    buffer[0] = '\0';
+    if (deployment_id == NULL || deployment_id[0] == '\0')
+    {
+        return false;
+    }
+    written = snprintf(buffer, capacity, "/tmp/emaster-%s-sp.sock", deployment_id);
+    return written > 0 && (size_t)written < capacity;
+}
+
+/*
  * CLI 共用选项解析：把 --socket <路径> / --deployment <ID> 从 argv 里摘掉，
  * 其余参数原地左移，使调用方原有的位置参数解析完全不用改（返回新的 argc）。
  *
