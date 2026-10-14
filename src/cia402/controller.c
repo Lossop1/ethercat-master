@@ -231,14 +231,24 @@ bool emaster_cia402_controller_step(emaster_cia402_controller_t *controller,
     output->fault_present = state == EMASTER_CIA402_STATE_FAULT ||
                              state == EMASTER_CIA402_STATE_FAULT_REACTION_ACTIVE;
     output->goal_reached = goal_reached(controller->goal, state);
-    if (state == EMASTER_CIA402_STATE_FAULT && controller->fault_reset_requested)
+    /*
+     * 显式复位请求不等状态字先进 Fault。
+     *
+     * 原先这里卡着 state == FAULT，理由是"没进 Fault 就没什么可复位的"。但有些
+     * 驱动器根本不把内部故障映射到 6041 的第 3 位：台架那台 603F 写着过速，6041
+     * 却一直是"未使能"。于是复位命令一次也发不出去，锁存的故障只能靠断电清。
+     *
+     * 放宽的只是"操作员的请求能不能落地"。这条请求只由命令口显式下发
+     * （emaster_cia402_controller_request_fault_reset），主站自己不会走到这里，
+     * 所以放开状态门不会让主站在任何驱动器上自作主张地复位。
+     */
+    if (controller->fault_reset_requested)
     {
         output->control_word = EMASTER_CIA402_CONTROL_FAULT_RESET;
         output->fault_reset_pulse = true;
         controller->fault_reset_requested = false;
         return true;
     }
-    controller->fault_reset_requested = false;
     output->control_word = control_word_for_goal(controller->goal, state);
     /* Halt 叠加：只在 OPERATION_ENABLED 状态下有意义；其它状态由 control_word_for_goal
      * 决定优先动作（上电或 Quick Stop），halt_active 不干预。 */
