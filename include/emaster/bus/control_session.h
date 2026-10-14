@@ -766,6 +766,13 @@ typedef struct
     uint64_t exchange;
     /* 多轴协调器的最后一次判定，取值见 emaster_multiaxis_status_t。 */
     int coordinator_status;
+    /*
+     * 故障那一刻环上实扫到的从站数（ecx_config_init 的返回）。-1 = 故障发生在扫描之前。
+     *
+     * axis_count 是**配置**的轴数，这一列是**实扫**的从站数；两个数并排，读者才分得开
+     * "环上少站"与"身份或 PDO 不符"——否则两者都只是 TOPOLOGY_MISMATCH 那一句。
+     */
+    int32_t bus_slave_count;
     size_t axis_count;
     uint16_t status_words[EMASTER_RUNTIME_FAILURE_MAX_AXES];
     uint16_t control_words[EMASTER_RUNTIME_FAILURE_MAX_AXES];

@@ -31,7 +31,7 @@
  *     存进对应索引的缓冲区并置 EC_BUF_RCVD（nicdrv.c:436-447），不是丢掉。所以
  *     观测线程**不会**把过程数据帧取走。
  *
- * 线程归属（与 checks/soem_call_sites.sh 的 ALLOWED 一一对应，那张名单
+ * 线程归属（与 tests/checks/soem_call_sites.sh 的 ALLOWED 一一对应，那张名单
  * 是这条约束的可执行检查，改动本段时必须同步）：
  *
  *   周期线程（RT）      session_exchange.c
@@ -75,6 +75,15 @@ typedef struct {
      * 非零说明是协调器拒绝了整帧，为零说明故障出在其后的健康检查或使能确认。
      * -1 表示协调器还没被调用过（配置或使能前就失败了），不是"通过"。 */
     int last_coordinator_status;
+    /*
+     * 环上实扫到的从站数（ecx_config_init 的返回）。-1 = 还没扫（配置在扫描之前就失败），
+     * 0 = 扫了但环上无从站。
+     *
+     * 它进故障现场是因为一句话分不开两件事：环上少两台，与尾两席的身份对不上，在主站
+     * 的输出里都只是 TOPOLOGY_MISMATCH 那一句。2026-10-14 台架实测，环上只有 10 台而
+     * 配置写 12 台，报告里只有轴数=12，读者无法断定是"少站"还是"抽查到别的型号"。
+     */
+    int32_t bus_slave_count;
     emaster_cycle_clock_t clock;
     uint8_t *io_map;
     uint64_t exchange;

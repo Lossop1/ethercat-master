@@ -225,7 +225,8 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                 (unsigned long long)runtime_failure->cycle_count,
                 (unsigned long long)runtime_failure->exchange,
                 session_status_text(runtime_failure->status),
-                runtime_failure->coordinator_status, (unsigned int)runtime_axis_count);
+                runtime_failure->coordinator_status, (unsigned int)runtime_axis_count,
+                (int)runtime_failure->bus_slave_count);
         for (runtime_axis_index = 0U; runtime_axis_index < runtime_axis_count;
              ++runtime_axis_index) {
             fprintf(stdout,

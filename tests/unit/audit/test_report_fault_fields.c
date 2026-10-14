@@ -26,7 +26,7 @@
  *
  * 值层面归本文件管；**JSON 是否仍然合法**（新加的三块把 runtime 那个对象的收尾
  * 改成了 `}}`，少一个括号就是一份解析不了的报告）归
- * checks/report_axis_fault_check.py 用 json.loads 判，并带变异对照。
+ * tests/checks/report_axis_fault_check.py 用 json.loads 判，并带变异对照。
  *
  * 编译与运行（本机 MinGW 建不了：src/audit 的 report 库只在 Linux 上建，见
  * src/audit/CMakeLists.txt）：
@@ -41,8 +41,8 @@
  *
  * 诊断码表那几个源文件是 report_sections.c 要调的，最后那个给拒收原因文本：
  * 漏掉就是链接失败。
- * 这份清单是 checks/report_sources_closure.py 算出来的闭包，与 checks/report_axis_fault_check.py、
- * checks/report_archive_check.py 里的 SOURCES 同源，改动要一起改。
+ * 这份清单是 tests/checks/report_sources_closure.py 算出来的闭包，与 tests/checks/report_axis_fault_check.py、
+ * tests/checks/report_archive_check.py 里的 SOURCES 同源，改动要一起改。
  */
 #include "emaster/audit/run_report.h"
 
@@ -117,6 +117,16 @@ int main(int argc, char **argv)
     bool published;
 
     report_fixture_init(&fixture, path);
+    /*
+     * 故障现场里的环上实扫台数（schema 18）。夹具本来不建故障现场，这里单为这一列建
+     * 一份：环上 10 台而配置 3 轴，正是 2026-10-14 台架的形状。两个数分开写，读者
+     * 才分得开"环上少站"与"身份或 PDO 不符"。
+     */
+    fixture.report.first_runtime_failure.present = true;
+    fixture.report.first_runtime_failure.status = EMASTER_CONTROL_SESSION_TOPOLOGY_MISMATCH;
+    fixture.report.first_runtime_failure.coordinator_status = -1;
+    fixture.report.first_runtime_failure.bus_slave_count = 10;
+    fixture.report.first_runtime_failure.axis_count = FIXTURE_AXIS_COUNT;
     published = emaster_run_report_publish(&fixture.plan, &fixture.report, path,
                                            FIXTURE_ARCHIVE_KEEP);
     if (!published)
@@ -488,9 +498,14 @@ int main(int argc, char **argv)
      * 实际取值与"是否被设备顶替"（sm_sync_type_substituted 与 *_used）——报告印方案值
      * 而设备停在另一档，就是一处安静的谎。升到 17 的理由：逐轴的位置换算多了来源
      * （position_scale.source）与方向来源（polarity_source）——设备读回的与设备档声明
-     * 的在这份报告里必须分得开，只判数值判不出"这台设备到底答没答"。 */
-    check(strstr(text, "\"schema_version\":17") != NULL,
-          "schema_version 是 17（换算与方向要写明来源：设备读回还是设备档声明）");
+     * 的在这份报告里必须分得开，只判数值判不出"这台设备到底答没答"。升到 18 的理由：
+     * 故障现场里只写配置轴数，于是"环上少站"与"身份或 PDO 不符"读出来是同一句
+     * TOPOLOGY_MISMATCH——2026-10-14 台架就是这样（报告写轴数=12，环上只有 10 台，
+     * 凭那一份报告断不出来）。 */
+    check(strstr(text, "\"schema_version\":18") != NULL,
+          "schema_version 是 18（故障现场要写明环上实扫台数，与配置轴数分开）");
+    check(strstr(text, "\"bus_slave_count\":10") != NULL,
+          "故障现场带上环上实扫台数：环上 10 台、配置 3 轴，读到这一列才知道是少站");
     check(strstr(text,
                  "\"error_class\":\"DRIVE_FAULT\",\"error_class_text\":\"驱动器自报故障\","
                  "\"error_class_evidence_no_frame\":false,"

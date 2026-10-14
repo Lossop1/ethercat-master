@@ -154,6 +154,8 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
     }
     session->context_open = true;
     slave_count = ecx_config_init(&session->context);
+    /* 先落盘再判数：报告里"环上几台"只有这一个来源，失败路径也要带着它 */
+    session->bus_slave_count = slave_count;
     if (slave_count <= 0) {
         status = EMASTER_CONTROL_SESSION_NO_SLAVES;
         return status;

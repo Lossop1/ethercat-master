@@ -1108,9 +1108,9 @@ static bool write_runtime_failure(FILE *stream, const emaster_runtime_failure_t 
     }
     REQUIRE_WRITE(fprintf(stream,
         "{\"status_code\":%u,\"cycle_count\":%" PRIu64 ",\"exchange\":%" PRIu64
-        ",\"coordinator_status\":%d,\"axis_count\":%zu,\"axes\":[",
+        ",\"coordinator_status\":%d,\"bus_slave_count\":%d,\"axis_count\":%zu,\"axes\":[",
         (unsigned int)failure->status, failure->cycle_count, failure->exchange,
-        failure->coordinator_status, axis_count) >= 0);
+        failure->coordinator_status, failure->bus_slave_count, axis_count) >= 0);
     for (axis_index = 0U; axis_index < axis_count; ++axis_index)
     {
         REQUIRE_WRITE(fprintf(stream,
@@ -1498,8 +1498,14 @@ bool emaster_run_report_write(FILE *stream,
      * 校验、存进缓冲区，等出口口径定了再接——那时报告里加的是"用了什么"，不是
      * "收到了什么"。同一理由，通道的计数记的是"发生了什么"，不是"应该发生什么"：
      * 主站不假设客户端频率，所以没有"应收条数"这种列。
+     *
+     * 18：运行时故障现场新增 bus_slave_count——故障那一刻环上实扫到的从站数（-1 =
+     * 故障发生在扫描之前）。版本 17 里只有配置轴数，于是"环上少两台"与"尾两席身份
+     * 对不上"读出来是同一句 TOPOLOGY_MISMATCH：2026-10-14 台架，报告写着轴数=12，
+     * 而环上只有 10 台，凭那一份报告断不出来。升版是因为两份同版本报告并排时，一份
+     * 有这一列、一份没有，读者会以为两份的拓扑状况可比。
      */
-REQUIRE_WRITE(fputs("{\"schema_version\":17,\"generated_at_utc\":", stream) != EOF);
+REQUIRE_WRITE(fputs("{\"schema_version\":18,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));

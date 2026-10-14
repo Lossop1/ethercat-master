@@ -170,6 +170,7 @@ static void capture_runtime_failure(
     failure->cycle_count = session->report->cycle_count;
     failure->exchange = session->exchange;
     failure->coordinator_status = session->last_coordinator_status;
+    failure->bus_slave_count = session->bus_slave_count;
     if (session->plan == NULL || session->status_words == NULL ||
         session->controller_outputs == NULL)
     {
@@ -272,6 +273,8 @@ emaster_control_session_status_t emaster_soem_control_session(
     memset(axis_storage, 0, plan->axis_count * sizeof(*axis_storage));
     /* -1 而不是 0：0 是 MULTIAXIS_OK，"还没调用过"不能伪装成"协调器通过了" */
     session->last_coordinator_status = -1;
+    /* 同一个道理：-1 是"还没扫过"，不是"环上零台" */
+    session->bus_slave_count = -1;
     session->plan = plan;
     session->axes = axis_storage;
     session->report = report;
