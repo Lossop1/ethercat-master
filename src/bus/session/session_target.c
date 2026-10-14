@@ -45,16 +45,19 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
     }
     *updated = false;
 
-    /* P5.2: 验证所有轴都在支持的模式（CSP/CSV/CST） */
+    /*
+     * 这条通道只认有周期目标的模式。判据是运行方案声明的量：声明 none 的模式（回零）
+     * 没有周期目标，所以带这种轴的部署压根不会走到这里——会话在挂回调那一步就把这条
+     * 通道整个放弃了（control_session.c）。这道检查留着，是为了任何调用者都不可能靠
+     * "绕过绑定"造出一个回零轴在收位置目标的会话。
+     *
+     * 不按模式号认：同一个号在不同厂商的说明书里指的不是同一件事。
+     */
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
-        int8_t mode;
-        if (session->plan->axes[axis_index].operation_mode == NULL)
-        {
-            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-        }
-        mode = session->plan->axes[axis_index].operation_mode->value;
-        if (mode != INT8_C(8) && mode != INT8_C(9) && mode != INT8_C(10))
+        if (session->plan->axes[axis_index].operation_mode == NULL ||
+            session->plan->axes[axis_index].operation_mode->quantity ==
+                EMASTER_MODE_QUANTITY_NONE)
         {
             return EMASTER_CONTROL_SESSION_MOTION_INVALID;
         }

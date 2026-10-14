@@ -13,11 +13,26 @@ bool emaster_soem_axis_set_feedback(const emaster_session_axis_plan_t *plan,
                                     int32_t value)
 {
     if (plan == NULL || plan->operation_mode == NULL || axis == NULL) return false;
-    if (plan->operation_mode->value == INT8_C(8)) axis->actual_position = value;
-    else if (plan->operation_mode->value == INT8_C(9)) axis->actual_velocity = value;
-    else if (plan->operation_mode->value == INT8_C(10) && value >= INT16_MIN && value <= INT16_MAX)
+    /*
+     * 反馈落到哪一路由运行方案声明的量决定，不按模式号分支。回零声明 none，它的反馈
+     * 是参考点搜寻的结果，也就是实际位置。
+     */
+    switch (plan->operation_mode->quantity)
+    {
+    case EMASTER_MODE_QUANTITY_VELOCITY:
+        axis->actual_velocity = value;
+        break;
+    case EMASTER_MODE_QUANTITY_TORQUE:
+        if (value < INT16_MIN || value > INT16_MAX) return false;
         axis->actual_torque = (int16_t)value;
-    else return false;
+        break;
+    case EMASTER_MODE_QUANTITY_NONE:
+    case EMASTER_MODE_QUANTITY_POSITION:
+        axis->actual_position = value;
+        break;
+    default:
+        return false;
+    }
     return true;
 }
 
@@ -25,10 +40,19 @@ int32_t emaster_soem_axis_target_value(const emaster_session_axis_plan_t *plan,
                                        const emaster_control_session_axis_result_t *axis)
 {
     if (plan == NULL || plan->operation_mode == NULL || axis == NULL) return 0;
-    if (plan->operation_mode->value == INT8_C(8)) return axis->target_position;
-    if (plan->operation_mode->value == INT8_C(9)) return axis->target_velocity;
-    if (plan->operation_mode->value == INT8_C(10)) return axis->target_torque;
-    return 0;
+    /* 目标从哪一路取，同样按声明的量。回零声明 none：没有周期目标，恒送 0。 */
+    switch (plan->operation_mode->quantity)
+    {
+    case EMASTER_MODE_QUANTITY_POSITION:
+        return axis->target_position;
+    case EMASTER_MODE_QUANTITY_VELOCITY:
+        return axis->target_velocity;
+    case EMASTER_MODE_QUANTITY_TORQUE:
+        return axis->target_torque;
+    case EMASTER_MODE_QUANTITY_NONE:
+    default:
+        return 0;
+    }
 }
 
 bool emaster_soem_axis_set_target_value(const emaster_session_axis_plan_t *plan,
@@ -36,11 +60,27 @@ bool emaster_soem_axis_set_target_value(const emaster_session_axis_plan_t *plan,
                                         int32_t value)
 {
     if (plan == NULL || plan->operation_mode == NULL || axis == NULL) return false;
-    if (plan->operation_mode->value == INT8_C(8)) axis->target_position = value;
-    else if (plan->operation_mode->value == INT8_C(9)) axis->target_velocity = value;
-    else if (plan->operation_mode->value == INT8_C(10) && value >= INT16_MIN && value <= INT16_MAX)
+    /*
+     * 声明 none 的模式（回零）没有目标可设，返回 false 而不是静默吞掉。返回 true 会让
+     * 这条写入"看起来成功"，而轴根本没动——那是"轴不动而脚本全绿"的老路。真正该发生的
+     * 是这条通道压根不建（见 emaster_session_plan_has_cyclic_targets 的调用处）。
+     */
+    switch (plan->operation_mode->quantity)
+    {
+    case EMASTER_MODE_QUANTITY_POSITION:
+        axis->target_position = value;
+        break;
+    case EMASTER_MODE_QUANTITY_VELOCITY:
+        axis->target_velocity = value;
+        break;
+    case EMASTER_MODE_QUANTITY_TORQUE:
+        if (value < INT16_MIN || value > INT16_MAX) return false;
         axis->target_torque = (int16_t)value;
-    else return false;
+        break;
+    case EMASTER_MODE_QUANTITY_NONE:
+    default:
+        return false;
+    }
     return true;
 }
 
@@ -288,6 +328,17 @@ emaster_control_session_status_t emaster_soem_control_session(
         session->position_target_source = callbacks->position_target_source;
         session->position_target_source_user_data = callbacks->position_target_source_user_data;
         session->external_target_buffer = callbacks->external_target_buffer;
+    }
+    /*
+     * 有轴没有周期目标（模式 6 回零）时，整条外部目标通道不成立：记录按"一条覆盖
+     * 全部轴"提交，那一根轴的目标无处可去。挡在这里而不是只挡在 apps/master 里，
+     * 是因为这条链路上不止一个调用者（target_probe 也自己挂回调）——把口子留在
+     * 会话上，任何调用者都建不出一个"通道在收、轴不动"的会话。
+     */
+    if (!emaster_session_plan_has_cyclic_targets(plan)) {
+        session->position_target_source = NULL;
+        session->position_target_source_user_data = NULL;
+        session->external_target_buffer = NULL;
     }
     session->transition_cycles =
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /

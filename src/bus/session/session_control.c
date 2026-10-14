@@ -822,19 +822,20 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                     slow_ok && axis_index < (size_t)slow.axis_count &&
                                     axis_index < (size_t)EMASTER_OBSERVATION_MAX_AXES;
                                 /*
-                                 * vel 的口径按模式分，两种模式里这个字段本来就不是同一个量：
+                                 * vel 的口径按模式声明的量分，两种情形里这个字段本来就不是
+                                 * 同一个量：
                                  *
-                                 * - CST（模式 9）：set_feedback 每拍把 PDO 的 606Ch 解进
+                                 * - 速度模式（CSV）：set_feedback 每拍把 PDO 的 606Ch 解进
                                  *   actual_velocity，那就是最干净的值。旧的慢速拷贝会在其后
                                  *   用 SDO 读到的转速把它盖掉——盖掉的是新值，留下的是旧值；
                                  *   现在不盖了。
-                                 * - 其余（CSP 等）：actual_velocity 只有慢速通道这一个来源，
-                                 *   快照给它。
+                                 * - 其余（位置、力矩、回零）：actual_velocity 只有慢速通道
+                                 *   这一个来源，快照给它。
                                  */
                                 const bool velocity_from_slow =
                                     !(session->plan->axes[axis_index].operation_mode != NULL &&
-                                      session->plan->axes[axis_index].operation_mode->value ==
-                                          INT8_C(9));
+                                      session->plan->axes[axis_index].operation_mode->quantity ==
+                                          EMASTER_MODE_QUANTITY_VELOCITY);
                                 /* 快照没读到（观测线程没发布过，或这次撞上写入中途）就
                                  * 退回 0；err 是诊断量，宁可显示"没读到"也不显示一个猜的。 */
                                 const unsigned int error_code =

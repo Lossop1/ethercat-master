@@ -272,8 +272,14 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         session->axes[axis_index].safeop_actual_position = actual_position;
         (void)emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
                                               &session->axes[axis_index], actual_position);
+        /*
+         * 第一拍的目标值：位置模式取当前实际位置（停在原地），速度模式取 0
+         * （不转）。取哪个由运行方案为这个模式声明的量决定。
+         */
         session->axes[axis_index].target_position =
-            session->plan->axes[axis_index].operation_mode->value == INT8_C(9)
+            session->plan->axes[axis_index].operation_mode != NULL &&
+                    session->plan->axes[axis_index].operation_mode->quantity ==
+                        EMASTER_MODE_QUANTITY_VELOCITY
                 ? 0 : actual_position;
         if (session->plan->motion_profile != NULL ||
             session->position_target_source != NULL) {

@@ -413,17 +413,25 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
              * 折算不出来（608F/6091 没读回来、齿轮比为零、角度乘溢出）就把上限留成
              * 0，该轴不判。报告里 offset_limit_checked 会如实标出这一点——不判和
              * "上限为零"必须分得开。
+             *
+             * **只有目标量是位置的轴才判。** 速度和力矩模式下这条通道收的数不是位置，
+             * 拿它减实际位置得到的量没有意义，判下去的结果是每一条都被拒（目标恒在
+             * 上限之外），而症状是"轴不动、脚本全绿"。量由运行方案按模式声明。
              */
             {
                 uint32_t limit_millidegrees =
                     session->plan->deployment->external_target_max_offset_millidegrees;
                 int64_t limit_counts = 0;
+                bool positional =
+                    axis->operation_mode != NULL &&
+                    axis->operation_mode->quantity == EMASTER_MODE_QUANTITY_POSITION;
 
                 if (limit_millidegrees == 0U) {
                     limit_millidegrees =
                         EMASTER_EXTERNAL_TARGET_MAX_OFFSET_DEFAULT_MILLIDEGREES;
                 }
-                if (session->position_target_source != NULL &&
+                if (positional &&
+                    session->position_target_source != NULL &&
                     session->external_target_limits_counts != NULL &&
                     emaster_motion_angle_to_counts(
                         (int32_t)limit_millidegrees, EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT,

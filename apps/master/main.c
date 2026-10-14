@@ -63,15 +63,27 @@ static bool application_stop_requested(void *user_data) {
 #define EMASTER_EXTERNAL_TARGET_TIMEOUT_DEFAULT_NS  UINT64_C(200000000)
 
 /*
- * 目标源的口径：部署选的是位置（CSP，模式 8）还是力矩（CST，模式 10）。
- * 由 main 在会话计划建好后判定一次，此后只读——position_target_source 每周期读它，
- * 不在实时路径上比字符串。
+ * 断供之后写什么：目标通道收的是位置就保持，收的是速度或力矩就写 0。
+ *
+ * 由 main 在会话计划建好后按**运行方案声明的量**判定一次（不是按模式号，也不在实时
+ * 路径上比字符串），此后只读——position_target_source 每周期读它。
  *
  * 这个开关只有一处作用，但缺了它就不安全：位置模式下"没有外部目标"可以保持上一周期
- * 的位置（轴停在那儿不动），力矩模式下同样处理等于"继续输出上一条力矩"——客户端失联
- * 之后轴会一直出力。所以力矩模式空闲/超时一律写 0。
+ * 的位置（轴停在那儿不动）；速度模式下同样处理等于"继续按上一条速度跑"，力矩模式下
+ * 等于"继续输出上一条力矩"——客户端失联之后轴会一直跑、一直出力。所以这两种一律写 0。
+ *
+ * **一个开关够用，是因为一个部署里的所有轴共用同一个模式对象**：session_plan.c 的
+ * find_operation_mode 只按运行方案的 selected_mode_id 取一个模式，循环里每一轴拿到的
+ * 是同一个指针。所以第 0 轴答得了全体——这里不是"只看第一轴"的将就。混着两种量的部署
+ * 在配置层就构造不出来；真构造出来了，这个判断也该跟着改成逐轴。
  */
-static bool external_target_torque_mode = false;
+static bool external_target_zero_on_loss = false;
+
+/*
+ * 这个部署有没有外部目标可给。回零（模式 6）没有周期目标，整条外部目标通道
+ * 与设点口都不建。同样在会话计划建好后判定一次，此后只读。
+ */
+static bool plan_has_cyclic_targets = false;
 
 static uint64_t external_target_timeout_ns = EMASTER_EXTERNAL_TARGET_TIMEOUT_DEFAULT_NS;
 
@@ -118,7 +130,7 @@ static bool setpoint_channel_enabled(void)
  * 模式：
  * - 如果 buf->available == 1 且未超时：从 buf->positions 读取
  * - 外部目标超时后：保持上一周期位置（HOLD）
- * - 从未收到过外部目标：生成正弦波（演示/测试模式）
+ * - 从未收到过外部目标：保持首拍记下的初始位置（不动，也不跑演示波形）
  *
  * user_data 指向 emaster_external_target_buffer_t，由 main 注入。
  */
@@ -182,14 +194,15 @@ static emaster_position_target_source_result_t position_target_source(
             fprintf(stderr, "[MODE] Switched to EXTERNAL control\n");
             last_mode = 1;
         }
-    } else if (external_target_torque_mode) {
+    } else if (external_target_zero_on_loss) {
         /*
-         * C2：力矩模式下 HOLD 不是安全选择——session_target.c 的 HOLD 分支直接放行
-         * （"保持上一周期目标"），在力矩里就是"继续输出上一条力矩"，客户端失联之后
-         * 轴会一直出力。所以空闲与超时都写 0，并显式返回 UPDATED。
+         * C2：速度与力矩模式下 HOLD 不是安全选择——session_target.c 的 HOLD 分支直接
+         * 放行（"保持上一周期目标"），在速度里就是"继续按上一条速度跑"，在力矩里就是
+         * "继续输出上一条力矩"。客户端失联之后轴会一直跑、一直出力。所以空闲与超时都
+         * 写 0，并显式返回 UPDATED。
          */
         if (last_mode != 3) {
-            fprintf(stderr, "[MODE] Torque mode (CST): idle, outputting zero torque\n");
+            fprintf(stderr, "[MODE] Velocity/torque mode: idle, outputting zero\n");
             last_mode = 3;
         }
         for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
@@ -503,9 +516,10 @@ int main(int argc, char **argv) {
     }
     plan_status = emaster_session_plan_build(deployment, plan_axes, axis_capacity, &plan);
     if (plan_status != EMASTER_SESSION_PLAN_READY) {
+        emaster_session_plan_report_failure(
+            plan_status, &plan, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PLAN_FAILED));
         free(plan_axes);
         free(results);
-        fputs(emaster_text(EMASTER_TEXT_CONTROL_SESSION_PLAN_FAILED), stderr);
         return 1;
     }
     fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_START), deployment->hostname,
@@ -517,17 +531,33 @@ int main(int argc, char **argv) {
     external_target_buffer.axis_count = plan.axis_count;
 
     /*
-     * C2：按实际构好的计划判定目标源口径（不是按部署里的字符串，计划已经解析过
-     * 设备事实与运行方案的匹配）。模式 8 = CSP（位置），10 = CST（力矩）。
+     * 这个部署有没有外部目标可给。模式 6（回零）没有周期目标：参考点搜寻由驱动器
+     * 自己走，主站只负责把它带进那个模式并核对结果。
+     *
+     * 判据是"计划里每根轴的模式"，不是部署里的字符串——计划已经解析过设备事实与
+     * 运行方案的匹配。只要有一根轴没有目标，整条外部目标通道就不建（设点口也不建），
+     * 否则设点口会照常收记录、计数照常涨，而那一根轴的目标无处可去。
      */
-    external_target_torque_mode = plan.axis_count > 0U &&
-                                  plan.axes[0].operation_mode != NULL &&
-                                  plan.axes[0].operation_mode->value == INT8_C(10);
-    if (external_target_torque_mode) {
+    plan_has_cyclic_targets = emaster_session_plan_has_cyclic_targets(&plan);
+    if (!plan_has_cyclic_targets) {
+        fputs(emaster_text(EMASTER_TEXT_CONTROL_SESSION_NO_TARGET_CHANNEL), stderr);
+    }
+
+    /*
+     * C2：按实际构好的计划判定断供先写什么（不是按部署里的字符串，计划已经解析过
+     * 设备事实与运行方案的匹配）——判据是运行方案为这个模式声明的量：位置保持，
+     * 速度与力矩写 0。不按模式号认：同一个号在不同厂商的说明书里指的不是同一件事。
+     */
+    external_target_zero_on_loss = plan_has_cyclic_targets &&
+                                   plan.axis_count > 0U &&
+                                   plan.axes[0].operation_mode != NULL &&
+                                   plan.axes[0].operation_mode->quantity !=
+                                       EMASTER_MODE_QUANTITY_POSITION;
+    if (external_target_zero_on_loss) {
         const char *mode_id = plan.axes[0].operation_mode->mode_id;
-        fprintf(stderr, "[MODE] Torque deployment (%s, mode 10): target source writes zero "
-                        "torque when idle or timed out\n",
-                mode_id != NULL ? mode_id : "mode 10");
+        fprintf(stderr, "[MODE] Non-position mode (%s): target source writes zero when "
+                        "idle or timed out\n",
+                mode_id != NULL ? mode_id : "non-position mode");
     }
 
     /*
@@ -572,7 +602,7 @@ int main(int argc, char **argv) {
      *
      * 建不起来不拦会话：这条通道是外部输入，没有它主站照样跑（文本动词仍是入口）。
      */
-    if (setpoint_channel_enabled()) {
+    if (setpoint_channel_enabled() && plan_has_cyclic_targets) {
         char setpoint_path[EMASTER_SOCKET_PATH_CAPACITY];
         int8_t expected_modes[EMASTER_EXTERNAL_TARGET_MAX_AXES];
         size_t mode_index;
@@ -601,20 +631,26 @@ int main(int argc, char **argv) {
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.stop_requested = application_stop_requested;
     /*
-     * 绑定外部目标源有两个前提，缺一不绑。
+     * 绑定外部目标源的唯一前提：部署没有引用固定运动方案。两条路径在周期里二选一，
+     * 且外部目标源优先；部署已经写死了轨迹，再挂一个外部源进去，动的是回调，不是
+     * 配置——记录下来的"本次按部署跑"就是假话（target_probe 存在的理由就是这条约定）。
      *
-     * 一、部署没有引用固定运动方案。两条路径在周期里二选一，且外部目标源优先；
-     * 部署已经写死了轨迹，再挂一个外部源进去，动的是回调，不是配置——记录下来的
-     * "本次按部署跑"就是假话（target_probe 存在的理由就是这条约定）。
+     * **这里不许再挂 EMASTER_SETPOINT。** 那个开关管的是设点口（-sp.sock，见下）这
+     * 一条**新**通道；而命令口的 set_external_target 在这条口存在之前就是入口，
+     * README 的"配置模型"一节也只说这个开关决定建不建设点口。把绑定也压到这个开关
+     * 上，等于让一个默认关的新开关悄悄废掉一个已经交付的入口：控制台按 `m` 键起的
+     * 主站 + 面板点动、各台架脚本的 set_external_target 会一条不落地被拒
+     * （"No external target buffer configured"），而它们各自要看的指标——周期照常
+     * 推进、命令流连续、自检退出码 0——**全部照样成立**。2026-10-14 在 MT 上就是这么
+     * 拿到一次"通过"的，日志里 6000 条目标一条都没生效。
      *
-     * 二、设点通道开着。外部目标只有这一个生产者：通道不开，缓冲区这辈子收不到
-     * 一条记录，回调唯一的出路是生成演示正弦波。空转部署因此会自己动起来。
+     * 早年那条"不绑就会跑演示正弦波"的理由已经不成立：回调在没有外部目标时保持
+     * 初始位置（见 position_target_source 的末段），不会自己动。
      *
-     * 两条都不成立时不绑。会话按期"没有运动"处理：不要求设备声明 608F/6091/607D、
-     * 不建换算表、不写目标。设备只要给得出 PDO，就能进 OP 并被观测——这才是
-     * "空转"该有的代价。
+     * 不绑的场合（部署引用了固定运动方案）会话按期"没有运动"处理：不要求设备声明
+     * 608F/6091/607D、不建换算表、不写目标。设备只要给得出 PDO，就能进 OP 并被观测。
      */
-    if (plan.motion_profile == NULL && setpoint_channel_enabled()) {
+    if (plan.motion_profile == NULL && plan_has_cyclic_targets) {
         callbacks.position_target_source = position_target_source;
         callbacks.position_target_source_user_data = &external_target_buffer;
         callbacks.external_target_buffer = &external_target_buffer;
