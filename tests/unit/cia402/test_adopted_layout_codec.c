@@ -214,6 +214,7 @@ static void build_axis(emaster_session_axis_plan_t *axis, uint32_t profile_tx_la
     memset(&operation_mode, 0, sizeof(operation_mode));
     operation_mode.mode_id = "check-csp";
     operation_mode.value = INT8_C(8);
+    operation_mode.quantity = EMASTER_MODE_QUANTITY_POSITION;
     operation_mode.required_rx_fields = required_rx;
     operation_mode.required_rx_field_count = sizeof(required_rx) / sizeof(required_rx[0]);
     operation_mode.required_tx_fields = required_tx;

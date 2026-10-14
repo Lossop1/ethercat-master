@@ -139,6 +139,7 @@ static void build_axis(emaster_session_axis_plan_t *axis)
 
     memset(&operation_mode, 0, sizeof(operation_mode));
     operation_mode.mode_id = "check-mode";
+    operation_mode.quantity = EMASTER_MODE_QUANTITY_POSITION;
     operation_mode.required_rx_fields = rx_fields;
     operation_mode.required_rx_field_count = sizeof(required_rx) / sizeof(required_rx[0]);
     operation_mode.required_tx_fields = tx_fields;

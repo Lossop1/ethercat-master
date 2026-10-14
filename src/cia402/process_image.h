@@ -9,6 +9,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* 运行方案为某个 RxPDO 对象声明的固定值，按字段序号与字段一一对应。 */
+typedef struct
+{
+    bool present;
+    int64_t value;
+} emaster_cia_declared_output_t;
+
 /* 单轴过程映像保存已核对布局对应的字段位置和预分配编解码存储。 */
 typedef struct
 {
@@ -20,6 +27,17 @@ typedef struct
     /* 与字段一一对应的审计游标，使每周期审计工作量仅取决于当前 PDO 字段数。 */
     size_t *rx_audit_records;
     size_t *tx_audit_records;
+    /*
+     * 方案为 RxPDO 里某个对象声明的固定值（safeop_to_op_sdo_writes），按字段序号存放。
+     *
+     * 单独存一份是因为"SAFE-OP 进 OP 时写一次 SDO"不足以保证对象在运行期是这个值：
+     * 设备把同一个对象也映射进 RxPDO 时，每拍送出去的周期值会立刻把它顶掉。台架实测
+     * 就是这么一台：0x6072 的 SDO 写读回来是对的，随后的周期写恒为零（10732 拍），
+     * OP 期间从驱动器读回的最大力矩也就是零。所以声明的值要逐拍写出去。
+     *
+     * present 为 false 的字段照旧按填充写零；本模式的目标字段不在这里，它由目标通道给。
+     */
+    emaster_cia_declared_output_t *rx_declared;
     size_t rx_field_count;
     size_t tx_field_count;
     size_t rx_mode_ordinal;
@@ -34,10 +52,20 @@ typedef struct
     size_t tx_actual_torque_ordinal;
     size_t tx_actual_current_ordinal;
     size_t tx_dc_link_voltage_ordinal;
+    /*
+     * 驱动器错误码 0x603F 在 TxPDO 里的位置。表 0x1A00 的第 5 条就是它，凡按标准状态
+     * 通道建的从站都有；本 PDO 里没有时保持 SIZE_MAX。
+     */
+    size_t tx_error_code_ordinal;
     /* 动态模块通过 PDO 提供模式字段；固定模块没有该字段。 */
     bool rx_mode_available;
     bool tx_mode_available;
     int8_t configured_mode;
+    /*
+     * 本轴配置的模式：目标通道收的那个数是什么量。解码要挑哪一路反馈、编码要往哪个
+     * 目标字段写，都按它分。存下来是因为 decode_input 只拿到映像、拿不到轴的计划。
+     */
+    emaster_mode_quantity_t configured_quantity;
     bool sync0_configured;
 } emaster_cia_process_image_t;
 
@@ -88,6 +116,19 @@ typedef enum
 bool emaster_cia_process_image_feedback(const emaster_cia_process_image_t *image,
                                         emaster_cia_feedback_t feedback,
                                         int32_t *value);
+
+/*
+ * 上一次解码留下的驱动器错误码（0x603F），0 = 无故障。
+ *
+ * 与上面几路反馈同一个来路：都是过程映像里逐拍带回来的真实读数，不是慢速轮询的
+ * 缓存。分开读的理由是它判的东西不一样——这个答的是"驱动器此刻自报什么故障"，而
+ * 状态字的故障位只答"驱动器的 CiA 402 状态机在不在 Fault"。MT 台架实测这两者会分家：
+ * 驱动器内部报故障时状态字 bit3 一直是 0，0x6061 却回 0。
+ *
+ * 本 PDO 布局里没有 0x603F 这条时返回 false，*value 不动。
+ */
+bool emaster_cia_process_image_drive_error_code(const emaster_cia_process_image_t *image,
+                                                uint16_t *value);
 
 /* 交换结束后记录 RxPDO 及其 WKC 确认结果，成功解码后记录 TxPDO。 */
 bool emaster_cia_process_image_audit_output(

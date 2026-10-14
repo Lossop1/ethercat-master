@@ -1,6 +1,7 @@
 #include "process_image.h"
 
 #include "emaster/catalog/slave_profile.h"
+#include "emaster/cia402/controller.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -20,7 +21,8 @@ enum
     EMASTER_CIA402_TARGET_TORQUE_INDEX = 0x6071,
     EMASTER_CIA402_ACTUAL_TORQUE_INDEX = 0x6077,
     EMASTER_CIA402_ACTUAL_CURRENT_INDEX = 0x6078,
-    EMASTER_CIA402_DC_LINK_VOLTAGE_INDEX = 0x6079
+    EMASTER_CIA402_DC_LINK_VOLTAGE_INDEX = 0x6079,
+    EMASTER_CIA402_ERROR_CODE_INDEX = 0x603F
 };
 
 static const emaster_pdo_mapping_profile_t *profile_mapping_for(
@@ -63,6 +65,72 @@ static const emaster_pdo_entry_t *profile_entry_for(
         }
     }
     return NULL;
+}
+
+/* 展开后的字段序号对应的布局条目；序号越界返回 NULL。 */
+static const emaster_pdo_mapping_entry_t *layout_entry_for_field(
+    const emaster_pdo_direction_layout_t *layout, size_t ordinal)
+{
+    size_t mapping_ordinal;
+    size_t current = 0U;
+
+    if (layout == NULL)
+    {
+        return NULL;
+    }
+    for (mapping_ordinal = 0U; mapping_ordinal < layout->mapping_count; ++mapping_ordinal)
+    {
+        const emaster_pdo_mapping_t *mapping = &layout->mappings[mapping_ordinal];
+        size_t entry_ordinal;
+
+        for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count; ++entry_ordinal)
+        {
+            if (current == ordinal)
+            {
+                return &mapping->entries[entry_ordinal];
+            }
+            ++current;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * 配置声明的类型决定该对象在过程数据里的位宽与符号 —— 位宽只有一个来源，不靠猜。
+ */
+static bool sdo_value_type_geometry(emaster_config_sdo_value_type_t type,
+                                    uint32_t *bit_length, bool *is_signed)
+{
+    switch (type)
+    {
+    case EMASTER_CONFIG_SDO_VALUE_U8:
+        *bit_length = 8U;
+        *is_signed = false;
+        return true;
+    case EMASTER_CONFIG_SDO_VALUE_I8:
+        *bit_length = 8U;
+        *is_signed = true;
+        return true;
+    case EMASTER_CONFIG_SDO_VALUE_U16:
+        *bit_length = 16U;
+        *is_signed = false;
+        return true;
+    case EMASTER_CONFIG_SDO_VALUE_I16:
+        *bit_length = 16U;
+        *is_signed = true;
+        return true;
+    case EMASTER_CONFIG_SDO_VALUE_U32:
+        *bit_length = 32U;
+        *is_signed = false;
+        return true;
+    case EMASTER_CONFIG_SDO_VALUE_I32:
+        *bit_length = 32U;
+        *is_signed = true;
+        return true;
+    default:
+        break;
+    }
+    return false;
 }
 
 static emaster_pdo_codec_value_kind_t field_kind_for(const emaster_pdo_entry_t *entry)
@@ -291,6 +359,86 @@ static bool build_direction_codec(
            control_found;
 }
 
+/*
+ * 把方案为对象声明的固定值落到字段上。
+ *
+ * 只有"这个对象也在这套 RxPDO 里"才需要落：不在里面的对象没有周期值会顶掉那次 SDO
+ * 写。位宽对不上、或者那个字段本来就是主站每拍要写的量（控制字、模式、目标），都是
+ * 配置里两处说法打架，返回 false 让会话起不来，而不是挑一个写下去。
+ */
+static bool build_declared_outputs(const emaster_session_axis_plan_t *axis,
+                                   emaster_cia_process_image_t *image)
+{
+    size_t command_index;
+
+    image->rx_declared = calloc(image->rx_field_count, sizeof(*image->rx_declared));
+    if (image->rx_declared == NULL)
+    {
+        return false;
+    }
+    for (command_index = 0U;
+         command_index < axis->operation_mode->safeop_to_op_sdo_write_count;
+         ++command_index)
+    {
+        const emaster_sdo_write_config_t *command =
+            &axis->operation_mode->safeop_to_op_sdo_writes[command_index];
+        size_t ordinal = field_ordinal_for(&image->layout.rx, command->index,
+                                           command->subindex);
+        const emaster_pdo_mapping_entry_t *entry;
+        uint32_t bit_length = 0U;
+        bool is_signed = false;
+
+        if (ordinal == SIZE_MAX)
+        {
+            continue;
+        }
+        entry = layout_entry_for_field(&image->layout.rx, ordinal);
+        if (entry == NULL ||
+            !sdo_value_type_geometry(command->type, &bit_length, &is_signed) ||
+            bit_length != entry->bit_length)
+        {
+            return false;
+        }
+        if (ordinal == image->rx_control_ordinal || ordinal == image->rx_mode_ordinal ||
+            ordinal == image->rx_target_position_ordinal ||
+            ordinal == image->rx_target_velocity_ordinal ||
+            ordinal == image->rx_target_torque_ordinal)
+        {
+            return false;
+        }
+        image->rx_fields[ordinal].kind = is_signed ? EMASTER_PDO_CODEC_VALUE_SIGNED
+                                                   : EMASTER_PDO_CODEC_VALUE_UNSIGNED;
+        image->rx_declared[ordinal].present = true;
+        image->rx_declared[ordinal].value = command->value;
+    }
+    return true;
+}
+
+/* 每拍把声明的固定值填进过程映像；声明里没有的字段不动。 */
+static void apply_declared_outputs(emaster_cia_process_image_t *image)
+{
+    size_t field_ordinal;
+
+    for (field_ordinal = 0U; field_ordinal < image->rx_field_count; ++field_ordinal)
+    {
+        if (!image->rx_declared[field_ordinal].present)
+        {
+            continue;
+        }
+        image->rx_values[field_ordinal].kind = image->rx_fields[field_ordinal].kind;
+        if (image->rx_fields[field_ordinal].kind == EMASTER_PDO_CODEC_VALUE_SIGNED)
+        {
+            image->rx_values[field_ordinal].value.signed_value =
+                image->rx_declared[field_ordinal].value;
+        }
+        else
+        {
+            image->rx_values[field_ordinal].value.unsigned_value =
+                (uint64_t)image->rx_declared[field_ordinal].value;
+        }
+    }
+}
+
 bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
                                     emaster_cia_process_image_t *image)
 {
@@ -338,6 +486,8 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     image->tx_actual_torque_ordinal = SIZE_MAX;
     image->tx_actual_current_ordinal = SIZE_MAX;
     image->tx_dc_link_voltage_ordinal = SIZE_MAX;
+    image->tx_error_code_ordinal = SIZE_MAX;
+    image->rx_declared = NULL;
     image->rx_mode_available = false;
     image->tx_mode_available = false;
     if (!build_direction_codec(&image->layout.rx, axis->pdo_set->rx_mappings,
@@ -368,6 +518,7 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     image->rx_mode_available = image->rx_mode_ordinal != SIZE_MAX;
     image->tx_mode_available = image->tx_mode_ordinal != SIZE_MAX;
     image->configured_mode = axis->operation_mode->value;
+    image->configured_quantity = axis->operation_mode->quantity;
     image->rx_target_position_ordinal = field_ordinal_for(
         &image->layout.rx, EMASTER_CIA402_TARGET_POSITION_INDEX, UINT8_C(0));
     image->tx_actual_position_ordinal = field_ordinal_for(
@@ -384,20 +535,41 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
         &image->layout.tx, EMASTER_CIA402_ACTUAL_CURRENT_INDEX, UINT8_C(0));
     image->tx_dc_link_voltage_ordinal = field_ordinal_for(
         &image->layout.tx, EMASTER_CIA402_DC_LINK_VOLTAGE_INDEX, UINT8_C(0));
-    if (axis->operation_mode->value == INT8_C(8) &&
-        (image->rx_target_position_ordinal == SIZE_MAX || image->tx_actual_position_ordinal == SIZE_MAX))
+    image->tx_error_code_ordinal = field_ordinal_for(
+        &image->layout.tx, EMASTER_CIA402_ERROR_CODE_INDEX, UINT8_C(0));
+    /*
+     * 有周期的模式各自要求目标与反馈字段都在本套 PDO 里；回零不要求任何目标字段，
+     * 它要的反馈（实际位置）不在也不是错——一台只回零、不报位置的驱动器照样能把
+     * 参考点找到，主站不该因为少一路遥测就把它判死。
+     *
+     * 按声明的量挑字段，不按模式号：同一个模式号在不同厂商的说明书里指的不是同一件事。
+     */
+    switch (axis->operation_mode->quantity)
     {
-        return false;
-    }
-    if (axis->operation_mode->value == INT8_C(9) &&
-        (image->rx_target_velocity_ordinal == SIZE_MAX || image->tx_actual_velocity_ordinal == SIZE_MAX))
-    {
-        return false;
-    }
-    if (axis->operation_mode->value == INT8_C(10) &&
-        (image->rx_target_torque_ordinal == SIZE_MAX || image->tx_actual_torque_ordinal == SIZE_MAX))
-    {
-        return false;
+    case EMASTER_MODE_QUANTITY_POSITION:
+        if (image->rx_target_position_ordinal == SIZE_MAX ||
+            image->tx_actual_position_ordinal == SIZE_MAX)
+        {
+            return false;
+        }
+        break;
+    case EMASTER_MODE_QUANTITY_VELOCITY:
+        if (image->rx_target_velocity_ordinal == SIZE_MAX ||
+            image->tx_actual_velocity_ordinal == SIZE_MAX)
+        {
+            return false;
+        }
+        break;
+    case EMASTER_MODE_QUANTITY_TORQUE:
+        if (image->rx_target_torque_ordinal == SIZE_MAX ||
+            image->tx_actual_torque_ordinal == SIZE_MAX)
+        {
+            return false;
+        }
+        break;
+    case EMASTER_MODE_QUANTITY_NONE:
+    default:
+        break;
     }
     if ((image->rx_target_position_ordinal != SIZE_MAX && image->rx_fields[image->rx_target_position_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED) ||
         (image->tx_actual_position_ordinal != SIZE_MAX && image->tx_fields[image->tx_actual_position_ordinal].kind != EMASTER_PDO_CODEC_VALUE_SIGNED) ||
@@ -408,7 +580,7 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     {
         return false;
     }
-    return true;
+    return build_declared_outputs(axis, image);
 }
 
 bool emaster_cia_process_image_prepare_output(
@@ -434,6 +606,7 @@ bool emaster_cia_process_image_prepare_output(
             axis->operation_mode->value;
     }
     image->rx_values[image->rx_control_ordinal].value.unsigned_value = UINT64_C(0);
+    apply_declared_outputs(image);
     return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
                                     image->rx_field_count, image->rx_values,
                                     image->rx_field_count, output, output_capacity) ==
@@ -452,20 +625,42 @@ bool emaster_cia_process_image_update_output(
     {
         return false;
     }
+    /* 先落声明值：它填的字段与控制字、模式、目标都不重叠（建表时已挡住）。 */
+    apply_declared_outputs(image);
     image->rx_values[image->rx_control_ordinal].value.unsigned_value = control_word;
     if (image->rx_mode_available)
     {
         image->rx_values[image->rx_mode_ordinal].value.signed_value =
             axis->operation_mode->value;
     }
-    if (axis->operation_mode->value == INT8_C(8))
+    if (axis->operation_mode->quantity == EMASTER_MODE_QUANTITY_NONE)
+    {
+        /*
+         * 回零没有周期目标：参考点搜寻由驱动器自己走，主站每拍只送控制字与模式本身。
+         * 目标字段一个都不写——写哪个都是错的，而"写 0"与"写当前实际位置"在不同
+         * 驱动器上含义不同，没有一条是本模式定义的。
+         */
+        return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
+                                        image->rx_field_count, image->rx_values,
+                                        image->rx_field_count, output,
+                                        output_capacity) == EMASTER_PDO_CODEC_OK;
+    }
+    /* 目标写进本模式声明的那个量对应的字段；声明里没有的量的字段不写。 */
+    switch (axis->operation_mode->quantity)
+    {
+    case EMASTER_MODE_QUANTITY_POSITION:
         image->rx_values[image->rx_target_position_ordinal].value.signed_value = target_value;
-    else if (axis->operation_mode->value == INT8_C(9))
+        break;
+    case EMASTER_MODE_QUANTITY_VELOCITY:
         image->rx_values[image->rx_target_velocity_ordinal].value.signed_value = target_value;
-    else if (axis->operation_mode->value == INT8_C(10))
+        break;
+    case EMASTER_MODE_QUANTITY_TORQUE:
         image->rx_values[image->rx_target_torque_ordinal].value.signed_value = target_value;
-    else
+        break;
+    case EMASTER_MODE_QUANTITY_NONE:
+    default:
         return false;
+    }
     return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
                                     image->rx_field_count, image->rx_values,
                                     image->rx_field_count, output, output_capacity) ==
@@ -544,11 +739,12 @@ bool emaster_cia_process_image_decode_input(
     *actual_value = 0;
     {
         size_t feedback_ordinal = image->tx_actual_position_ordinal;
-        if (image->configured_mode == INT8_C(9))
+        /* 反馈按声明的量挑；回零与位置模式同一路（参考点搜寻的结果就是实际位置）。 */
+        if (image->configured_quantity == EMASTER_MODE_QUANTITY_VELOCITY)
         {
             feedback_ordinal = image->tx_actual_velocity_ordinal;
         }
-        else if (image->configured_mode == INT8_C(10))
+        else if (image->configured_quantity == EMASTER_MODE_QUANTITY_TORQUE)
             feedback_ordinal = image->tx_actual_torque_ordinal;
         if (feedback_ordinal != SIZE_MAX)
         {
@@ -594,6 +790,29 @@ bool emaster_cia_process_image_feedback(const emaster_cia_process_image_t *image
         return false;
     }
     *value = (int32_t)raw;
+    return true;
+}
+
+bool emaster_cia_process_image_drive_error_code(const emaster_cia_process_image_t *image,
+                                                uint16_t *value)
+{
+    size_t ordinal;
+
+    if (image == NULL || value == NULL)
+    {
+        return false;
+    }
+    ordinal = image->tx_error_code_ordinal;
+    if (ordinal == SIZE_MAX || ordinal >= image->tx_field_count ||
+        image->tx_values[ordinal].kind != EMASTER_PDO_CODEC_VALUE_UNSIGNED)
+    {
+        return false;
+    }
+    if (image->tx_values[ordinal].value.unsigned_value > UINT16_MAX)
+    {
+        return false;
+    }
+    *value = (uint16_t)image->tx_values[ordinal].value.unsigned_value;
     return true;
 }
 
@@ -706,6 +925,7 @@ void emaster_cia_process_image_destroy(emaster_cia_process_image_t *images,
         free(images[axis_index].tx_values);
         free(images[axis_index].rx_audit_records);
         free(images[axis_index].tx_audit_records);
+        free(images[axis_index].rx_declared);
     }
     free(images);
 }

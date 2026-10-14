@@ -564,7 +564,29 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
             }
             if (!all_modes_confirmed &&
                 session->report->cycle_count >= mode_confirmation_deadline_cycle) {
+                /*
+                 * 说原因之前先问驱动器自己报了什么。
+                 *
+                 * 原先这里一律写"过程数据反馈解码失败"。可模式回显立不住，往往不是
+                 * 主站解码错了，而是驱动器先坏了、不再回模式。装的人顺着"解码失败"
+                 * 去查过程数据映像和线序，真原因一个字也看不见。台架实测就是这样：
+                 * 驱动器过速后 603F=0x0100，6061 回 0，报告里写的是解码失败。
+                 *
+                 * 0x603F 是标准 CiA 402 错误码，标准状态通道（0x1A00 第 5 条）里就
+                 * 有它，逐拍随 TxPDO 回来，不引入厂商语义。布局里没这一条就查不到，
+                 * 判据自动退化成原来的说法。
+                 */
                 status = EMASTER_CONTROL_SESSION_FEEDBACK_INVALID;
+                for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+                    uint16_t drive_error_code;
+
+                    if (emaster_cia_process_image_drive_error_code(
+                            &session->images[axis_index], &drive_error_code) &&
+                        drive_error_code != 0U) {
+                        status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;
+                        break;
+                    }
+                }
                 emaster_soem_session_note_runtime_failure(session, status, &safety_status);
                 safety_denied = true;
             }
