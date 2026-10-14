@@ -1,32 +1,10 @@
 # EtherCAT Master
 
-面向机器人控制的 EtherCAT 主站。C11 + SOEM。支持配置为 1 ms DC 同步的多轴 CiA 402 控制。
+面向机器人控制的 EtherCAT 主站：C11 + SOEM，1 ms DC 同步，多轴 CiA 402。
 
-**本软件不是经过认证的功能安全系统。** 电气 STO、急停、机械约束、断电措施和安全测试区域仍是外部强制要求。详见第 11 节。
+**本软件不是经过认证的功能安全系统。** 电气 STO、急停、机械约束、断电措施和安全测试区域仍是外部强制要求。
 
-可靠性结论必须依据本文的测量边界和[测试方案](docs/test-plan.md)的判据。
-
-## 文档
-
-| 文件 | 内容 |
-| --- | --- |
-| `README.md` | 本文件：交付内容、上手、运行、配置、命令接口、工具、排查 |
-| [`docs/architecture.md`](docs/architecture.md) | 实现说明：架构、周期、两层状态、报告、DC 与同步 |
-| [`docs/protocol/command-protocol-v1.md`](docs/protocol/command-protocol-v1.md) | 三个套接字的协议：命令文法、响应文法、设点记录格式 |
-| [`docs/test-plan.md`](docs/test-plan.md) | 测试条件、判据、已采集的证据、未决项 |
-| [`docs/time-and-space.txt`](docs/time-and-space.txt) | 对象、空间、时间与读写的运行期资料 |
-| [`docs/product/twincat-function-gap.md`](docs/product/twincat-function-gap.md) | 功能对标：本主站在哪一层、与 TwinCAT 逐层比什么、明确不做什么 |
-| `esi/README.md` | 设备描述放哪、从哪来 |
-| `config/README.md` | 配置各族逐个字段的语义 |
-| `tools/gen/device/README.md` | 设备上手工具的边界 |
-
----
-
-## 1 交付内容
-
-交付的是一棵源码树。**树里不含任何电机的配置。**
-
-你必须自己带进来两样东西：
+交付的是一棵源码树。**树里不含任何电机的配置。** 你必须自己带进来两样东西：
 
 - 电机厂商的 ESI 文件（XML）。**本项目只读 ESI，不收 CANopen 的 EDS。**
 - 现场参数：网口名、轴数与总线顺序、正方向、零点和限幅。
@@ -63,15 +41,30 @@
   docs/             实现说明、接口协议、测试方案、功能对标、运行期资料
 
 开发与验证
-  tests/            单元测试。第 2 节的 ctest 要用它，构建时不能少
+  tests/            单元测试。安装一节的 ctest 要用它，构建时不能少
   tests/checks/     离线检查脚本；ci_replay.sh 一条命令按 CI 顺序跑完整套
   evidence/         已采集的测试证据
 ```
 
-这是一棵同时装产品和开发验证的树。你只需要上面那几族；`开发与验证` 那几族是开发与台架用的，
-可以不看——**但 `tests/` 别删**，第 2 节的 `ctest` 要用它。台架脚本与证据的用法见[测试方案](docs/test-plan.md)。
+`开发与验证` 那几族是开发与台架用的，可以不看；**但 `tests/` 别删**，安装一节的 `ctest` 要用它。台架脚本与证据的用法见[测试方案](docs/test-plan.md)。
 
-## 2 系统要求与构建
+## 文档
+
+| 文件 | 内容 |
+| --- | --- |
+| `README.md` | 本文件：交付内容、安装、用法、命令表 |
+| [`docs/architecture.md`](docs/architecture.md) | 实现说明：架构、周期、两层状态、报告、DC 与同步 |
+| [`docs/protocol/command-protocol-v1.md`](docs/protocol/command-protocol-v1.md) | 三个套接字的协议：命令文法、响应文法、设点记录格式 |
+| [`docs/protocol/target-channel-contract.md`](docs/protocol/target-channel-contract.md) | 目标通道的行为契约：谁给、一次多少、多快、断供怎么办、允许哪些模式、零点在哪 |
+| [`docs/test-plan.md`](docs/test-plan.md) | 测试条件、判据、已采集的证据、未决项 |
+| [`docs/time-and-space.txt`](docs/time-and-space.txt) | 对象、空间、时间与读写的运行期资料 |
+| [`docs/product/twincat-function-gap.md`](docs/product/twincat-function-gap.md) | 功能对标：本主站在哪一层、与 TwinCAT 逐层比什么、明确不做什么 |
+| `esi/README.md` | 设备描述放哪、从哪来 |
+| `config/README.md` | 配置各族逐个字段的语义 |
+| `tools/gen/device/README.md` | 设备上手工具的边界 |
+| `CONTRIBUTING.md` | 构建、测试与提交要求 |
+
+## 安装
 
 主站只支持 Linux。Windows 可以运行 Python 工具、图形界面和离线单元测试。
 
@@ -86,9 +79,7 @@
 
 `ulimit -r` 必须是 `unlimited`，否则主站拿不到实时优先级。
 
-**构建依赖**：CMake ≥ 3.28、Python ≥ 3.10、C11 编译器。预设需要 Ninja。图形界面另需 PyQt5。`nc -U` 示例需要支持 Unix socket 的 netcat。
-
-SOEM 的源码在 `external/SOEM` 里，随交付树一起给你。**构建不需要联网。**
+**构建依赖**：CMake ≥ 3.28、Python ≥ 3.10、C11 编译器。预设需要 Ninja。图形界面另需 PyQt5。SOEM 的源码在 `external/SOEM` 里，随交付树一起给你。**构建不需要联网。**
 
 在仓库根目录执行：
 
@@ -113,9 +104,11 @@ ctest --test-dir build-offline --output-on-failure
 
 **离线通过不能替代真实总线和运动验证。**
 
-## 3 快速上手：从 ESI 到主站跑起来
+## 用法
 
-前提：第 2 节构建完成。每条命令都在仓库根目录执行。
+### 从 ESI 到主站跑起来
+
+前提：安装一节构建完成。每条命令都在仓库根目录执行。
 
 ```bash
 # 1 放入 ESI。一台型号一个目录，目录名随意
@@ -148,15 +141,11 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
   ./build/apps/master/emaster-master --config-dir config-runtime'
 ```
 
-每一步都会打印它下一步该跑的命令，照抄即可。设备档 ID 由第 2 步打印。
+每一步都会打印它下一步该跑的命令；设备档 ID 由第 2 步打印。
 
-**第 3、6 步要人给值。** 第 3 步按第 2 步打印的待确认清单逐条处理。第 6 步的换算与限幅
-推不出来，只能自己填；第 5 步的输出会写明部署上挂没挂运动方案。
-
-**不挂运动方案也能起主站。** 挂上才跑内置固定轨迹。要让应用自己给位置目标，就不挂，
-改用命令接口的 `set_external_target`（见第 5 节，提交的是原始位置计数，不是角度）。
-
-**第 4 步只在主站没在跑的时候做。** `emaster-scan` 会驱动总线并把从站还原到 INIT；主站在跑时执行会打断它。
+- **第 3、6 步要人给值。** 第 3 步按第 2 步打印的待确认清单逐条处理。第 6 步的换算与限幅推不出来，只能自己填。
+- **不挂运动方案也能起主站。** 挂上才跑内置固定轨迹。要让应用自己给位置目标，就不挂，改用命令接口的 `set_external_target`（提交的是原始位置计数，不是角度）。
+- **第 4 步只在主站没在跑的时候做。** `emaster-scan` 会驱动总线并把从站还原到 INIT；主站在跑时执行会打断它。
 
 各步的产出与失败点：
 
@@ -168,7 +157,7 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
 | 6 | 部署里的 `motion_profile_id` | 报"没有 config/motion_profiles/<ID>.json，部署挂不到它上面"。这份方案得先写出来 |
 | 7 | `config-runtime/*.flat` | 校验失败会逐个指名字段。告警"运动方案 <ID> 没有被任何部署引用"表示它不会生效，照告警里那条命令挂上 |
 
-`init-site` 的 `assign_activate` 取自 ESI，不猜。填错会把从站的同步生成配成另一套，主机这边只看到 DC 对不上。
+`init-site` 的 `assign_activate` 取自 ESI，不猜。
 
 第 2、5、6、7 步可以重复执行：
 
@@ -179,7 +168,7 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
 
 轴数来自部署档，硬件换算在主站启动时读回，恢复阈值来自错误恢复策略。
 
-## 4 运行与停止
+### 运行与停止
 
 ```bash
 cd /path/to/ethercat-master
@@ -189,7 +178,7 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
 
 `--deployment` 接收部署 JSON 里的 `deployment_id`，不是文件名。也可以直接给 `--config-dir config-runtime`，它是默认值。
 
-**`EMASTER_OBSERVATION=1` 不是可选项。** 不开的话观测口不建，报告里温度、母线电压、电流那几栏恒为 `—`，事后无法回答"那一刻电压是多少"。
+**`EMASTER_OBSERVATION=1` 不是可选项。** 不开的话观测口不建，报告里温度、母线电压、电流那几栏恒为 `—`。
 
 **确认主站起来了。** 不要只看进程在。
 
@@ -206,57 +195,62 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
 # OK|axes=<轴数>,max_offset=<目标偏移上限计数>|a1:bus=<轴号>,enc=<增量数>/<电机转数>,gear=<M>/<S>,torque=0|a2:...
 ```
 
-`torque` 是保留字段，恒为 `0`。额定力矩在设备描述和配置里都没有数据源，所以不填猜测值。
+`torque` 是保留字段，恒为 `0`。额定力矩在设备描述和配置里都没有数据源，不填猜测值。
 
-**停止：Ctrl+C。** 主站注册了 SIGINT 和 SIGTERM，两者走**和命令口 `shutdown` 完全相同**的安全停机路径：安全输出 → 停用各轴 → 回 INIT。它不是掐断。
+**停止：Ctrl+C。** 主站注册了 SIGINT 和 SIGTERM，两者走**和命令口 `shutdown` 完全相同**的安全停机路径：安全输出 → 停用各轴 → 回 INIT。
 
 换部署前先经命令口发 `shutdown`，或向核实过的主站 PID 发 SIGTERM，等它退出并检查逐轴停用证据。**不要把 SIGKILL 当正常停机。**
 
 网口、实时核、优先级和报告路径由部署决定。换主机时必须核对部署档。
 
-## 5 命令接口
+### 配置模型
 
-命令口是 AF_UNIX 流套接字，路径 `/tmp/emaster-<部署ID>.sock`。它按行分帧：命令以换行符结尾，主站把读进来的字节攒着按行切。一次发送可以带多条命令，一条命令也可以分几次发送——两种都按条处理，每条回一行。没有换行符的字节一直攒着，攒满 511 字节还没有换行就整块丢弃并打一条警告。
+配置分三层：**设备描述 → 出厂设计 → 现场**。交付时 `esi/` 和 `config/` 下的六族都是空的。
 
-**权限警告：`src/bus/io/command_server.c` 对套接字执行 `chmod 0666`，而且没有应用层认证。任何本机用户都能下发运动和停机命令。** 跨机桥 `tools/socket_bridge.py` 同样没有认证。只能在可信、隔离网络、单用户测试环境使用。
+| 目录 | 谁写 | 内容 |
+| --- | --- | --- |
+| `esi/<你的型号>/` | 你放进去 | 厂商的 ESI 原文件（XML）。设备档的权威来源 |
+| `device_policies/` | `add-device` 出草稿，人改 | 人写的那一半：停机掩码、PDO 组选择、支持的模式集合 |
+| `devices/` | `add-device` 合成 | 设备档：身份、PDO 映射、`slow_telemetry` 清单、状态字掩码 |
+| `topologies/` | `init-site` | 拓扑：环上有哪些从站、顺序、每台的身份期望与位置 |
+| `operation_profiles/` | `init-site` | 运行方案：周期、DC 策略（`dc`/`sm`）、SM2/SM3 同步类型、相位与偏移 |
+| `motion_profiles/` | 你写 | 运动方案：跟随误差限幅、轨迹、每轴的换算 |
+| `deployments/` | `init-site` | 部署：主机名、网口、轴数、引用哪套拓扑／运行方案／运动方案、报告路径 |
+| `error_recovery_policies/` | 随产品交付 | 容错阈值。与电机无关 |
+| `messages/zh_CN.json` | 随产品交付 | 中文文案 |
 
-| 命令 | 用途与约束 |
-| --- | --- |
-| `status` | 查询主站及逐轴状态。主站 `state=4` 和 AL SAFE-OP 的数值 4 属于不同枚举 |
-| `topology` | 查询实际轴集合、位置换算和轴顺序。发送目标前先查询 |
-| `dc` | 查询同步信息 |
-| `set_external_target <p1> <p2> ...` | 按拓扑顺序提交**全轴**绝对原始位置计数。不是角度，不接受部分轴集合 |
-| `switch <motion_profile_id>` | 切换运动方案。它不等于切换 CSP/CSV/CST 控制模式 |
-| `stop` | 当前实现与 `shutdown` 一样请求会话有序退出。它不只是暂停轨迹，也不代表断电 |
-| `shutdown` | 请求完整停机并退出 |
-| `quick_stop`、`halt <参数>`、`fault_reset` | 解析器已有入口。入口存在不代表相关安全功能已经验收 |
-| `recover_axis <轴号>` | 恢复一台处于故障隔离的轴。解析入口是后补上的，**未经台架验证** |
+**换一款电机要动的只有前七行**，那是跑命令，不是改代码。
 
-发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
+每族字段的完整语义见 `config/README.md`；设备上手工具的边界见 `tools/gen/device/README.md`。
 
-外部目标超时由 `external_target_timeout_ms` 指定，默认 200 ms。客户端 100 Hz 的目标更新率与主站 1 kHz 的 PDO 交换率不同。断连、目标暂停、重连必须分别测试。**不能假定自动恢复运动。**
+**换电机、换拓扑、换部署都不需要重编主站。** 六族的条目全部在运行期从 `config-runtime/` 的扁平文件读。改 `error_recovery_policies/` 才需要重编，那一族是编译期静态表。
 
-**设点通道（可选，默认关）**
+只改 JSON 而运行旧二进制，不能保证生效。任何配置改动都要重跑 `build` 并重启主站。
 
-外部控制器高频送目标可以走第三个套接字：`/tmp/emaster-<部署ID>-sp.sock`，AF_UNIX 加 `SOCK_SEQPACKET`，**只写不回**。要 `EMASTER_SETPOINT=1` 才建。
+### 单位与换算
 
-它和 `set_external_target` 写的是同一个目标汇点：覆盖式最新值，两条入口不各有各的语义。位置是原始计数，与观测通道同口径。
+换算由每轴主站启动时读回的编码器分辨率和齿轮比确定。该从站不实现 `608F`/`6091` 时，由设备档 `conversion` 里声明的同一组值接手；两者都没有、或换算出不来，该轴不参与运动。报告与终端都写明这一份换算来自"设备读回"还是"设备档声明"。**不能把某个拓扑的比例用于全部设备。** `topology` 命令返回运行时换算。
 
-- 客户端连上就发，主站连上就收，**没有就绪握手**。挡住"连上之前发了一个离谱的值"的是目标判据，它从第一拍起就生效。先等 `status` 报 `state=4` 再起发送端。
-- **只有 `mode` 与 `q` 进输出路径。** 其余四个量（`dq`、`tau`、`kp`、`kd`）会解码、校验、计数，但今天不用。
-- 记录格式与四种拒收原因见[接口协议](docs/protocol/command-protocol-v1.md)。拒收是局部的：只丢这一条，会话继续，`status` 的 `rejected=` 加一。
-- 发送端参考实现是 `tools/setpoint_send.py`，它的 `--dry-run` 不连主站，只打印会发出去的记录。**这条通道同样没有认证。** `tools/socket_bridge.py` 不转发设点口。
+```text
+电机每转计数 = encoder_increments / encoder_motor_revolutions
+输出轴每转计数 = 电机每转计数 × gear_motor_revolutions / gear_shaft_revolutions
+相对位移计数 = 输出轴角度 / 360 × 输出轴每转计数
+绝对位置目标 = 确认的起点位置计数 + 相对位移计数
+```
 
-**两层状态不能混。**
+例：编码器 4096 counts/电机转、齿轮比 10:1，对应 40960 counts/输出轴转，约 113.78 counts/度。
 
-- **不能用 AL 状态推断驱动器使不使能。** 两个都要读。
-- **不能用过程数据去送"停止周期通道"的命令。** 从站掉出 OP 后控制字到不了它。**禁用必须走邮箱。**
-- AL 在 INIT 时读不到 `0x6041`，因为邮箱关闭了。这时只能说"读不到"。
-- `0x0134` 只在 `0x0130` 的 bit4（Error Indicator）置起时才有意义。
+还须核对正方向、机械零点和整数舍入。**原始位置零点不是自动校准出的机械零点。**
 
-机制与完整论证见[实现说明](docs/architecture.md)第 6 节。
+主站不限制目标之间的增量，也不限制速度。步长和速度由客户端决定。
 
-## 6 观测与界面
+**主站只留一条判据：`|目标 - 当前实际位置|` 超过上限就拒收这一条**，且只对位置轴生效。上限由部署的 `external_target_max_offset_millidegrees` 决定，默认 90°；取值看 `topology` 回报的 `max_offset`（各轴的最小值）。**拒收不中止会话**：该条目标不采纳，上一目标继续保持，其余轴照常跑。轴号与偏移量写进报告与 `status`。
+
+超过 `external_target_timeout_ms` 没收到新目标时：位置轴返回 `HOLD`，保留最后目标；速度与力矩轴把目标写 0。写什么由运行方案为模式声明的量（`quantity`）决定，不按模式号。它不等于驱动器失能。谁给目标、多快给、断供怎么办、允许哪些模式、零点在哪，见[目标通道契约](docs/protocol/target-channel-contract.md)。
+
+算法见 `src/motion/position_target.c`，SDO 读回与配置见 `src/bus/session/session_setup.c`。
+
+### 观测与界面
 
 观测口是独立的只读 unix 套接字 `/tmp/emaster-<部署ID>-obs.sock`。**它要 `EMASTER_OBSERVATION=1` 才存在。**
 
@@ -283,7 +277,7 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
        target_position_readback=3895 count, max_torque=1000, max_motor_speed=841045  (读取次数=221)
 ```
 
-读哪些对象由设备档的 `slow_telemetry` 决定。加了 `EMASTER_OBSERVER_VERBOSE` 还会打出每条读数的对象地址与工作计数器。
+读哪些对象由设备档的 `slow_telemetry` 决定。
 
 **跨机图形界面**
 
@@ -315,83 +309,7 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 
 `--range` 是自助软范围（默认 45°），`--jog-speed` 是点动速度（默认 10 °/s），`--start` 表示套接字不在时替你拉起主站。终端面板与图形界面共用同一份控制律。
 
-## 7 配置模型
-
-配置分三层：**设备描述 → 出厂设计 → 现场**。交付时 `esi/` 和 `config/` 下的六族都是空的。
-
-| 目录 | 谁写 | 内容 |
-| --- | --- | --- |
-| `esi/<你的型号>/` | 你放进去 | 厂商的 ESI 原文件（XML）。设备档的权威来源 |
-| `device_policies/` | `add-device` 出草稿，人改 | 人写的那一半：停机掩码、PDO 组选择、支持的模式集合 |
-| `devices/` | `add-device` 合成 | 设备档：身份、PDO 映射、`slow_telemetry` 清单、状态字掩码 |
-| `topologies/` | `init-site` | 拓扑：环上有哪些从站、顺序、每台的身份期望与位置 |
-| `operation_profiles/` | `init-site` | 运行方案：周期、DC 策略（`dc`/`sm`）、SM2/SM3 同步类型、相位与偏移 |
-| `motion_profiles/` | 你写 | 运动方案：跟随误差限幅、轨迹、每轴的换算 |
-| `deployments/` | `init-site` | 部署：主机名、网口、轴数、引用哪套拓扑／运行方案／运动方案、报告路径 |
-| `error_recovery_policies/` | 随产品交付 | 容错阈值。与电机无关 |
-| `messages/zh_CN.json` | 随产品交付 | 中文文案 |
-
-**换一款电机要动的只有前七行。** 那是跑命令，不是改代码。命令见第 3 节。
-
-每族字段的完整语义见 `config/README.md`。设备上手工具的边界见 `tools/gen/device/README.md`。
-
-**换电机、换拓扑、换部署都不需要重编主站。** 六族的条目全部在运行期从 `config-runtime/` 的扁平文件读，生成的 C 与配置内容无关。改 `error_recovery_policies/` 才需要重编，那一族是编译期静态表。
-
-只改 JSON 而运行旧二进制，不能保证生效。任何配置改动都要重跑 `build` 并重启主站。
-
-`--deployment` 接收 JSON 里的 `deployment_id`，不是文件名。
-
-## 8 工具清单
-
-都在 `build/apps/<目录>/` 下。
-
-| 工具 | 说明 |
-| --- | --- |
-| `emaster-master` | 主站 |
-| `emaster-scan` | 只读扫描：逐台身份、AL 状态、`0x6041`、故障码、换算。第 3 节第 4 步用它 |
-| `emaster-disable` | **走邮箱把驱动器失能**。主站起不来时也能用 |
-| `emaster-status` | 只读查询命令口一次：`status`。`--watch <毫秒>` 周期刷新 |
-| `emaster-watch [间隔ms] --deployment <ID>` | 实时监控位置／速度／力矩／状态字 |
-| `emaster-move-deg --deployment <ID>` | 交互式角度控制，自动换算 |
-| `emaster-move --deployment <ID>` | 交互式脉冲控制，底层接口 |
-| `emaster-fingerprint` | 硬件指纹。最高只到 PRE-OP |
-| `emaster-dc-prepare` | PRE-OP DC 准备。不改状态 |
-| `emaster-target-probe` | 目标源探针 |
-
-**每个工具都认 `--help` 与 `--version`。** 两者都打到 stdout，都以 0 退出。不带参数时出帮助并退出 0。
-
-以下工具的默认流程不是帮助，而是一个真实动作，所以不带参数时不打印帮助：`emaster-master` 和 `emaster-target-probe` 按当前主机名匹配部署并起会话／跑探针；`emaster-status`、`emaster-watch`、`emaster-move`、`emaster-move-deg` 连默认部署的命令口。
-
-`tools/` 下是 Python 工具：`emaster_client.py`（命令口客户端）、`interactive_control.py`、`emaster_console.py`（终端面板引擎）、`emaster_gui/`（图形界面）、`observation_client.py`（观测口）、`closed_loop_client.py`（闭环样板：观测→策略→命令）、`setpoint_send.py`（设点口发送端）、`socket_bridge.py`（跨机桥）。另四个是它们共用的支撑与自测：`emaster_endpoint.py`（主站端点）、`rt_affinity.py`（躲开实时核）、`gui_evidence.py`（判界面自检日志）、`test_client_reconnect.py`（重连逻辑的离线自测）。
-
-**`emaster-scan` 会把驱动器拉出 OP 再恢复**，因为它要发 INIT→PRE-OP 请求。**运行中不要用它。**
-
-**`emaster-disable` 会让电机立刻失去力矩保持。** 带重力负载、或抱闸未抱时不要跑。
-
-## 9 单位与换算
-
-换算由每轴主站启动时读回的编码器分辨率和齿轮比确定。**不能把某个拓扑的比例用于全部设备。** `topology` 命令返回运行时换算。
-
-```text
-电机每转计数 = encoder_increments / encoder_motor_revolutions
-输出轴每转计数 = 电机每转计数 × gear_motor_revolutions / gear_shaft_revolutions
-相对位移计数 = 输出轴角度 / 360 × 输出轴每转计数
-绝对位置目标 = 确认的起点位置计数 + 相对位移计数
-```
-
-例：编码器 4096 counts/电机转、齿轮比 10:1，对应 40960 counts/输出轴转，约 113.78 counts/度。换一组数，结果就不同。
-
-还须核对正方向、机械零点和整数舍入。**原始位置零点不是自动校准出的机械零点。**
-
-主站不限制目标之间的增量，也不限制速度。步长和速度由客户端决定，取值看客户端自己的规划。
-
-**主站只留一条判据：`|目标 - 当前实际位置|` 超过上限就拒收这一条。** 上限由部署的 `external_target_max_offset_millidegrees` 决定，默认 90°；取值看 `topology` 回报的 `max_offset`（各轴的最小值）。**拒收不中止会话**：该条目标不采纳，上一目标继续保持，其余轴照常跑。轴号与偏移量写进报告与 `status`。
-
-超过 `external_target_timeout_ms` 没收到新目标时，CSP 入口回调返回 `HOLD`，保留最后目标。它不等于驱动器失能。
-
-算法见 `src/motion/position_target.c`，SDO 读回与配置见 `src/bus/session/session_setup.c`。
-
-## 10 故障排查
+### 故障排查
 
 | 现象 | 先查什么 |
 | --- | --- |
@@ -429,7 +347,78 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | 链路 | 联合工作计数器、网卡计数、ESC 错误计数及读取有效性。零计数不能排除调度延迟或未采集事件 |
 | 同步 | 比较 DC 与 freerun 行为，并按[实现说明](docs/architecture.md)第 10 节的测量边界解释 Sync0。软件估计不能替代锁存测量 |
 
-## 11 安全边界
+## 命令表
+
+### 命令口
+
+命令口是 AF_UNIX 流套接字，路径 `/tmp/emaster-<部署ID>.sock`。它按行分帧：命令以换行符结尾，主站把读进来的字节攒着按行切。一次发送可以带多条命令，一条命令也可以分几次发送——两种都按条处理，每条回一行。没有换行符的字节一直攒着，攒满 511 字节还没有换行就整块丢弃并打一条警告。
+
+**权限警告：`src/bus/io/command_server.c` 对套接字执行 `chmod 0666`，而且没有应用层认证。任何本机用户都能下发运动和停机命令。** 跨机桥 `tools/socket_bridge.py` 同样没有认证。只能在可信、隔离网络、单用户测试环境使用。
+
+| 命令 | 用途与约束 |
+| --- | --- |
+| `status` | 查询主站及逐轴状态。主站 `state=4` 和 AL SAFE-OP 的数值 4 属于不同枚举 |
+| `topology` | 查询实际轴集合、位置换算和轴顺序。发送目标前先查询 |
+| `dc` | 查询同步信息 |
+| `set_external_target <p1> <p2> ...` | 按拓扑顺序提交**全轴**绝对原始位置计数。不是角度，不接受部分轴集合 |
+| `switch <motion_profile_id>` | 切换运动方案。它不等于切换 CSP/CSV/CST 控制模式 |
+| `stop` | 当前实现与 `shutdown` 一样请求会话有序退出。它不只是暂停轨迹，也不代表断电 |
+| `shutdown` | 请求完整停机并退出 |
+| `quick_stop`、`halt <参数>`、`fault_reset` | 解析器已有入口。入口存在不代表相关安全功能已经验收 |
+| `recover_axis <轴号>` | 恢复一台处于故障隔离的轴。解析入口是后补上的，**未经台架验证** |
+
+发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
+
+外部目标超时由 `external_target_timeout_ms` 指定，默认 200 ms。客户端 100 Hz 的目标更新率与主站 1 kHz 的 PDO 交换率不同。断连、目标暂停、重连必须分别测试。**不能假定自动恢复运动。**
+
+**设点通道（可选，默认关）**
+
+外部控制器高频送目标可以走第三个套接字：`/tmp/emaster-<部署ID>-sp.sock`，AF_UNIX 加 `SOCK_SEQPACKET`，**只写不回**。要 `EMASTER_SETPOINT=1` 才建。
+
+它和 `set_external_target` 写的是同一个目标汇点：覆盖式最新值。位置是原始计数，与观测通道同口径。
+
+- 客户端连上就发，主站连上就收，**没有就绪握手**。挡住"连上之前发了一个离谱的值"的是目标判据，它从第一拍起就生效。先等 `status` 报 `state=4` 再起发送端。
+- **只有 `mode` 与 `q` 进输出路径。** 其余四个量（`dq`、`tau`、`kp`、`kd`）会解码、校验、计数，但今天不用。
+- 记录格式与四种拒收原因见[接口协议](docs/protocol/command-protocol-v1.md)。拒收是局部的：只丢这一条，会话继续，`status` 的 `rejected=` 加一。
+- 发送端参考实现是 `tools/setpoint_send.py`，它的 `--dry-run` 不连主站，只打印会发出去的记录。**这条通道同样没有认证。** `tools/socket_bridge.py` 不转发设点口。
+
+**两层状态不能混。**
+
+- **不能用 AL 状态推断驱动器使不使能。** 两个都要读。
+- **不能用过程数据去送"停止周期通道"的命令。** 从站掉出 OP 后控制字到不了它。**禁用必须走邮箱。**
+- AL 在 INIT 时读不到 `0x6041`，因为邮箱关闭了。这时只能说"读不到"。
+- `0x0134` 只在 `0x0130` 的 bit4（Error Indicator）置起时才有意义。
+
+机制与完整论证见[实现说明](docs/architecture.md)第 6 节。
+
+### 工具
+
+都在 `build/apps/<目录>/` 下。
+
+| 工具 | 说明 |
+| --- | --- |
+| `emaster-master` | 主站 |
+| `emaster-scan` | 只读扫描：逐台身份、AL 状态、`0x6041`、故障码、换算。用法一节第 4 步用它 |
+| `emaster-disable` | **走邮箱把驱动器失能**。主站起不来时也能用 |
+| `emaster-status` | 只读查询命令口一次：`status`。`--watch <毫秒>` 周期刷新 |
+| `emaster-watch [间隔ms] --deployment <ID>` | 实时监控位置／速度／力矩／状态字 |
+| `emaster-move-deg --deployment <ID>` | 交互式角度控制，自动换算 |
+| `emaster-move --deployment <ID>` | 交互式脉冲控制，底层接口 |
+| `emaster-fingerprint` | 硬件指纹。最高只到 PRE-OP |
+| `emaster-dc-prepare` | PRE-OP DC 准备。不改状态 |
+| `emaster-target-probe` | 目标源探针 |
+
+**每个工具都认 `--help` 与 `--version`。** 两者都打到 stdout，都以 0 退出。不带参数时出帮助并退出 0。
+
+以下工具的默认流程不是帮助，而是一个真实动作，所以不带参数时不打印帮助：`emaster-master` 和 `emaster-target-probe` 按当前主机名匹配部署并起会话／跑探针；`emaster-status`、`emaster-watch`、`emaster-move`、`emaster-move-deg` 连默认部署的命令口。
+
+`tools/` 下是 Python 工具：`emaster_client.py`（命令口客户端）、`interactive_control.py`、`emaster_console.py`（终端面板引擎）、`emaster_gui/`（图形界面）、`observation_client.py`（观测口）、`closed_loop_client.py`（闭环样板：观测→策略→命令）、`setpoint_send.py`（设点口发送端）、`socket_bridge.py`（跨机桥）。另四个是它们共用的支撑与自测：`emaster_endpoint.py`（主站端点）、`rt_affinity.py`（躲开实时核）、`gui_evidence.py`（判界面自检日志）、`test_client_reconnect.py`（重连逻辑的离线自测）。
+
+**`emaster-scan` 会把驱动器拉出 OP 再恢复**，因为它要发 INIT→PRE-OP 请求。**运行中不要用它。**
+
+**`emaster-disable` 会让电机立刻失去力矩保持。** 带重力负载、或抱闸未抱时不要跑。
+
+## 安全边界
 
 **本软件不是经过认证的功能安全系统。** 电气 STO、急停、机械约束、断电措施和安全测试区域仍是外部强制要求。
 
@@ -439,20 +428,9 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 - 停止和失败路径按状态反馈**逐级撤销使能**，并以设备配置中的 `6041` 掩码和值确认停用，随后关闭 Sync0 并恢复 INIT。设备档没填掩码时只有标准 CiA 402 判据可用；两条判据都没命中时，报告把**轴已离开运行使能**记成"未确认"，**仍有轴在运行使能**记成失败，两者不合并。
 - **获得 PRE-OP 指纹运行许可，不代表获得 SAFE-OP、OP、CiA 402 使能或运动授权。** 每个更高的边界都需要独立流程和批准。
 
-实现与使用约束：
-
-- 任何过程数据交换开始前，启动输出必须完全初始化。
-- **硬件使能是生命周期状态，不能是编译开关。**
-- 网络进入更高状态前，拓扑和身份必须匹配。
-- 当前外部命令没有发送序号和失效时间。
-- 通信丢失、命令过期、反馈无效和进程退出都必须有明确停机反应。
-- 恢复过程必须有界、可记录，且**不能静默复位驱动器故障**。
-- 单轴和整机停机策略必须明确且可测试。
-- 报告文件在周期外写入。周期内仍有有预算的寄存器诊断和命令处理，须计入实时验证。
-
 **每份硬件测试记录必须说明**：操作者、观察者、物理装置、功率限制、机械约束、STO/急停验证、网络接口、软件版本、配置哈希、ESI 哈希和全部从站序列号。
 
-## 12 已知限制
+## 已知限制
 
 下表是当前代码可直接确认的限制。它们属于使用边界。
 
@@ -460,42 +438,27 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | --- | --- |
 | 命令口权限过宽 | `src/bus/io/command_server.c` 将套接字 `chmod 0666`，无认证。本机任意用户都能控制运动、故障复位或停机 |
 | 命令口超长行整块丢弃 | `command_server.c` 攒到 511 字节还没有换行时丢掉整块并打一条警告。丢弃的是那一行，连接不断——但是这一行里的命令不会被执行 |
-| 外部目标超时不构成安全停机 | `main.c` 在超时后让 CSP 保持上个位置。若产品要求断连后撤使能或受控减速，现行为不满足需求 |
-| 换算未读回的轴不做目标判据 | `session_setup.c` 只在 `position_scale.read_succeeded` 为真时折算该轴的偏移上限。读不回换算的轴照常跑，只是不判；报告里 `offset_limit_checked=false` 如实标出 |
+| 断连后保持位置（已定的产品行为） | 目标超过 `external_target_timeout_ms`（默认 200 ms）没更新时，CSP 保持最后目标：不是撤使能，也不是受控减速。若将来要求"通信丢失即停机"，那是行为变更，不是缺陷修复。见[目标通道契约](docs/protocol/target-channel-contract.md)第 4 节 |
+| 偏移上限折算不出来的轴不做目标判据 | 换算不可用的轴根本不让跑（会话判 `MOTION_INVALID`）。但换算可用、而上限折算结果为零（部署把 `external_target_max_offset_millidegrees` 配得过小）或溢出的轴会跑且不判；报告里 `offset_limit_checked=false` 如实标出 |
 | 同型号从站不能唯一确定物理轴 | `topology_mapper.c` 按 vendor/product/revision 选择首个未分配的匹配项，没有序列号或物理标签参与映射。**环序不等于物理关节标签** |
 | DC/Sync0 可靠性是模型估计 | `sync0_margin_ns` 使用参考 DC 时间、启动期 `pdelay` 和配置的 Sync0 相位，没有直接采集 Sync0 边沿或 SM2 完成时间。非负裕量不能证明目标已在正确的 Sync0 前由每个驱动器锁存 |
-| 目标判据不是速度限制 | `session_target.c` 只查 `|目标 - 实际位置|`。客户端连发两条各自合法的目标，两条之间的速度可以任意大，主站不看这个 |
-| 模式之间的超时语义不统一 | `main.c` 仅按第一轴是否 CST 选择归零策略，其余模式走保持目标分支。CSV 若继续保持非零速度目标，不能据 CSP 的"保持位置"说明判定已停止 |
+| 目标判据不是速度限制 | `session_target.c` 只查 `|目标 - 实际位置|`，且只对位置轴查。客户端连发两条各自合法的目标，两条之间的速度可以任意大，主站不看这个 |
+| 断供写 0 不等于受控停止 | 速度与力矩模式超时后主站写 0，但减速由驱动器自己的斜坡完成，主站不等它停；力矩模式下 0 力矩就是轴松开。谁写什么由运行方案声明的量（`quantity`）决定，见[目标通道契约](docs/protocol/target-channel-contract.md)第 4 节 |
 
 **不作为当前已支持能力承诺**：热插拔、动态轴数、多主站协同、功能安全。
 
 代码内部的风险不在本表，见[实现说明](docs/architecture.md)第 14 节。
 
-## 13 架构概述
+## 贡献
 
-主站按绝对截止点周期运行。配置层表达期望，从站扫描结果表达现场事实。
+见 `CONTRIBUTING.md`。
 
-```text
-config/*.json
-  └─ tools/gen/ 生成 config-runtime/*.flat
-       └─ emaster-master 读扁平文件 → 查 deployment_id → 构造会话计划
-            └─ SOEM 扫描从站 → 校验身份、拓扑、PDO 与能力
-                 └─ PRE-OP：读身份、换算、初始 CiA 402；选 PDO、写启动 SDO、配 DC
-                      └─ SAFE-OP：建立过程映像，读回实际位置并初始化目标
-                           └─ OP：确认全轴运行模式和使能 → 开始 1 ms 周期控制
-                                └─ 停机：撤使能 → 关 Sync0 → 诊断 → 回 INIT → 发布报告
-```
+## 许可
 
-目录按职责组织，CMake target 约束依赖方向。公共接口不暴露 SOEM 类型。设备、部署与方案由配置表达。
-
-周期线程按绝对截止点唤醒后立即发送，接收完成后再记录审计、计算相位修正、处理反馈并生成下一帧。期限已错过时退出正常控制，不补发历史帧。
-
-完整说明见[实现说明](docs/architecture.md)。
+见 `LICENSE`。
 
 ---
 
 ## 附：文档版本
 
-本文按仓库中的当前实现和实际函数调用说明行为。部署时应使用与源码匹配的构建产物。
-
-厂商资料的版本、限值和来源须与实际设备固件对应。仓库中的配置值本身不构成厂商保证。
+本文按仓库中的当前实现说明行为。部署时应使用与源码匹配的构建产物；配置值本身不构成厂商保证。
