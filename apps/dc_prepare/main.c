@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "emaster/bus/dc_prepare.h"
+#include "emaster/cli.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_cli.h"
 #include "emaster/config/runtime_config_load.h"
@@ -144,6 +145,17 @@ static const char *result_text(bool value)
                               : EMASTER_TEXT_DC_PREPARE_MISMATCH);
 }
 
+static void print_usage(FILE *out, const char *program, const char *command)
+{
+    fprintf(out, "用法：%s %s [--config-dir <目录>] [--deployment <部署ID>]\n",
+            program, command);
+    fprintf(out, "  无额外参数：自动匹配当前主机的部署配置\n");
+    fprintf(out, "  --config-dir：运行时配置目录，默认 config-runtime\n");
+    fprintf(out, "  --deployment：显式指定部署配置ID\n");
+    fprintf(out, "  --help：打印本说明后退出\n");
+    fprintf(out, "  --version：打印版本号后退出\n");
+}
+
 int main(int argc, char **argv)
 {
     const char *config_directory = emaster_cli_config_dir(&argc, argv);
@@ -158,10 +170,27 @@ int main(int argc, char **argv)
     size_t axis_index;
     const char *prepare_command = emaster_text(EMASTER_TEXT_COMMAND_PREPARE_DC);
 
+    /* 没有子命令就做不了任何事，所以无参数出帮助并退出 0。 */
+    if (argc < 2)
+    {
+        print_usage(stdout, argv[0], prepare_command);
+        return 0;
+    }
+    switch (emaster_cli_info(argc, argv))
+    {
+    case EMASTER_CLI_HELP:
+        print_usage(stdout, argv[0], prepare_command);
+        return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-dc-prepare");
+        return 0;
+    default:
+        break;
+    }
+
     if (config_directory == NULL)
     {
-        fprintf(stderr, "用法：%s %s [--config-dir <目录>] [--deployment <部署ID>]\n",
-                argv[0], prepare_command);
+        print_usage(stderr, argv[0], prepare_command);
         return 2;
     }
     if (!emaster_runtime_config_load(config_directory))
@@ -207,11 +236,7 @@ int main(int argc, char **argv)
     }
     else
     {
-        fprintf(stderr, "用法：%s %s [--config-dir <目录>] [--deployment <deployment-id>]\n",
-                argv[0], prepare_command);
-        fprintf(stderr, "  无额外参数：自动匹配当前主机的部署配置\n");
-        fprintf(stderr, "  --config-dir：运行时配置目录，默认 config-runtime\n");
-        fprintf(stderr, "  --deployment：显式指定部署配置ID\n");
+        print_usage(stderr, argv[0], prepare_command);
         return 2;
     }
 

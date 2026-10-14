@@ -16,6 +16,7 @@
 
 #include "emaster/audit/run_report.h"
 #include "emaster/bus/control_session.h"
+#include "emaster/cli.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_cli.h"
 #include "emaster/config/runtime_config_load.h"
@@ -419,6 +420,17 @@ static void print_probe_summary(const emaster_probe_ramp_t *ramp,
     }
 }
 
+static void print_usage(FILE *out, const char *program)
+{
+    fprintf(out, "用法：%s [--config-dir <目录>] [--deployment <部署ID>]\n", program);
+    fprintf(out, "  无参数：自动匹配当前主机的部署配置\n");
+    fprintf(out, "  --config-dir：运行时配置目录，默认 config-runtime\n");
+    fprintf(out, "  --deployment：显式指定部署配置ID\n");
+    fprintf(out, "  --help：打印本说明后退出\n");
+    fprintf(out, "  --version：打印版本号后退出\n");
+    fprintf(out, "注意：运行参数由部署配置决定，不接受参数覆盖\n");
+}
+
 int main(int argc, char **argv)
 {
     const char *config_directory = emaster_cli_config_dir(&argc, argv);
@@ -434,9 +446,21 @@ int main(int argc, char **argv)
     size_t axis_capacity;
     char resolved_report_path[EMASTER_REPORT_PATH_CAPACITY];
 
+    switch (emaster_cli_info(argc, argv))
+    {
+    case EMASTER_CLI_HELP:
+        print_usage(stdout, argv[0]);
+        return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-target-probe");
+        return 0;
+    default:
+        break;
+    }
+
     if (config_directory == NULL)
     {
-        fprintf(stderr, "用法：%s [--config-dir <目录>] [--deployment <部署ID>]\n", argv[0]);
+        print_usage(stderr, argv[0]);
         return 2;
     }
     if (!emaster_runtime_config_load(config_directory))
@@ -471,7 +495,7 @@ int main(int argc, char **argv)
     }
     else if (argc == 1)
     {
-        /* 无参数时自动匹配当前主机 */
+        /* 无参数时自动匹配当前主机。这是一个默认流程，所以不把无参数改成出帮助。 */
         deployment = deployment_for_current_host();
         if (deployment == NULL)
         {
@@ -481,11 +505,7 @@ int main(int argc, char **argv)
     }
     else
     {
-        fprintf(stderr, "用法：%s [--config-dir <目录>] [--deployment <deployment-id>]\n", argv[0]);
-        fprintf(stderr, "  无参数：自动匹配当前主机的部署配置\n");
-        fprintf(stderr, "  --config-dir：运行时配置目录，默认 config-runtime\n");
-        fprintf(stderr, "  --deployment：显式指定部署配置ID\n");
-        fprintf(stderr, "注意：运行参数由部署配置决定，不接受参数覆盖\n");
+        print_usage(stderr, argv[0]);
         return 2;
     }
 

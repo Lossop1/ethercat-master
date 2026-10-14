@@ -4,6 +4,7 @@
 #include "emaster/audit/run_report.h"
 #include "emaster/bus/command_socket_path.h"
 #include "emaster/bus/control_session.h"
+#include "emaster/cli.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_load.h"
 #include "emaster/messages.h"
@@ -381,6 +382,16 @@ static const emaster_deployment_config_t *deployment_for_current_host(void) {
     return NULL;
 }
 
+static void print_usage(FILE *out, const char *program)
+{
+    fprintf(out, "用法：%s [--config-dir <目录>] [--deployment <部署ID>]\n", program);
+    fprintf(out, "  --config-dir：运行时配置目录，默认 config-runtime\n");
+    fprintf(out, "  --deployment：显式指定部署配置ID；不给则按当前主机名匹配\n");
+    fprintf(out, "  --help：打印本说明后退出\n");
+    fprintf(out, "  --version：打印版本号后退出\n");
+    fprintf(out, "注意：运行参数由部署配置决定，不接受参数覆盖\n");
+}
+
 int main(int argc, char **argv) {
     const emaster_deployment_config_t *deployment;
     emaster_session_axis_plan_t *plan_axes;
@@ -395,6 +406,23 @@ int main(int argc, char **argv) {
     bool report_published;
     size_t axis_capacity;
     char resolved_report_path[EMASTER_REPORT_PATH_CAPACITY];
+
+    /*
+     * --help 与 --version 先处理，二者都不起会话。
+     *
+     * 不带参数是 master 的默认流程（按当前主机名匹配部署并起会话），所以这里不把
+     * "无参数出帮助"当默认 —— 那是标准里写明豁免的情形。
+     */
+    switch (emaster_cli_info(argc, argv)) {
+    case EMASTER_CLI_HELP:
+        print_usage(stdout, argv[0]);
+        return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-master");
+        return 0;
+    default:
+        break;
+    }
 
     /*
      * 解析命令行参数。
@@ -423,10 +451,7 @@ int main(int argc, char **argv) {
             }
         }
         if (bad_usage) {
-            fprintf(stderr, "用法：%s [--config-dir <目录>] [--deployment <部署ID>]\n", argv[0]);
-            fprintf(stderr, "  --config-dir：运行时配置目录，默认 config-runtime\n");
-            fprintf(stderr, "  --deployment：显式指定部署配置ID；不给则按当前主机名匹配\n");
-            fprintf(stderr, "注意：运行参数由部署配置决定，不接受参数覆盖\n");
+            print_usage(stderr, argv[0]);
             return 2;
         }
         if (!emaster_runtime_config_load(config_directory)) {

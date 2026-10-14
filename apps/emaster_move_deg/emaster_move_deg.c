@@ -18,6 +18,7 @@
 #include <errno.h>
 
 #include "emaster/bus/command_socket_path.h"
+#include "emaster/cli.h"
 
 /* 套接字路径由 --socket / --deployment / $EMASTER_DEPLOYMENT 决定，见
  * command_socket_path.h。这里不再写死某个部署，main 解析失败就直接退出。 */
@@ -167,18 +168,20 @@ static void print_header(const topology_t *topo)
     printf("═══════════════════════════════════════════════════════════════════════════════\n\n");
 }
 
-static void print_usage(const char *prog)
+static void print_usage(FILE *out, const char *prog)
 {
-    fprintf(stderr, "用法: sudo %s\n\n", prog);
-    fprintf(stderr, "说明:\n");
-    fprintf(stderr, "  - 启动后持续运行，可反复输入各轴目标角度\n");
-    fprintf(stderr, "  - 角度单位: 度 (°)，换算系数由主站拓扑自动查询\n");
-    fprintf(stderr, "  - 建议配合 'sudo emaster-watch' 实时监控运动过程\n");
-    fprintf(stderr, "  - 输入 q 或 quit 退出\n");
-    fprintf(stderr, "\n选项:\n");
-    fprintf(stderr, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+    fprintf(out, "用法: sudo %s\n\n", prog);
+    fprintf(out, "说明:\n");
+    fprintf(out, "  - 启动后持续运行，可反复输入各轴目标角度\n");
+    fprintf(out, "  - 角度单位: 度 (°)，换算系数由主站拓扑自动查询\n");
+    fprintf(out, "  - 建议配合 'sudo emaster-watch' 实时监控运动过程\n");
+    fprintf(out, "  - 输入 q 或 quit 退出\n");
+    fprintf(out, "\n选项:\n");
+    fprintf(out, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
             EMASTER_DEPLOYMENT_ENV);
-    fprintf(stderr, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+    fprintf(out, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+    fprintf(out, "  --help: 打印本说明后退出\n");
+    fprintf(out, "  --version: 打印版本号后退出\n");
 }
 
 int main(int argc, char **argv)
@@ -191,10 +194,19 @@ int main(int argc, char **argv)
     char response[RESPONSE_MAX];
     struct sigaction sa;
 
-    if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0))
+    /*
+     * 无参数会去连默认部署的命令套接字，是一个默认流程，所以不把无参数改成出帮助。
+     */
+    switch (emaster_cli_info(argc, argv))
     {
-        print_usage(argv[0]);
+    case EMASTER_CLI_HELP:
+        print_usage(stdout, argv[0]);
         return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-move-deg");
+        return 0;
+    default:
+        break;
     }
     if (!emaster_cli_resolve_socket(&argc, argv, g_socket_path, sizeof(g_socket_path)))
     {

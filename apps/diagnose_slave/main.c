@@ -24,6 +24,8 @@
  * 而且它只提供 context 版 API（ecx_*），没有 ec_init／ec_slave 那一套。 */
 #include "soem/soem.h"
 
+#include "emaster/cli.h"
+
 #include <net/if.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -83,21 +85,42 @@ static void format_u32(char *out, size_t size, bool read, uint32_t value)
     }
 }
 
+/* 用法里带上网卡清单：这是唯一一处能列出本机可用网卡的地方，出错时也要看得到。 */
+static void print_usage(FILE *out, const char *program)
+{
+    ec_adaptert *adapter = ec_find_adapters();
+
+    fprintf(out, "用法: %s <接口>\n", program);
+    fprintf(out, "  --help: 打印本说明后退出\n");
+    fprintf(out, "  --version: 打印版本号后退出\n");
+    fprintf(out, "\n可用的网络适配器:\n");
+    for (ec_adaptert *entry = adapter; entry != NULL; entry = entry->next)
+    {
+        fprintf(out, "  %s\t%s\n", entry->name, entry->desc);
+    }
+    ec_free_adapters(adapter);
+}
+
 int main(int argc, char *argv[])
 {
     ecx_contextt context;
 
+    switch (emaster_cli_info(argc, argv))
+    {
+    case EMASTER_CLI_HELP:
+        print_usage(stdout, argv[0]);
+        return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-scan");
+        return 0;
+    default:
+        break;
+    }
     if (argc < 2)
     {
-        ec_adaptert *adapter = ec_find_adapters();
-
-        fprintf(stderr, "用法: %s <接口>\n\n可用的网络适配器:\n", argv[0]);
-        for (ec_adaptert *entry = adapter; entry != NULL; entry = entry->next)
-        {
-            fprintf(stderr, "  %s\t%s\n", entry->name, entry->desc);
-        }
-        ec_free_adapters(adapter);
-        return 1;
+        /* 没有接口名就做不了任何事，所以无参数出帮助并退出 0。 */
+        print_usage(stdout, argv[0]);
+        return 0;
     }
 
     printf("interface=%s\n", argv[1]);

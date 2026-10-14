@@ -65,9 +65,9 @@ emaster_command_t emaster_console_parse_command(int argc, char **argv)
     return result;
 }
 
-void emaster_console_print_usage(const char *program)
+void emaster_console_print_usage(FILE *out, const char *program)
 {
-    fprintf(stderr, emaster_text(EMASTER_TEXT_USAGE), program,
+    fprintf(out, emaster_text(EMASTER_TEXT_USAGE), program,
             emaster_text(EMASTER_TEXT_COMMAND_INTERFACES), program,
             emaster_text(EMASTER_TEXT_COMMAND_DEPLOYMENTS), program,
             emaster_text(EMASTER_TEXT_COMMAND_CAPTURE));

@@ -20,6 +20,7 @@
 #include <time.h>
 
 #include "emaster/bus/command_socket_path.h"
+#include "emaster/cli.h"
 
 /* 套接字路径由 --socket / --deployment / $EMASTER_DEPLOYMENT 决定，见
  * command_socket_path.h。这里不再写死某个部署，main 解析失败就直接退出。 */
@@ -58,21 +59,23 @@ static void print_header(void)
     printf("═══════════════════════════════════════════════════════════════════════════════\n\n");
 }
 
-static void print_usage(const char *prog)
+static void print_usage(FILE *out, const char *prog)
 {
-    fprintf(stderr, "用法: sudo %s [刷新间隔ms] [选项]\n", prog);
-    fprintf(stderr, "示例: sudo %s 200 --deployment <你的部署ID>\n\n", prog);
-    fprintf(stderr, "说明:\n");
-    fprintf(stderr, "  - 位置单位: 脉冲 (pulse)\n");
-    fprintf(stderr, "  - 速度单位: 脉冲/秒 (pulse/s)\n");
-    fprintf(stderr, "  - 力矩单位: 千分之额定力矩 (‰)\n");
-    fprintf(stderr, "  - 跟随误差 = 实际位置 - PDO目标，反映驱动器响应情况\n");
-    fprintf(stderr, "  - 状态字 0x1237 = Operation Enabled (正常使能)\n");
-    fprintf(stderr, "  - 必须用 sudo 运行（socket 属主为 root）\n");
-    fprintf(stderr, "\n选项:\n");
-    fprintf(stderr, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+    fprintf(out, "用法: sudo %s [刷新间隔ms] [选项]\n", prog);
+    fprintf(out, "示例: sudo %s 200 --deployment <你的部署ID>\n\n", prog);
+    fprintf(out, "说明:\n");
+    fprintf(out, "  - 位置单位: 脉冲 (pulse)\n");
+    fprintf(out, "  - 速度单位: 脉冲/秒 (pulse/s)\n");
+    fprintf(out, "  - 力矩单位: 千分之额定力矩 (‰)\n");
+    fprintf(out, "  - 跟随误差 = 实际位置 - PDO目标，反映驱动器响应情况\n");
+    fprintf(out, "  - 状态字 0x1237 = Operation Enabled (正常使能)\n");
+    fprintf(out, "  - 必须用 sudo 运行（socket 属主为 root）\n");
+    fprintf(out, "\n选项:\n");
+    fprintf(out, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
             EMASTER_DEPLOYMENT_ENV);
-    fprintf(stderr, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+    fprintf(out, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+    fprintf(out, "  --help: 打印本说明后退出\n");
+    fprintf(out, "  --version: 打印版本号后退出\n");
 }
 
 /* 查询拓扑：解析 "axes=N|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|..." */
@@ -170,10 +173,19 @@ int main(int argc, char **argv)
     topology_t topo;
     size_t i;
 
-    if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0))
+    /*
+     * 无参数会去连默认部署的命令套接字，是一个默认流程，所以不把无参数改成出帮助。
+     */
+    switch (emaster_cli_info(argc, argv))
     {
-        print_usage(argv[0]);
+    case EMASTER_CLI_HELP:
+        print_usage(stdout, argv[0]);
         return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-watch");
+        return 0;
+    default:
+        break;
     }
     /* 先摘掉 --socket / --deployment，argv[1] 才是刷新间隔。 */
     if (!emaster_cli_resolve_socket(&argc, argv, g_socket_path, sizeof(g_socket_path)))

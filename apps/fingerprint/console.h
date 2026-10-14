@@ -43,7 +43,7 @@ typedef enum
 
 /* 命令词和参数个数只在展示边界解释；工程参数不从命令行进入。 */
 emaster_command_t emaster_console_parse_command(int argc, char **argv);
-void emaster_console_print_usage(const char *program);
+void emaster_console_print_usage(FILE *out, const char *program);
 
 void emaster_console_print_interface(const char *name, const char *description,
                                      void *user_data);

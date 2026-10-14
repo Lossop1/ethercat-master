@@ -20,13 +20,13 @@ jobs:
       # 配置一致性门槛。放在构建之前：跨层引用错误比编译失败更廉价，应当快速失败。
       # 悬空的 motion_profile_id 之类的错误不一定会让生成器报错，因此必须显式校验。
       - name: 校验配置
-        run: python3 gen/validate_project.py
+        run: python3 tools/gen/validate_project.py
 
       # P9.1 的防回退检查。SOEM 访问被多个线程共用，安全性靠 SOEM 自带的锁成立
       # （见 session_internal.h 顶部说明）。新出现一个调用点就是新出现一个潜在的
       # 共用方，必须由人确认后再登记。同样是纯文本检查，放在构建之前快速失败。
       - name: 校验 SOEM 调用点
-        run: bash checks/soem_call_sites.sh
+        run: bash tests/checks/soem_call_sites.sh
 
       # 又一条纯文本的结构检查，与上面那条同源。主线程在进 OP 前先把自己升成
       # SCHED_FIFO 并绑核，而 Linux 上 pthread_create 新建的线程会**继承**创建者
@@ -34,7 +34,7 @@ jobs:
       # 与周期线程同核同级。同核同优先级的 FIFO 之间不抢占，所以后果是周期被整段
       # 挡住，而表面上总线照通、帧距照对。新加一个线程却忘了那一句时，这条拦住它。
       - name: 主站线程调度（离线）
-        run: python3 checks/master_thread_sched_check.py
+        run: python3 tests/checks/master_thread_sched_check.py
 
       # 两条纯 Python 的离线检查，都不需要硬件、不需要 PyQt5，所以在 CI 上跑得动。
       # 它们钉住的是两件"出错了也不会喊"的事：界面自检日志的判定（上一轮台架监控
@@ -42,27 +42,27 @@ jobs:
       # 程序照样跑，只是每秒多重绑 122 次、日志刷到 657 KB）。
       # 放在构建之前：都是纯文本/纯 Python，几秒钟的事，应当快速失败。
       - name: 界面证据判定（离线）
-        run: python3 checks/gui_evidence_check.py
+        run: python3 tests/checks/gui_evidence_check.py
 
       - name: 绑核缓存（离线）
-        run: python3 checks/rt_affinity_check.py
+        run: python3 tests/checks/rt_affinity_check.py
 
       # 又是两条"写歪了不会喊"的检查。控制台的观测开关默认必须是关的：默认成开会
       # 让每个手动拉起的主站白付每拍一次的组帧代价，而屏幕上什么都不说。报告里
       # 慢速遥测那几个 0 更阴——"没读到"印成 0.0°C 长得就像"这一路很凉"，而它本来
       # 该印成「—」（P11.8）。
       - name: 控制台观测开关（离线）
-        run: bash checks/console_obs_switch_check.sh
+        run: bash tests/checks/console_obs_switch_check.sh
 
       - name: 报告慢速遥测渲染（离线）
-        run: python3 checks/report_telemetry_check.py
+        run: python3 tests/checks/report_telemetry_check.py
 
       # 报告库不进 CMake 的常规库，所以几处检查各自手写了一份"要编哪些 .c"。加了
       # 诊断码表那批模块之后没人同步这几份清单，两个报告检查就一起链接失败，而
       # report_axis_fault_check.py 的 --mutate 对照把链接失败当成了"抓住了变异"——
       # 一红一绿，看过去像检查自己在抽风。这条把闭包算出来，逐份比对清单。
       - name: 报告库源文件清单与闭包一致（离线）
-        run: python3 checks/report_sources_closure.py
+        run: python3 tests/checks/report_sources_closure.py
 
       # 本轮"证据留得住 + 停得下来"那一半的守卫。它们盯的三种死法有一个共同的性子：
       # **出错了也不喊**——报告文件照旧躺在原地、工具照旧退出 0、主站照旧跑着。
@@ -71,60 +71,60 @@ jobs:
       # ③ 命令口的 stop 走了一条不接安全门的空路（P12.1）：回 OK，什么都不发生。
       # 后面每条的 --mutate 是同一批检查的对抗性对照：把缺陷塞回临时副本，必须变红。
       - name: 分析工具不得硬编码报告路径（离线）
-        run: python3 checks/analysis_tools_check.py
+        run: python3 tests/checks/analysis_tools_check.py
 
       - name: 硬编码路径检查的判别力（离线，期望不通过）
-        run: python3 checks/analysis_tools_check.py --mutate
+        run: python3 tests/checks/analysis_tools_check.py --mutate
 
       - name: 命令口停机走安全门（离线）
-        run: python3 checks/stop_path_check.py
+        run: python3 tests/checks/stop_path_check.py
 
       - name: 停机路径检查的判别力（离线，期望不通过）
-        run: python3 checks/stop_path_check.py --mutate
+        run: python3 tests/checks/stop_path_check.py --mutate
 
       # 停机那两行结论本身也要立住：失能核对的键名说的是"读到了什么"（不是"已失能"），
       # "未确认"靠末拍状态字判而不靠邮箱，且它在报告里落成单独一类。改回旧名、换判据、
       # 把三值又抹成二值，都必须变红。
       - name: 停机结论的三档与失能字段名（离线）
-        run: python3 checks/shutdown_verdict_check.py
+        run: python3 tests/checks/shutdown_verdict_check.py
 
       - name: 停机结论检查的判别力（离线，期望不通过）
-        run: python3 checks/shutdown_verdict_check.py --mutate
+        run: python3 tests/checks/shutdown_verdict_check.py --mutate
 
       # 丢失链计数是报告里唯一能把"链断过"与"收包超时"分开的读数。它必须真的被读到
       # （0x0300 起 20 字节）、取自对的偏移（0x0310），并落进报告的键。偏移错一位、
       # 块缩到够不着、键改名，都必须变红。
       - name: 丢失链计数读得到、落得进报告（离线）
-        run: python3 checks/lost_link_counter_check.py
+        run: python3 tests/checks/lost_link_counter_check.py
 
       - name: 丢失链计数检查的判别力（离线，期望不通过）
-        run: python3 checks/lost_link_counter_check.py --mutate
+        run: python3 tests/checks/lost_link_counter_check.py --mutate
 
       # 设点通道的线格式在 C 与 Python 各有一份实现，对端（rl_sar）不与主站共享代码，
       # 靠约定对齐。偏移表、魔数、版本、SOCK_SEQPACKET、无回写，任何一处漂了就变红。
       - name: 设点通道的线格式与只写语义（离线）
-        run: python3 checks/setpoint_channel_check.py
+        run: python3 tests/checks/setpoint_channel_check.py
 
       - name: 设点通道检查的判别力（离线，期望不通过）
-        run: python3 checks/setpoint_channel_check.py --mutate
+        run: python3 tests/checks/setpoint_channel_check.py --mutate
 
       - name: 慢速遥测渲染的判别力（离线，期望不通过）
-        run: python3 checks/report_telemetry_check.py --mutate
+        run: python3 tests/checks/report_telemetry_check.py --mutate
 
       # 下面两条自带 cc 编译（把报告库单独编出来跑），所以不用等 cmake 那两步：
       # 它们判的分别是"报告还解析得动吗"（少一个闭括号，C 断言全过、整份 JSON 死掉）
       # 与"削旧删了谁、删的时候出没出声"。
       - name: 报告故障字段的 JSON 合法性（离线）
-        run: python3 checks/report_axis_fault_check.py
+        run: python3 tests/checks/report_axis_fault_check.py
 
       - name: 故障字段检查的判别力（离线，期望不通过）
-        run: python3 checks/report_axis_fault_check.py --mutate
+        run: python3 tests/checks/report_axis_fault_check.py --mutate
 
       - name: 归档削旧与删除留声（离线）
-        run: python3 checks/report_archive_check.py
+        run: python3 tests/checks/report_archive_check.py
 
       - name: 削旧检查的判别力（离线，期望不通过）
-        run: python3 checks/report_archive_check.py --mutate
+        run: python3 tests/checks/report_archive_check.py --mutate
 
       # 装置指纹的 schema 在 2026-10 之前没有任何东西在执行：没有代码读它，也没有工具
       # import jsonschema。它就在那种状态下漂移了 —— 生产者后来加了 mbx_rl 字段，
@@ -132,7 +132,7 @@ jobs:
       # 这条的变异对照是内建的（不像上面几条要 --mutate）：它太便宜，
       # 没有理由让它依赖"记得加那个参数"。
       - name: 装置指纹符合 schema（离线）
-        run: python3 checks/fingerprint_schema_check.py
+        run: python3 tests/checks/fingerprint_schema_check.py
 
       # 设备档推导链的守卫。这条链是"客户换自己的电机、不重编主站"的唯一入口，
       # 而它坏掉是不出声的：映射条目顺序被重排，位偏移整体错位，设备照样进 OP、
@@ -140,14 +140,14 @@ jobs:
       # 交付树里本来也没有），钉住两种 ESI 写法的推导结果，更要钉住
       # "推不出来或两套规则互相矛盾时必须非零退出"——猜着往下走就是拿错的映射跑真轴。
       - name: 设备档推导链（离线）
-        run: python3 checks/device_facts_check.py
+        run: python3 tests/checks/device_facts_check.py
 
       # 设备档里的 assignment_style 决定运行期要不要往 0xF030 写模块标识。写错不报错，
       # 只是**对没有这个对象的设备发一条 0xF030**，于是 SDO 中止、PDO 分配失败、进不了 OP；
       # 反过来模块化设备漏了这一步会安静地沿用出厂分配——看着能跑，跑的却是另一套映射。
       # 这条同时钉住两种写法的生成结果和自相矛盾的写法必须被拒。
       - name: 生效 PDO 的两种分配方式（离线）
-        run: python3 checks/pdo_assignment_check.py
+        run: python3 tests/checks/pdo_assignment_check.py
 
       # 运动方案是六族里唯一"写了却不生效也一声不响"的一族：方案自己进得了
       # runtime.flat，部署那一行却写 motion_profile_id_present=false，主站照常起、
@@ -155,7 +155,7 @@ jobs:
       # 这条走一遍真实 CLI，两头都判：写了方案没挂上必须告警，挂上了那句告警必须消失
       # （只查"告警出现过"的话，告警恒真也算过）。
       - name: 运动方案挂载链（离线）
-        run: python3 checks/motion_attach_check.py
+        run: python3 tests/checks/motion_attach_check.py
 
       # 客户入口的守卫，也是"换电机不重编主站"这条需求的主断言。交付树里六族是空的，
       # 所以这条跑的就是客户拿到产品第一天的那条路：空配置源 → 四族扁平文件。
@@ -165,38 +165,44 @@ jobs:
       # 客户添一份配置就会污染既有产物，且没有任何提示。
       - name: 客户入口出配置（离线）
         run: |
-          python3 gen/emaster_config.py build --config config --out "$RUNNER_TEMP/config-runtime"
+          python3 tools/gen/emaster_config.py build --config config --out "$RUNNER_TEMP/config-runtime"
           diff -r config-runtime "$RUNNER_TEMP/config-runtime"
 
       # 配置链的入口早提醒。生成器自己也查同样的引用闭合，但这条在构建之前、
       # 不需要 cmake，几秒钟就能说清"哪份配置引用了不存在的 ID"。
       - name: 配置引用链（离线）
-        run: python3 checks/config_chain_check.py
+        run: python3 tests/checks/config_chain_check.py
 
       # 控制台引擎与按键层的离线回归，外加启动窗口那条检查的对抗性对照。
       # 对照单独跑一次是有意的：它证明"主站还在启动"那段窗口的检查抓得住
       # 裸下标（2026-09-18 面板一帧就死、主站没人看着跑到两根轴进故障那个）。
       # 不带对照的话，这条检查哪天变成永远绿也没人知道。
       - name: 控制台引擎回归（离线）
-        run: python3 checks/console_engine_check.py --selftest
+        run: python3 tests/checks/console_engine_check.py --selftest
 
       - name: 启动窗口检查的判别力（离线，期望不通过）
-        run: python3 checks/console_engine_check.py --mutate-startup-window
+        run: python3 tests/checks/console_engine_check.py --mutate-startup-window
 
       # 声明与实现之间的缝：上手流程漏 sudo、文档引用不存在的文件或声称能吃 EDS、
       # recover_axis 的枚举与解析分支对不上、已删的配置字段长回来、消息资源三份
       # 副本漂开、CI 与它的本机复刻不同步。这些都不在任何一条编译路径上。
       - name: 交付面一致性（离线）
-        run: python3 checks/delivery_consistency_check.py
+        run: python3 tests/checks/delivery_consistency_check.py
 
       - name: 交付面一致性检查的判别力（离线，期望不通过）
-        run: python3 checks/delivery_consistency_check.py --mutate
+        run: python3 tests/checks/delivery_consistency_check.py --mutate
 
       - name: 配置
         run: cmake --preset linux-debug
 
       - name: 构建
         run: cmake --build --preset linux-debug --parallel 2
+
+      # 交付面在命令行上的那一条：每个可交付程序都要认 --help 与 --version，
+      # 都打到 stdout，都以 0 退出。漏掉谁都碰不到 —— 程序照常干活，只有照着
+      # 文档试的人才会发现"问它怎么用，它报了个错"。所以拿真二进制量一遍。
+      - name: 可交付入口的 --help 与 --version
+        run: bash tests/checks/cli_contract_check.sh build/linux-debug
 
       # 观测通道的离线自测。它不需要 EtherCAT 硬件，因此能在 CI 上跑；这条命令的
       # 价值在于把"读者不得撕裂、不得阻塞写者"这类性质钉进回归，而不是等台架上

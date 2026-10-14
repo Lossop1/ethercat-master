@@ -5,6 +5,7 @@
 #include "fingerprint_plan.h"
 
 #include "emaster/bus/preop_probe.h"
+#include "emaster/cli.h"
 #include "emaster/catalog/slave_profile.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_cli.h"
@@ -316,9 +317,27 @@ int main(int argc, char **argv)
     int report_is_usable;
     int output_result;
 
+    /* 没有子命令就做不了任何事，所以无参数出帮助并退出 0。 */
+    if (argc < 2)
+    {
+        emaster_console_print_usage(stdout, argv[0]);
+        return 0;
+    }
+    switch (emaster_cli_info(argc, argv))
+    {
+    case EMASTER_CLI_HELP:
+        emaster_console_print_usage(stdout, argv[0]);
+        return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-fingerprint");
+        return 0;
+    default:
+        break;
+    }
+
     if (config_directory == NULL)
     {
-        emaster_console_print_usage(argv[0]);
+        emaster_console_print_usage(stderr, argv[0]);
         return 2;
     }
     command = emaster_console_parse_command(argc, argv);
@@ -352,7 +371,7 @@ int main(int argc, char **argv)
 
     if (command.kind != EMASTER_COMMAND_CAPTURE)
     {
-        emaster_console_print_usage(argv[0]);
+        emaster_console_print_usage(stderr, argv[0]);
         return 2;
     }
     output_path = command.output_path;

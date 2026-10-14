@@ -13,6 +13,8 @@
 
 #include "soem/soem.h"
 
+#include "emaster/cli.h"
+
 #include <net/if.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -125,23 +127,49 @@ static void drain_sdo_errors(ecx_contextt *context)
     }
 }
 
+/* 用法里带上网卡清单：这是唯一一处能列出本机可用网卡的地方，出错时也要看得到。 */
+static void print_usage(FILE *out, const char *program)
+{
+    ec_adaptert *adapter = ec_find_adapters();
+
+    fprintf(out, "用法: %s <接口> [--read]   例: %s enp49s0 --read\n", program, program);
+    fprintf(out, "  --read: 只读状态，不失能\n");
+    fprintf(out, "  --help: 打印本说明后退出\n");
+    fprintf(out, "  --version: 打印版本号后退出\n");
+    fprintf(out, "\n可用适配器:\n");
+    for (ec_adaptert *item = adapter; item != NULL; item = item->next)
+    {
+        fprintf(out, "  %s  %s\n", item->name, item->desc);
+    }
+    ec_free_adapters(adapter);
+}
+
 int main(int argc, char *argv[])
 {
     ecx_contextt context;
     bool read_only = false;
 
     memset(&context, 0, sizeof(context));
-    if (argc < 2 || argc > 3 || (argc == 3 && strcmp(argv[2], "--read") != 0))
+    switch (emaster_cli_info(argc, argv))
     {
-        ec_adaptert *adapter = ec_find_adapters();
-
-        printf("用法: %s <接口> [--read]   例: %s enp49s0 --read\n", argv[0], argv[0]);
-        printf("可用适配器:\n");
-        for (ec_adaptert *item = adapter; item != NULL; item = item->next)
-        {
-            printf("  %s  %s\n", item->name, item->desc);
-        }
-        ec_free_adapters(adapter);
+    case EMASTER_CLI_HELP:
+        print_usage(stdout, argv[0]);
+        return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-disable");
+        return 0;
+    default:
+        break;
+    }
+    if (argc < 2)
+    {
+        /* 没有接口名就做不了任何事，所以无参数出帮助并退出 0。 */
+        print_usage(stdout, argv[0]);
+        return 0;
+    }
+    if (argc > 3 || (argc == 3 && strcmp(argv[2], "--read") != 0))
+    {
+        print_usage(stderr, argv[0]);
         return 2;
     }
     read_only = (argc == 3);

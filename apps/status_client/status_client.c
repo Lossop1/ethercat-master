@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "emaster/bus/command_socket_path.h"
+#include "emaster/cli.h"
 
 #define STATUS_RESPONSE_MAX 2048
 #define STATUS_MAX_AXES 16
@@ -380,20 +381,36 @@ static bool frame_is_truncated(const char *text)
     return strstr(text, "TRUNC") != NULL;
 }
 
+static void print_usage(const char *program)
+{
+    printf("用法：%s [--watch 毫秒] [选项]\n", program);
+    printf("  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+           EMASTER_DEPLOYMENT_ENV);
+    printf("  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+    printf("  --watch：周期刷新；不指定时只读一次\n");
+    printf("  --help：打印本说明后退出\n");
+    printf("  --version：打印版本号后退出\n");
+}
+
 int main(int argc, char **argv)
 {
     char socket_path[EMASTER_SOCKET_PATH_CAPACITY];
     long watch_ms = 0;
     int fd;
 
-    if (argc > 1 && strcmp(argv[1], "--help") == 0)
+    /*
+     * 无参数会去读默认部署的状态，是一个默认流程，所以不把无参数改成出帮助。
+     */
+    switch (emaster_cli_info(argc, argv))
     {
-        printf("用法：%s [--watch 毫秒] [选项]\n", argv[0]);
-        printf("  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
-               EMASTER_DEPLOYMENT_ENV);
-        printf("  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
-        printf("  --watch：周期刷新；不指定时只读一次\n");
+    case EMASTER_CLI_HELP:
+        print_usage(argv[0]);
         return 0;
+    case EMASTER_CLI_VERSION:
+        emaster_cli_print_version("emaster-status");
+        return 0;
+    default:
+        break;
     }
     /* 先摘掉 --socket / --deployment，剩下的只可能是 --watch。 */
     if (!emaster_cli_resolve_socket(&argc, argv, socket_path, sizeof(socket_path)))

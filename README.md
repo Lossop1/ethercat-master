@@ -18,7 +18,7 @@
 | [`docs/product/twincat-function-gap.md`](docs/product/twincat-function-gap.md) | 功能对标：本主站在哪一层、与 TwinCAT 逐层比什么、明确不做什么 |
 | `esi/README.md` | 设备描述放哪、从哪来 |
 | `config/README.md` | 配置各族逐个字段的语义 |
-| `gen/device/README.md` | 设备上手工具的边界 |
+| `tools/gen/device/README.md` | 设备上手工具的边界 |
 
 ---
 
@@ -36,7 +36,7 @@
   src/              实现，按功能分模块
   include/emaster/  公共头，与 src/<模块> 一一对应
   apps/             可执行程序
-  config-runtime/   配置的运行时形态。构建期由 gen/ 生成，主站启动时读它
+  config-runtime/   配置的运行时形态。构建期由 tools/gen/ 生成，主站启动时读它
 
 配置（三层：设备描述 → 出厂设计 → 现场）
   esi/              设备描述。**出厂是空的**，放入你自己那台电机的 ESI（XML）
@@ -52,20 +52,19 @@
   CMakeLists.txt    顶层构建入口
   CMakePresets.json 构建预设
   cmake/            CMake 辅助模块
-  gen/              生成器与校验器
-  gen/device/       设备上手工具
 
-运行期工具
+工具
   tools/            Python 工具：客户端、控制台、图形界面、观测、设点、跨机桥
+  tools/gen/        生成器与校验器；tools/gen/device/ 是设备上手工具
+  tools/analysis/   报告离线判读工具
+  tools/bench/      台架脚本
 
 资料
   docs/             实现说明、接口协议、测试方案、功能对标、运行期资料
 
 开发与验证
   tests/            单元测试。第 2 节的 ctest 要用它，构建时不能少
-  checks/           离线检查脚本；ci_replay.sh 一条命令按 CI 顺序跑完整套
-  scripts/          台架脚本
-  analysis/         报告离线判读工具
+  tests/checks/     离线检查脚本；ci_replay.sh 一条命令按 CI 顺序跑完整套
   evidence/         已采集的测试证据
 ```
 
@@ -94,7 +93,7 @@ SOEM 的源码在 `external/SOEM` 里，随交付树一起给你。**构建不�
 在仓库根目录执行：
 
 ```bash
-python3 gen/validate_project.py
+python3 tools/gen/validate_project.py
 cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DEMASTER_BUILD_HARDWARE_TOOLS=ON -DEMASTER_BUILD_TESTS=ON
 cmake --build build -j4
 ctest --test-dir build --output-on-failure
@@ -123,7 +122,7 @@ ctest --test-dir build-offline --output-on-failure
 cp <厂商给的>/*.xml esi/<你的型号>/
 
 # 2 从 ESI 生成设备档和策略档
-python3 gen/emaster_config.py add-device esi/<你的型号>/*.xml
+python3 tools/gen/emaster_config.py add-device esi/<你的型号>/*.xml
 
 # 3 补上推不出来的字段。<文件名> 由第 2 步打印
 $EDITOR config/device_policies/<文件名>.json
@@ -132,17 +131,17 @@ $EDITOR config/device_policies/<文件名>.json
 sudo build/apps/diagnose_slave/emaster-scan <网卡> > scan.txt
 
 # 5 生成拓扑、运行方案与部署。轴数和逐台身份都取自扫描
-python3 gen/emaster_config.py init-site --device <设备档 ID> \
+python3 tools/gen/emaster_config.py init-site --device <设备档 ID> \
   --interface <网卡> --from-scan scan.txt
 
 # 6 只有要跑内置的固定轨迹才做这两条：写运动方案，再把它挂到部署上
 #   每轴的 axis_id 见 config/topologies/<拓扑>.json，required_mode_id 要等于模式
 $EDITOR config/motion_profiles/<运动方案 ID>.json
-python3 gen/emaster_config.py init-site --device <设备档 ID> \
+python3 tools/gen/emaster_config.py init-site --device <设备档 ID> \
   --interface <网卡> --from-scan scan.txt --motion <运动方案 ID> --force
 
 # 7 生成 config-runtime/*.flat
-python3 gen/emaster_config.py build
+python3 tools/gen/emaster_config.py build
 
 # 8 起主站
 sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
@@ -197,7 +196,7 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
 ```bash
 pgrep -a -f emaster-master
 ls /tmp/emaster-<部署ID>*.sock          # 命令口和观测口，两个
-sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< status | grep -o 'state=[0-9]*'
+sudo build/apps/status_client/emaster-status --deployment <部署ID>
 ```
 
 `state=4` 是 RUNNING。
@@ -334,7 +333,7 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 
 **换一款电机要动的只有前七行。** 那是跑命令，不是改代码。命令见第 3 节。
 
-每族字段的完整语义见 `config/README.md`。设备上手工具的边界见 `gen/device/README.md`。
+每族字段的完整语义见 `config/README.md`。设备上手工具的边界见 `tools/gen/device/README.md`。
 
 **换电机、换拓扑、换部署都不需要重编主站。** 六族的条目全部在运行期从 `config-runtime/` 的扁平文件读，生成的 C 与配置内容无关。改 `error_recovery_policies/` 才需要重编，那一族是编译期静态表。
 
@@ -351,12 +350,17 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | `emaster-master` | 主站 |
 | `emaster-scan` | 只读扫描：逐台身份、AL 状态、`0x6041`、故障码、换算。第 3 节第 4 步用它 |
 | `emaster-disable` | **走邮箱把驱动器失能**。主站起不来时也能用 |
+| `emaster-status` | 只读查询命令口一次：`status`。`--watch <毫秒>` 周期刷新 |
 | `emaster-watch [间隔ms] --deployment <ID>` | 实时监控位置／速度／力矩／状态字 |
 | `emaster-move-deg --deployment <ID>` | 交互式角度控制，自动换算 |
 | `emaster-move --deployment <ID>` | 交互式脉冲控制，底层接口 |
 | `emaster-fingerprint` | 硬件指纹。最高只到 PRE-OP |
 | `emaster-dc-prepare` | PRE-OP DC 准备。不改状态 |
 | `emaster-target-probe` | 目标源探针 |
+
+**每个工具都认 `--help` 与 `--version`。** 两者都打到 stdout，都以 0 退出。不带参数时出帮助并退出 0。
+
+以下工具的默认流程不是帮助，而是一个真实动作，所以不带参数时不打印帮助：`emaster-master` 和 `emaster-target-probe` 按当前主机名匹配部署并起会话／跑探针；`emaster-status`、`emaster-watch`、`emaster-move`、`emaster-move-deg` 连默认部署的命令口。
 
 `tools/` 下是 Python 工具：`emaster_client.py`（命令口客户端）、`interactive_control.py`、`emaster_console.py`（终端面板引擎）、`emaster_gui/`（图形界面）、`observation_client.py`（观测口）、`closed_loop_client.py`（闭环样板：观测→策略→命令）、`setpoint_send.py`（设点口发送端）、`socket_bridge.py`（跨机桥）。另四个是它们共用的支撑与自测：`emaster_endpoint.py`（主站端点）、`rt_affinity.py`（躲开实时核）、`gui_evidence.py`（判界面自检日志）、`test_client_reconnect.py`（重连逻辑的离线自测）。
 
@@ -473,7 +477,7 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 
 ```text
 config/*.json
-  └─ gen/ 生成 config-runtime/*.flat
+  └─ tools/gen/ 生成 config-runtime/*.flat
        └─ emaster-master 读扁平文件 → 查 deployment_id → 构造会话计划
             └─ SOEM 扫描从站 → 校验身份、拓扑、PDO 与能力
                  └─ PRE-OP：读身份、换算、初始 CiA 402；选 PDO、写启动 SDO、配 DC
