@@ -385,7 +385,6 @@ def render(values: list[dict[str, Any]]) -> str:
     # 方向是 int8：-1 表示设备档没声明，与 607E 的合法取值 0/1 分得开，所以按有符号读。
     L += field("base", "polarity") + [
         "    {",
-        "        int32_t signed_number;",
         "        if (!emaster_config_reader_i32(reader, leaf, &signed_number)) { return false; }",
         "        if (signed_number < -1 || signed_number > 1)",
         "        {",

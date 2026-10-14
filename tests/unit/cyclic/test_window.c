@@ -25,7 +25,7 @@
 static const uint64_t MS_NS = UINT64_C(1000000);
 /* 与 default 策略一致：60 秒窗口、50 次为限。 */
 static const uint64_t POLICY_WINDOW_NS = UINT64_C(60000) * UINT64_C(1000000);
-static const int POLICY_THRESHOLD = 50;
+static const uint64_t POLICY_THRESHOLD = UINT64_C(50);
 
 static int failures;
 
@@ -75,7 +75,7 @@ static void test_field_scenario(void)
     }
     check(max_spread < POLICY_THRESHOLD,
           "30 秒一次的错误不该在 60 秒窗口里攒到 50 次（长跑自杀正是这么发生的）");
-    printf("  摊开 25 分钟：窗口内峰值 %" PRIu64 " 次（阈值 %d）\n", max_spread, POLICY_THRESHOLD);
+    printf("  摊开 25 分钟：窗口内峰值 %" PRIu64 " 次（阈值 %" PRIu64 "）\n", max_spread, POLICY_THRESHOLD);
 
     emaster_cyclic_window_init(&burst, POLICY_WINDOW_NS);
     (void)emaster_cyclic_window_record(&burst, 0U);
@@ -91,7 +91,7 @@ static void test_field_scenario(void)
     }
     check(max_burst >= POLICY_THRESHOLD,
           "10 秒内 50 次必须到阈值 —— 否则窗口把真故障也一起放过了");
-    printf("  挤在 10 秒：窗口内峰值 %" PRIu64 " 次（阈值 %d）\n", max_burst, POLICY_THRESHOLD);
+    printf("  挤在 10 秒：窗口内峰值 %" PRIu64 " 次（阈值 %" PRIu64 "）\n", max_burst, POLICY_THRESHOLD);
 }
 
 static void test_window_contents(void)
