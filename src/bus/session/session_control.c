@@ -135,7 +135,7 @@ static emaster_control_session_status_t check_axis_health(
  * P8.3: 连续迟到是否已经越线。
  *
  * 驱动器判"这一拍帧来晚了"用的是它自己的 SM 事件丢失计数，攒满 6 次就置 AL 0x001A
- * 掉出 OP（见 docs/requirements/layering-plan.md 的 D1 背景）。主站手里有同一个信号
+ * 掉出 OP。主站手里有同一个信号
  * ——每轴的 sync0_margin_ns 为负就说明本周期输出对驱动器已经迟到——此前却只在统计
  * 里加一，回路照常推进，等于看着驱动器攒到 6。
  *
@@ -346,7 +346,16 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     session->axes[axis_index].manufacturer_specific_status =
                         decoded_status.manufacturer_specific_bits;
                 }
-                if (session->plan->motion_profile != NULL) {
+                /*
+                 * 刷新条件必须与 control_session.c 里的分配条件同一句。此前这里只
+                 * 认运动方案路径，于是外部目标路径上的 actual_positions 从会话建立
+                 * 那一刻起再没动过——而外部目标路径现在要拿它算"目标离实际多远"，
+                 * 读一个冻结的起点值会让每一条正常目标都被判成超距。外部目标路径的
+                 * 目标位置一直是对的（session_target.c 提交时写 target_positions），
+                 * 只有实际位置这一半没跟上。
+                 */
+                if (session->plan->motion_profile != NULL ||
+                    session->position_target_source != NULL) {
                     session->actual_positions[axis_index] = actual_position;
                 }
             }
@@ -568,64 +577,32 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     bool command_updated = false;
 
                     /*
-                     * 先检查上一周期目标的跟随误差，再请求新目标。顺序与固定方案路径
-                     * 一致：motion_step 先检查跟随误差，再计算下一周期目标。
-                     * 每个轴使用独立的误差阈值（来自运动配置的 max_following_error_millidegrees）。
-                     * 阈值为 0 表示该轴不启用跟随误差检查。
+                     * 这里原先还有一道"上一周期目标的跟随误差"预检，已删。
+                     *
+                     * 它读的是每轴的 axes[i].max_following_error_counts，而那个值只由
+                     * 运动方案路径写入（session_start.c 里两处赋值都在
+                     * if (motion_profile != NULL) 之内）。外部目标路径没有运动方案，
+                     * 该值恒为 0，循环体第一句就 continue——这是一道从来没跳过的闸。
+                     * 删掉它不改变任何行为，只移走一个以后会被误当成保护的东西。
+                     *
+                     * "轴跟没跟上"改由驱动器自己的跟随误差窗管（6065/6066）。这两项在
+                     * 设置期读回来写进报告，让"驱动器到底有没有在守"成为出厂可核对的
+                     * 事实，而不是主站再猜一遍。主站在这条路径上只判一件事：目标离
+                     * 实际位置太远就拒收（session_target.c）。
                      */
-                    if (motion_initialized)
-                    {
-                        for (axis_index = 0U;
-                             axis_index < session->plan->axis_count; ++axis_index)
-                        {
-                            /* P2.5: 轴级隔离策略下跳过已隔离的轴 */
-                            if (session->plan->fault_policy == EMASTER_FAULT_POLICY_AXIS_ISOLATION &&
-                                session->axes[axis_index].fault_isolated) {
-                                continue;
-                            }
-
-                            /*
-                             * C4：模式 10（CST）下这个差没有定义——6064 是位置计数，
-                             * 而 target_positions[] 里装的是 6071 的千分比。C1 之后
-                             * actual_position 在 CST 下是真值，两边量纲不同却能算出数，
-                             * 结果只会是随机的假 FOLLOWING_ERROR。跳过。
-                             */
-                            if (session->plan->axes[axis_index].operation_mode != NULL &&
-                                session->plan->axes[axis_index].operation_mode->value == INT8_C(10)) {
-                                continue;
-                            }
-
-                            /* 动态误差检测：每轴独立阈值 */
-                            uint64_t max_error = session->axes[axis_index].max_following_error_counts;
-                            if (max_error == 0U) {
-                                continue;  /* 该轴未启用跟随误差检查 */
-                            }
-
-                            uint64_t following_error;
-                            int64_t diff = (int64_t)session->axes[axis_index].actual_position -
-                                           (int64_t)session->target_positions[axis_index];
-                            following_error = (uint64_t)(diff < 0 ? -diff : diff);
-                            if (following_error >
-                                session->axes[axis_index].max_observed_following_error_counts)
-                            {
-                                session->axes[axis_index].max_observed_following_error_counts =
-                                    following_error;
-                            }
-                            if (following_error > max_error)
-                            {
-                                status = EMASTER_CONTROL_SESSION_FOLLOWING_ERROR;
-                                emaster_soem_session_note_runtime_failure(
-                                    session, status, &safety_status);
-                                safety_denied = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!safety_denied)
-                    {
                     status = emaster_soem_session_position_target_step(
                         session, &command_updated);
-                    if (status != EMASTER_CONTROL_SESSION_OK)
+                    if (status == EMASTER_CONTROL_SESSION_TARGET_REJECTED)
+                    {
+                        /*
+                         * 拒收不是失败：这一条目标没被采纳，上一目标继续，其余轴照常。
+                         * 轴号、偏移量与次数已由 session_target.c 记进报告。这里把状态
+                         * 收回 OK——否则它会以故障的身份走完下面全部判据，而那正是
+                         * "一条坏目标打死整台机器人"的老路。
+                         */
+                        status = EMASTER_CONTROL_SESSION_OK;
+                    }
+                    else if (status != EMASTER_CONTROL_SESSION_OK)
                     {
                         emaster_soem_session_note_runtime_failure(
                             session, status, &safety_status);
@@ -635,7 +612,6 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                     {
                         motion_initialized = true;
                         session->report->motion_started = true;
-                    }
                     }
                 }
                 else
@@ -812,7 +788,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             int offset = snprintf(response.message, sizeof(response.message),
                                 "state=%d cycle=%lu axes=%zu enabled=%d completed=%d"
                                 ",wkc=%d,wkc_expect=%u,wkc_err=%llu,no_frame=%llu"
-                                ",over_budget=%llu,deadline_missed=%d",
+                                ",over_budget=%llu,deadline_missed=%d"
+                                ",rejected=%llu",
                                 (int)session->report->state,
                                 (unsigned long)session->report->cycle_count,
                                 session->plan->axis_count,
@@ -823,12 +800,24 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 (unsigned long long)session->report->wkc_error_count,
                                 (unsigned long long)session->report->wkc_no_frame_count,
                                 (unsigned long long)session->report->over_budget_cycle_count,
-                                session->report->cycle_deadline_missed ? 1 : 0);
+                                session->report->cycle_deadline_missed ? 1 : 0,
+                                (unsigned long long)session->report->target_rejected_count);
 
                             for (axis_index = 0U;
                                  axis_index < session->plan->axis_count; ++axis_index) {
                                 const emaster_control_session_axis_result_t *axis =
                                     &session->axes[axis_index];
+                                /*
+                                 * 已提交的目标只在有规划者时才存在：运动方案或外部目标源，
+                                 * 二者之一，会话初始化时据此分配 target_positions。
+                                 * 两者都没有（空转会话）时这个缓冲区根本没分配 —— 那时主站
+                                 * 每拍写下去的就是驱动器自报的那个目标位，planned 与
+                                 * target_pos 本来就相同。印它，而不是解引用空指针。
+                                 */
+                                const int32_t planned_position =
+                                    session->target_positions != NULL
+                                        ? session->target_positions[axis_index]
+                                        : axis->target_position;
                                 const bool slow_has_axis =
                                     slow_ok && axis_index < (size_t)slow.axis_count &&
                                     axis_index < (size_t)EMASTER_OBSERVATION_MAX_AXES;
@@ -991,7 +980,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    (int)axis->actual_torque,
                                                    (unsigned int)axis->status_word,
                                                    axis->target_position,
-                                                   session->target_positions[axis_index],
+                                                   planned_position,
                                                    error_code,
                                                    (int)axis->cia402_state,
                                                    /* 驱动器自报的 6061。力矩模式下"到底进没进
@@ -1155,17 +1144,44 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         case EMASTER_COMMAND_QUERY_TOPOLOGY: {
                             /*
                              * 拓扑查询：返回实际轴数、总线位置和关键参数
-                             * 格式: axes=N,max_step=S|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|a2:...
+                             * 格式: axes=N,max_offset=S|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|a2:...
                              *
-                             * max_step 是相邻两条目标允许的最大增量（原始 counts，全轴统一值）。
-                             * 客户端必须按此值把大角度目标拆成小步流式发送：单步超限不会返回
-                             * 错误，而是让 session_target.c 判定 MOTION_INVALID，经
-                             * note_runtime_failure 中止整个会话。0 表示未启用单步限幅。
+                             * max_offset 是**各轴目标偏移上限中最小的那个**（原始 counts）。
+                             * 它回答的问题和以前那栏 max_step 不同：max_step 说的是"相邻两条
+                             * 目标允许差多少"，那是个随客户端频率变化、由客户端自己决定的数，
+                             * 主站已经不再判它；max_offset 说的是"目标离实际位置允许多远"，
+                             * 这是主站真的会拒收的线（见 session_target.c 与
+                             * include/emaster/motion/target_guard.h）。
+                             *
+                             * 给最小值而不是逐轴给：这一栏是给客户端一个保守的节奏参考，
+                             * 单一标量够用；逐轴的真值在报告里（offset_limit_counts）。
+                             * 0 表示没有一轴在用这条判据。
                              */
-                            int offset = snprintf(response.message, sizeof(response.message),
-                                "axes=%zu,max_step=%lu",
-                                session->plan->axis_count,
-                                (unsigned long)session->position_target_max_step_counts);
+                            /*
+                             * 上下限表与外部目标源同生共死：没有源就没有这张表。
+                             * 因此整段（含逐轴取最小值）都在源存在时才算，不能只把
+                             * 首轴那条判掉、然后让循环去读空表。
+                             */
+                            uint64_t min_offset = 0U;
+                            int offset;
+
+                            if (session->position_target_source != NULL &&
+                                session->external_target_limits_counts != NULL &&
+                                session->plan->axis_count > 0U) {
+                                min_offset = session->external_target_limits_counts[0];
+                                for (axis_index = 1U;
+                                     axis_index < session->plan->axis_count; ++axis_index) {
+                                    uint64_t limit =
+                                        session->external_target_limits_counts[axis_index];
+                                    if (limit != 0U && (min_offset == 0U || limit < min_offset)) {
+                                        min_offset = limit;
+                                    }
+                                }
+                            }
+                            offset = snprintf(response.message, sizeof(response.message),
+                                              "axes=%zu,max_offset=%lu",
+                                              session->plan->axis_count,
+                                              (unsigned long)min_offset);
 
                             for (axis_index = 0U;
                                  axis_index < session->plan->axis_count; ++axis_index) {
@@ -1412,6 +1428,18 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 }
                                 pthread_mutex_lock(&buf->mutex);
                                 memcpy(buf->positions, positions, count * sizeof(int32_t));
+                                /*
+                                 * 模式一并写进汇点。文本口没有逐轴模式字段，它写进去的
+                                 * 就是"本部署配的那一种"；不写的话，先走过二进制通道、
+                                 * 再走文本口，缓冲区里会留着上一个客户端声称的模式——
+                                 * 那个值不是这条入口的意思，读的人会当成当前的。
+                                 */
+                                for (size_t mode_index = 0U; mode_index < count; ++mode_index) {
+                                    if (session->plan->axes[mode_index].operation_mode != NULL) {
+                                        buf->modes[mode_index] =
+                                            session->plan->axes[mode_index].operation_mode->value;
+                                    }
+                                }
                                 buf->available = 1;
                                 buf->last_update_ns = cmd_time_ns;
                                 pthread_mutex_unlock(&buf->mutex);

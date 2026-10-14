@@ -15,9 +15,9 @@ EtherCAT 主站手动控制台（香橙派上的全屏面板）
 
 四条动手之前必须知道的事实（都是查过代码的）：
 
-1. 主站对相邻两条目标有硬限幅 max_step（topology 里有）。超限不是拒绝这一条，
-   而是判 MOTION_INVALID 后**中止整个会话**。所以目标只能一步步挪过去——
-   本工具每 50ms 让目标朝期望值走一小步，永远不超限。
+1. 主站只留一条判据：目标离**实际位置**超过 max_offset（topology 里有）就拒收
+   那一条，会话继续、其余轴照常跑。它不限制目标之间的增量，也不限制速度——
+   所以步长由本工具自己定：每 50ms 让目标朝期望值走一小步，步长按点动速度算。
 2. 超过 200ms 不发目标，主站转 HOLD：保持最后位置、仍停在 RUNNING、
    每拍继续重发同一个 607A。所以"松手就停"是天然的，不会掉使能。
 3. stop/shutdown 让主站**真的停机**（走安全门→全轴 SAFE_STOP→写报告），与 SIGINT
@@ -60,7 +60,7 @@ CONTROL_RATE_HZ = 50.0
 # 面板刷新与状态轮询频率。一次 status 往返占主站一个周期槽，10Hz 很宽裕。
 UI_RATE_HZ = 10.0
 
-# 点动速度（输出轴度/秒）。实际每拍步长还受 max_step×0.8 约束，取小。
+# 点动速度（输出轴度/秒）。主站不限速，步长完全由这个档位算出来。
 DEFAULT_JOG_SPEED = 10.0
 
 # 点动速度档位（输出轴度/秒）。, / . 在档位之间走。
@@ -72,9 +72,6 @@ JOG_SPEED_STEPS = (1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0)
 JOG_GRACE_S = 0.12             # 这么久没有新的按键事件就当松手
 JOG_RAMP_S = 0.30              # 按下后由慢加速到设定速度的时长
 JOG_MIN_FRACTION = 0.15        # 刚开始时按设定速度的这个比例走（轻点 = 小位移）
-
-# 单步不超过 max_step 的这个比例。留余量，避免取整刚好越界。
-MAX_STEP_MARGIN = 0.8
 
 # 断线重连的尝试间隔（秒）。别每拍都去 connect。
 RECONNECT_INTERVAL_S = 1.0
@@ -291,7 +288,9 @@ class Engine:
         self.commanded = []
         # 本次运动还剩几拍走完。多轴共用同一个数，于是同时起停、同时到位。
         self.ticks_left = 0
-        self.max_step = 0
+        # 各轴目标偏移上限中的最小值（counts，来自 topology）。只用于提示与范围检查：
+        # 主站的判据是"目标离实际位置"，而本工具的目标总在一点一点挪，够不到它。
+        self.max_offset = 0
 
         self.attached = False
         self.last_connect_try = 0.0
@@ -364,14 +363,14 @@ class Engine:
             return False
 
         self.axis_count = self.client.axis_count
-        self.max_step = self.client.max_step
+        self.max_offset = self.client.max_offset
         self.factor = [self._axis_factor(i) for i in range(self.axis_count)]
         if not self.factor or any(f is None for f in self.factor):
             self.message = "拓扑里的编码器/减速比不完整，算不出角度"
             return False
 
-        # 起点：优先用主站**已提交**的目标（planned），单步限幅正是拿它当基准；
-        # 没有 planned 才退回实际位置。用错基准第一条命令就可能超限、打掉会话。
+        # 起点：优先用主站**已提交**的目标（planned），没有 planned 才退回实际位置。
+        # 用错基准，第一条命令就可能落在偏移上限之外而被拒收。
         if not self.origin_locked:
             self.origin = [self._axis_position(i) for i in range(self.axis_count)]
             self.origin_locked = True
@@ -509,15 +508,14 @@ class Engine:
         return self.factor[index]
 
     def step_limit_counts(self, index):
-        """一拍允许的 counts 增量：点动速度与单步限幅取小，至少 1。"""
+        """一拍允许的 counts 增量，至少 1。
+
+        只按点动速度算：主站不限制目标之间的增量，这条线是本工具自己定的。
+        """
         factor = self.factor_of(index)
         if factor is None:
             return 1.0
-        by_speed = self.jog_speed * factor / CONTROL_RATE_HZ
-        limit = by_speed
-        if self.max_step > 0:
-            limit = min(by_speed, self.max_step * MAX_STEP_MARGIN)
-        return max(1.0, limit)
+        return max(1.0, self.jog_speed * factor / CONTROL_RATE_HZ)
 
     def range_limits(self, index):
         """软范围（counts）。range_deg<=0 或系数还没到手时返回 None 表示不限制。
@@ -580,7 +578,7 @@ class Engine:
         """算"这次运动一共走几拍"，写进 ticks_left。
 
         多轴共用同一个拍数，于是各轴同时起停、同时到位；每拍增量由
-        step_limit_counts 封顶，仍然不会碰到 max_step。
+        step_limit_counts 按点动速度封顶。
         """
         ticks = 0
         for index in range(self.axis_count):
@@ -1687,8 +1685,9 @@ def selftest(args, client_factory=ConsoleClient):
     if not engine.wait_attached(180.0 if started_here else 60.0):
         print("错误：" + engine.message)
         return 1
-    print(f"{engine.deployment_label()}  单步限幅 {engine.max_step} counts"
-          f" ≈ {engine.counts_to_deg(0, engine.max_step):.2f}°")
+    print(f"{engine.deployment_label()}  点动速度 {engine.jog_speed:.0f}°/s"
+          f"（主站偏移上限 {engine.max_offset} counts"
+          f" ≈ {engine.counts_to_deg(0, engine.max_offset):.2f}°）")
     print("起点（度）：" + " ".join(
         f"轴{i + 1}={engine.counts_to_deg(i, engine.commanded[i]):+.3f}°"
         for i in range(engine.axis_count)))
@@ -1736,20 +1735,18 @@ def selftest(args, client_factory=ConsoleClient):
         check(f"轴{index + 1}回到起点附近", abs(actual - expected) < 0.5,
               f"实际 {actual:+.3f}° 起点 {expected:+.3f}°")
 
-    # 2) 发出去的目标序列，相邻增量不能超限
-    print("\n2) 目标序列的相邻增量")
-    worst = 0
+    # 2) 发出去的目标序列，每拍增量按点动速度封顶。
+    #    主站不再限制相邻增量，这条线是本工具自己定、自己守的。
+    print("\n2) 目标序列的每拍增量")
+    worst_ratio = 0.0
     for index in range(engine.axis_count):
+        limit = engine.step_limit_counts(index)
         previous = start_state[index]
         for positions in sent:
-            worst = max(worst, abs(positions[index] - previous))
+            worst_ratio = max(worst_ratio, abs(positions[index] - previous) / limit)
             previous = positions[index]
-    if engine.max_step > 0:
-        allowed = engine.max_step * MAX_STEP_MARGIN
-        check("最大相邻增量 ≤ max_step×0.8", worst <= allowed,
-              f"实测 {worst} counts，上限 {allowed:.0f}")
-    else:
-        check("单步限幅未启用，跳过", True)
+    check("每拍增量 ≤ 点动速度算出的步长（留取整余量）", worst_ratio <= 1.05,
+          f"实测最大 {worst_ratio:.3f} 倍步长")
     check("确实发出过目标", len(sent) > 5, f"{len(sent)} 条")
 
     # 3) 状态字认不认得出来：协议里是 0x%04x，解析失手会一律读成 0，

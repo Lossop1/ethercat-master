@@ -1,4 +1,8 @@
-add_library(emaster_motion STATIC relative_position.c velocity_profile.c position_target.c)
+add_library(emaster_motion STATIC
+    relative_position.c
+    velocity_profile.c
+    position_target.c
+    target_guard.c)
 add_library(emaster::motion ALIAS emaster_motion)
 
 target_compile_features(emaster_motion PUBLIC c_std_11)

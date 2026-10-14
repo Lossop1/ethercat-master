@@ -5,8 +5,11 @@
 #include "emaster/cia402/controller.h"
 #include "emaster/cyclic/timing.h"
 #include "emaster/diagnostics/error_class.h"
+#include "emaster/motion/external_target_buffer.h"
 #include "emaster/motion/relative_position.h"
 #include "emaster/motion/position_target.h"
+/* 设点通道的拒收原因枚举。报告里存的是它的取值，类型摆在这里避免两处各抄一份。 */
+#include "emaster/setpoint/server.h"
 #include "emaster/session/session_plan.h"
 
 #include <pthread.h>
@@ -54,7 +57,17 @@ typedef enum
      * 是因为两者的处置相反：这一档要查的是判据（掩码没填），那一档要查的是总线或
      * 驱动器不配合。合成一个词会让客户对惯常出现的红失去反应。
      */
-    EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED
+    EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED,
+    /*
+     * 外部目标被合理性判据拒收。**不中止会话**：只表示这一条目标没有被采纳，
+     * 上一目标继续保持，其余轴照常跑。它与上面每一个值不同——那些都是"会话到此
+     * 为止"，这一条是"这一条命令没进门"。
+     *
+     * 为什么必须单独成值而不是并进 MOTION_INVALID：MOTION_INVALID 的处置是中止
+     * 全会话、全轴失能。一条符号写反的目标会让整台机器人瘫掉，而那恰恰是最需要
+     * "其余部分继续"的时候。
+     */
+    EMASTER_CONTROL_SESSION_TARGET_REJECTED
 } emaster_control_session_status_t;
 
 /*
@@ -198,6 +211,9 @@ typedef struct
     bool sync_error;
 } emaster_sync_diagnostic_t;
 
+/* 报告里逐条写出的"设备实际与声明不同"的条目上限；超出部分只计数。 */
+enum { EMASTER_CONTROL_SESSION_PDO_DIFFERENCE_SLOTS = 4 };
+
 typedef struct
 {
     uint16_t position;
@@ -207,10 +223,28 @@ typedef struct
     bool identity_match;
     bool pdo_match;
     bool process_map_match;
+    /*
+     * 设备实际映射与设备档声明不同、但主站按设备实际建了映像时为真。差异逐条记在下面
+     * （最多这么多条），报告里要写清主站到底采用了什么 —— 采用本身不拦会话，但不写出来
+     * 就等于没人知道映像的字节是从哪张表来的。
+     */
+    bool pdo_device_mapping_adopted;
+    uint32_t pdo_device_mapping_difference_count;
+    emaster_pdo_layout_difference_t pdo_device_mapping_differences[
+        EMASTER_CONTROL_SESSION_PDO_DIFFERENCE_SLOTS];
     uint16_t pdo_assignment_failed_index;
     uint8_t pdo_assignment_failed_subindex;
     bool pdo_assignment_abort_code_available;
     uint32_t pdo_assignment_abort_code;
+    /*
+     * 同步管理（1C32/1C33）的同步类型：设备声明支持哪几档，主站最终用的就是哪一档。
+     * 方案里那个值是台架实测的，收不收由设备决定（MT 台架实测：方案值 0x0022 被回
+     * 0x06090030「值超出范围」，它的 1C33:03 只声明到 DC SYNC0）。被顶替时为真，
+     * 实际用的值记在下面 —— 报告里印方案值而设备停在另一档，就是一处安静的谎。
+     */
+    bool sm_sync_type_substituted;
+    uint16_t sm2_sync_type_used;
+    uint16_t sm3_sync_type_used;
     bool output_initialized;
     bool input_decoded;
     bool mode_display_match;
@@ -225,8 +259,21 @@ typedef struct
     int32_t software_position_limit_max;
     bool following_error_read;
     int32_t following_error_actual;
+    /*
+     * 驱动器自己的跟随误差窗与超时（6065 / 6066），设置期读回。
+     *
+     * 主站删掉自己那道跟随误差闸以后，"这条保护在不在、值是多少"必须成为出厂可核对的
+     * 事实——否则整条链上没人管它。只读不写：窗口是 counts、超时是 ms，都按驱动器口径
+     * 原样记。读不回来只记 read=false，不拦会话——它不是主站行使的保护。
+     */
+    bool following_error_window_read;
+    uint32_t following_error_window;
+    bool following_error_timeout_read;
+    uint16_t following_error_timeout;
+    /* 方向（607E）。设备不实现这个对象时用设备档声明的缺省，来源见 polarity_source。 */
     bool polarity_read;
     uint8_t polarity;
+    emaster_fact_source_t polarity_source;
     /* 6041 的模式相关反馈位只做统一记录，具体语义由所选模式解释 */
     bool status_warning;
     bool voltage_enabled;
@@ -285,6 +332,17 @@ typedef struct
     uint64_t motion_final_error_counts;
     uint64_t max_following_error_counts;
     uint64_t max_observed_following_error_counts;
+    /*
+     * 这一轴的外部目标偏移上限（counts），以及它到底有没有被判。
+     *
+     * 上限由本轴的运行时 position_scale（608F/6091 读回）× 部署给的毫度值折算而来，
+     * 所以 25:1 与 28:1 的轴拿到各自的值——这是"逐轴"的全部含义。checked 为假表示
+     * 本轴没判：换算用不了（608F/6091 没读回来，或齿轮比为零），此时 limit 为 0，
+     * 该轴的目标一律放行。报告里这两项必须一起看：只看 limit=0 会以为"不设防"，
+     * 其实可能是"根本没判"。
+     */
+    uint64_t offset_limit_counts;
+    bool offset_limit_checked;
     bool position_scale_match;
     bool motion_direction_match;
     uint32_t output_bytes;
@@ -1073,6 +1131,42 @@ typedef struct
     bool motion_started;
     bool motion_completed;
     /*
+     * 外部目标被合理性判据拒收的记录（判据见 emaster/motion/target_guard.h）。
+     *
+     * target_rejected_count 数的是**被拒的目标条数，不是拍数**。这一条区分要紧：
+     * 外部目标缓冲区是覆盖式最新值（session_control 每拍都读同一个值），按拍计数
+     * 会让一个卡住的坏目标在 1 kHz 下变成几百万次。计的是"连续处于被拒状态的段数"，
+     * 所以客户端反复发同一个坏值只算一次。
+     *
+     * axis 与 offset 记的是**最后一次**被拒目标的现场（第几轴、偏了多少 counts）。
+     * 两个字段只在 count > 0 时有意义。会话照常跑，它们不影响 status 之外的任何东西。
+     */
+    uint64_t target_rejected_count;
+    size_t target_rejection_axis;
+    uint64_t target_rejection_offset_counts;
+    /*
+     * 设点通道（只写套接字）这一轮发生了什么。通道没开时全是零、enabled 为假。
+     *
+     * 这些都是"发生了什么"的计数，不是"应该发生什么"的期望：主站不假设客户端频率，
+     * 也就不报"应该收到多少条"。丢没丢包由 sequence_gaps 回答，客户端在收尾时是否还
+     * 活着由 last_record_age_ns 回答，为什么被拒由 last_reject_reason 回答。
+     *
+     * last_sequence / last_client_time_ns 是客户端自己给的数，原样记下不做解释；
+     * 主站判断超时用的是缓冲区的 last_update_ns（主站时钟），两者不要混看。
+     */
+    bool     setpoint_enabled;
+    uint64_t setpoint_records_accepted;
+    uint64_t setpoint_records_rejected;
+    uint64_t setpoint_sequence_gaps;
+    uint64_t setpoint_last_sequence;
+    uint64_t setpoint_last_client_time_ns;
+    /* 收尾时最后一条已采纳记录有多旧（纳秒）；整轮没收到过为 -1。 */
+    int64_t  setpoint_last_record_age_ns;
+    /* 取值见 emaster/setpoint/server.h 的 emaster_setpoint_reject_t。 */
+    emaster_setpoint_reject_t setpoint_last_reject_reason;
+    /* 最后一次被拒的轴号（0 起）。 */
+    size_t   setpoint_last_reject_axis;
+    /*
      * 全报告里这个布尔只有一个写点：安全门（session_supervisor.c）。命令口发起的
      * 停机也得走同一条路，否则报告会一边说"允许控制"（safety_control_permitted
      * 保持真）一边停机——那是最危险的一种错法。
@@ -1414,19 +1508,14 @@ typedef emaster_position_target_source_result_t (*emaster_control_session_positi
     void *user_data);
 
 /*
- * 外部位置目标双缓冲区：由上层（工具或应用）分配和初始化，
+ * 外部位置目标缓冲区：由上层（工具或应用）分配和初始化，
  * 通过 callbacks 注入会话；总线层只持有指针，不拥有内存。
  * 使用方负责互斥锁的 PTHREAD_MUTEX_INITIALIZER 初始化。
+ *
+ * 类型定义搬到了 emaster/motion/external_target_buffer.h（本头文件包含它，用的人
+ * 不用改 include）。搬的理由是设点通道要写这份结构，而它不该为此去拉总线层这一
+ * 大串头文件。字段与语义没有变，见那个文件顶部的说明。
  */
-#define EMASTER_EXTERNAL_TARGET_MAX_AXES 16U
-
-typedef struct {
-    pthread_mutex_t     mutex;
-    int32_t             positions[EMASTER_EXTERNAL_TARGET_MAX_AXES];
-    uint64_t            last_update_ns;
-    size_t              axis_count;
-    int                 available;
-} emaster_external_target_buffer_t;
 
 /* 应用层回调集中管理，不改变主会话函数签名。 */
 typedef struct
@@ -1440,17 +1529,17 @@ typedef struct
     emaster_control_session_position_target_source_t position_target_source;
     void *position_target_source_user_data;
     /*
-     * 位置目标来源回调路径的可选跟随误差保护。固定方案路径通过 motion_profile 的
-     * max_following_error_millidegrees 限制；回调路径没有绑定运动方案，由调用者
-     * 在这里单独提供每轴统一的上限（原始位置计数，0 表示不启用此检查）。
-     * 主站每周期以上一条已写入的目标为基准计算偏差，超限时触发 FOLLOWING_ERROR。
+     * 回调路径上没有可调的限幅旋钮，这是有意的。
+     *
+     * 这里原先有两个（统一跟随误差上限、统一单步上限）。两者都已删除：单步上限比的是
+     * 相邻两条目标的差，于是同一个配置下允许的速度随客户端发送频率线性变化——那是
+     * 客户端该定的数，不是主站该定的数；跟随误差上限在这条路径上从来没被赋过值，
+     * 是一道永远不跳的闸（逐轴阈值只由运动方案路径写入）。
+     *
+     * 保留下来的只有一条：目标离**实际位置**太远就拒收（target_guard.h）。它不看
+     * 增量，所以与客户端频率无关；上限逐轴取自本轴的运行时 position_scale，所以
+     * 不需要、也不接受调用方再传一个数进来。要改它，改部署键。
      */
-    uint64_t position_target_max_following_error_counts;
-    /*
-     * 位置目标来源回调路径的可选单步限幅。限制相邻两条目标之间的最大增量（原始位置计数），
-     * 防止外部目标发生任意大跳变；0 表示不启用。超限时拒绝本条目标并触发 MOTION_INVALID。
-     */
-    uint64_t position_target_max_step_counts;
     /*
      * 外部目标双缓冲区：由调用方分配并用 PTHREAD_MUTEX_INITIALIZER 初始化，
      * 生命期须覆盖整个会话；NULL 表示本次会话不使用外部目标通道。

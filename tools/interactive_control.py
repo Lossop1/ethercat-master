@@ -13,13 +13,12 @@ EtherCAT 主站交互式位置控制工具
    服务端单方面关闭，下一次 send 拿到 EPIPE。本工具在每次发送前检查连接
    闲置时长，并在失败时自动重连重试。
 
-2. 大角度必须斜坡。主站对相邻两条目标做单步限幅（session_target.c），
-   超限不是返回错误，而是判定 MOTION_INVALID 后经 note_runtime_failure
-   中止整个会话。所以一步到位地发 30° 会直接打掉主站。本工具把目标拆成
-   小步以固定频率流式发送，步长同时受 max_step 和设定速度约束。
+2. 大角度必须斜坡。这不是主站的要求——主站不限速，也不限制目标之间的增量。
+   斜坡是本工具为了让运动可控而自己定的：直接把目标一步推到位，轴会以驱动器
+   允许的最快速度冲过去。步长由设定速度算出来。
 
-3. max_step 从 topology 响应读取（主站新增字段），不硬编码——换部署时
-   限幅值会变。
+3. max_offset 从 topology 响应读取（主站唯一保留的目标判据：目标离实际位置
+   超过它就拒收这一条，会话继续）。它不硬编码——换部署时上限会变。
 
 socket 路径必须显式给：它由现场部署 ID 决定（/tmp/emaster-<你的部署ID>.sock），
 仓库里没有默认值。
@@ -39,9 +38,6 @@ DEFAULT_RATE_HZ = 50.0
 # 默认斜坡速度（输出轴度/秒）。取保守值：先能安全动起来，再按需调高。
 DEFAULT_SPEED_DEG_PER_S = 20.0
 
-# 单步不超过 max_step 的这个比例。留余量，避免因取整刚好越界。
-MAX_STEP_MARGIN = 0.8
-
 # 连接闲置超过这个秒数就主动重连，避开服务端的 5 秒超时。
 IDLE_RECONNECT_S = 4.0
 
@@ -60,11 +56,13 @@ class EtherCATClient:
 
         self.state = None
         self.topology = None
-        self.max_step = 0
+        # 各轴目标偏移上限中的最小值（counts）。主站拿它判"目标离实际位置是不是太远"，
+        # 本工具只用它提示：正常斜坡永远够不到。
+        self.max_offset = 0
         self.axis_count = 0
 
-        # 最后一次成功提交的目标。斜坡的起点必须用它而不是实际位置：
-        # 主站的单步限幅是拿新目标和上一条已提交目标比的。
+        # 最后一次成功提交的目标。斜坡的起点用它而不是实际位置：位置反馈可能有
+        # 延迟，而目标序列是单调的，从已提交目标接着走最稳。
         self.last_commanded = None
 
     def note(self, text):
@@ -154,7 +152,7 @@ class EtherCATClient:
                 header[key] = value
 
         self.axis_count = int(header.get("axes", "0"))
-        self.max_step = int(header.get("max_step", "0"))
+        self.max_offset = int(header.get("max_offset", "0"))
 
         axes = []
         for part in parts[1:]:
@@ -250,17 +248,11 @@ class EtherCATClient:
     # ---------- 运动 ----------
 
     def step_counts_for(self, speed_deg_per_s, rate_hz):
-        """单步允许的最大 counts 增量：速度与单步限幅取小。"""
+        """单步 counts 增量：只由设定速度算。主站不限速，这条线是本工具自己定的。"""
         factor = self.counts_per_degree()
         if factor is None:
             return None
-
-        by_speed = speed_deg_per_s * factor / rate_hz
-        if self.max_step > 0:
-            by_step = self.max_step * MAX_STEP_MARGIN
-            if by_speed > by_step:
-                by_speed = by_step
-        return max(1.0, by_speed)
+        return max(1.0, speed_deg_per_s * factor / rate_hz)
 
     def move_to(self, targets, speed_deg_per_s, rate_hz):
         """
@@ -400,14 +392,14 @@ def interactive_shell(client):
 
         if action in ("t", "topology"):
             if client.refresh_topology():
-                print(f"\n轴数={client.axis_count} 单步限幅={client.max_step} counts")
+                print(f"\n轴数={client.axis_count} 偏移上限={client.max_offset} counts")
                 for axis in client.topology:
                     print(f"  {axis['id']}: bus={axis['bus']} enc={axis['enc']} 增量/电机转 "
                           f"gear={axis['gear']}")
                 factor = client.counts_per_degree()
                 if factor:
                     print(f"  换算: 1° = {factor:.2f} counts，"
-                          f"单步限幅 ≈ {client.max_step / factor:.2f}°")
+                          f"偏移上限 ≈ {client.max_offset / factor:.2f}°")
                 print()
             else:
                 print("获取拓扑失败")
@@ -511,8 +503,8 @@ def main():
         print("警告：无法获取拓扑，角度换算不可用（只能用 g 命令按 counts 操作）")
     else:
         factor = client.counts_per_degree()
-        print(f"轴数={client.axis_count} 单步限幅={client.max_step} counts"
-              + (f" ≈ {client.max_step / factor:.2f}°" if factor else ""))
+        print(f"轴数={client.axis_count} 偏移上限={client.max_offset} counts"
+              + (f" ≈ {client.max_offset / factor:.2f}°" if factor else ""))
 
     status = client.refresh_status()
     if status:

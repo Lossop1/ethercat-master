@@ -79,13 +79,21 @@ typedef enum
     EMASTER_SESSION_LAYOUT_MATCH = 0,
     EMASTER_SESSION_LAYOUT_INVALID_ARGUMENT,
     EMASTER_SESSION_LAYOUT_DISCOVERY_INCOMPLETE,
+    /*
+     * 与声明逐条不同，但设备实际映射能满足运行方案：方向总长一致，要用的字段都在、
+     * 位宽也对。主站按设备实际建映像，不改写设备（设备可能根本不让改）。
+     */
+    EMASTER_SESSION_LAYOUT_DEVICE_ADOPTED,
     EMASTER_SESSION_LAYOUT_CONFIGURATION_REQUIRED,
     EMASTER_SESSION_LAYOUT_CONFIGURATION_UNSUPPORTED
 } emaster_session_layout_status_t;
 
 /*
- * 把 PRE-OP 只读发现的实际布局与所选 PDO 方案严格比较。返回 CONFIGURATION_REQUIRED 只表示
- * 设备能力允许未来考虑重映射，不会执行 SDO 写入；本阶段对任何非 MATCH 结果都必须停止。
+ * 把 PRE-OP 只读发现的实际布局与所选 PDO 方案比较。
+ *
+ * MATCH：逐条相同。DEVICE_ADOPTED：逐条不同但能用（见上），运行方案依赖的字段一个不少。
+ * CONFIGURATION_REQUIRED：不能用，但设备声明自己可以重配，于是值得试一次改写。
+ * 返回 CONFIGURATION_REQUIRED 只表示设备能力允许未来考虑重映射，本函数不做 SDO 写入。
  */
 emaster_session_layout_status_t
 emaster_session_axis_validate_layout(const emaster_session_axis_plan_t *axis,

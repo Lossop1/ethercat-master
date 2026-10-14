@@ -27,7 +27,7 @@
                  不动；0 = 全部轴一起走（默认）。注意不是"少发几个数"——主站
                  按 count == 轴数 精确核对，所以其余轴照样每条命令都要带上，
                  只是值取起点，等于让它们原地保持
-  --dry-run      不连主站，只按参数生成目标、核对限幅并打印统计
+  --dry-run      不连主站，只按参数生成目标、核对整段位移在偏移上限之内并打印统计
 
 退出时停止发送，主站自动进入 HOLD（保持最后目标），不停机。
 
@@ -44,9 +44,6 @@ import time
 
 IDLE_TIMEOUT_S = 5.0
 TARGET_TIMEOUT_MS = 200
-# 往返模式的单步限幅裕量：实际可达更新频率低于标称值（每次命令一个往返），
-# 曲线按墙钟推进，频率越低单步越大。按标称值的这个比例估算，留出余量。
-RATE_MARGIN = 0.6
 
 
 class Client:
@@ -117,8 +114,8 @@ def parse_field(response, key):
     """从 OK|k=v k=v 形式的响应里取整数值。
 
     分隔符有两种：段内用逗号，段之间用竖线。只切逗号会让最后一个字段吞掉
-    后面的 "|a1:..."，例如 topology 的 max_step 会被解析成 "2548|a1:bus=1"
-    而取不到值——单步限幅因此在联机时被静默跳过。
+    后面的 "|a1:..."，例如 topology 的 max_offset 会被解析成 "114688|a1:bus=1"
+    而取不到值——偏移上限因此在联机时被静默跳过。
     """
     if not response.startswith("OK|"):
         return None
@@ -136,7 +133,7 @@ def parse_axis_positions(response):
     """取每轴实际位置，返回按总线位置排序的列表。"""
     positions = []
     for segment in response.split("|"):
-        # ":" 是轴段的标志，不能只看首字母：topology 的头一段是 "axes=1,max_step=..."
+        # ":" 是轴段的标志，不能只看首字母：topology 的头一段是 "axes=1,max_offset=..."
         # 也以 a 开头，只看首字母会在 split(":", 1)[1] 上抛 IndexError。
         if not segment.startswith("a") or ":" not in segment:
             continue
@@ -282,7 +279,7 @@ def axis_counts_per_degree(topology):
     原先却只取第一根、再套用到全部轴。台架可以混装不同减速比的电机——2026-09-29 的
     八轴档第 8 根就是 25:1、其余 28:1——拿第一根的换算去驱动全部轴，那一根的角度就
     悄悄偏了 12%：命令说 30°、它实际走 33.6°，而终端上打印的"位移"还是 30° 的那个数。
-    角度是主站侧的护栏与限幅的度量基准，这种偏差既看不出来也不会报错。
+    角度是本脚本自己算限幅与位移的度量基准，这种偏差既看不出来也不会报错。
 
     减速比字段是 "电机转数/输出轴转数"（如 gear=28/1）。
     """
@@ -350,42 +347,37 @@ def axis_deltas(axis_count, deltas, only):
     return result
 
 
-def check_step_limit(delta, traverse, rate, max_step):
-    """往返模式下按标称频率核对单步增量，必要时拉长单程时间。
+def check_offset_limit(delta, max_offset):
+    """核对整段位移是否落在主站的目标偏移上限之内。返回一句提示或 None。
 
-    返回 (traverse, message)。max_step 为 0 表示主站未启用单步限幅。
+    主站判的是 |目标 - 实际位置|。位移本身就超过上限时，终点目标无论多慢都会
+    被拒收——唯一的办法是把 --degrees 调小。max_offset 为 0 表示拓扑没给出上限。
     """
-    if max_step <= 0:
-        return traverse, None
-    span = max(abs(value) for value in delta)
-    if span == 0:
-        return traverse, None
-    per_update = span / (traverse * rate * RATE_MARGIN)
-    if per_update <= max_step:
-        return traverse, None
-    required = span / (max_step * rate * RATE_MARGIN)
-    return required, (f"[client] 单步 {per_update:.0f} counts 超过 max_step={max_step}，"
-                      f"单程时间 {traverse:.2f}s 拉长到 {required:.2f}s "
-                      f"（每步约 {span / (required * rate * RATE_MARGIN):.0f} counts）")
+    if max_offset <= 0:
+        return None
+    span = max((abs(value) for value in delta), default=0)
+    if span <= max_offset:
+        return None
+    return (f"[client] 位移 {span} counts 超过主站的偏移上限 max_offset={max_offset}，"
+            f"终点目标会被拒收；把 --degrees 调小")
 
 
 def dry_run(start, deltas, args):
-    """不连主站，按参数生成一个往返周期的目标序列并核对步长。"""
+    """不连主站，按参数生成一个往返周期的目标序列并核对偏移。"""
     phase_fn = sine_phase if args.wave == "sine" else triangle_phase
-    traverse, message = check_step_limit(deltas, args.traverse, args.rate, args.max_step)
+    message = check_offset_limit(deltas, args.max_offset)
     if message:
         print(message, flush=True)
     period = 1.0 / args.rate
     steps = max(1, int(traverse * args.rate * 2.0))
     prev = list(start)
-    max_step = 0
+    biggest = 0
     samples = []
     for index in range(steps + 1):
         t = index * period
         f = phase_fn(t, traverse)
         frame = [int(round(p + d * f)) for p, d in zip(start, deltas)]
-        step = max(abs(a - b) for a, b in zip(frame, prev))
-        max_step = max(max_step, step)
+        biggest = max(biggest, max(abs(a - b) for a, b in zip(frame, prev)))
         prev = frame
         if index % max(1, steps // 8) == 0 or index == steps:
             samples.append((t, f, frame))
@@ -393,12 +385,12 @@ def dry_run(start, deltas, args):
           f"样本数={steps + 1}")
     for t, f, frame in samples:
         print(f"[dry-run] t={t:7.3f}s phase={f:.4f} 目标={frame}")
-    print(f"[dry-run] 单步最大 {max_step} counts "
-          f"（max_step={args.max_step}，{'未启用限幅' if args.max_step <= 0 else '限内' if max_step <= args.max_step else '超限'})")
-    return max_step
+    print(f"[dry-run] 相邻目标最大增量 {biggest} counts"
+          f"（主站不限制这个；限制是 --degrees 折算出的位移与 max_offset 比）")
+    return message is None
 
 
-def run_reciprocate(client, start, delta, args, max_step):
+def run_reciprocate(client, start, delta, args):
     """连续往返：起点 <-> 起点+位移，直到次数用尽、总时长到点或连接中断。"""
     phase_fn = sine_phase if args.wave == "sine" else triangle_phase
     period = 1.0 / args.rate
@@ -406,7 +398,7 @@ def run_reciprocate(client, start, delta, args, max_step):
     t_next = base
     last_send = None
     max_gap = 0.0
-    max_step_sent = 0
+    max_increment = 0
     sent = 0
     rejected = 0
     prev_frame = list(start)
@@ -435,7 +427,7 @@ def run_reciprocate(client, start, delta, args, max_step):
                 max_gap = now - last_send
             last_send = now
             step = max(abs(a - b) for a, b in zip(frame, prev_frame))
-            max_step_sent = max(max_step_sent, step)
+            max_increment = max(max_increment, step)
             prev_frame = frame
 
             if not response.startswith("OK|"):
@@ -474,7 +466,8 @@ def run_reciprocate(client, start, delta, args, max_step):
           f"发出 {sent} 条（{sent / max(elapsed, 1e-9):.1f} 条/秒），被拒 {rejected} 条", flush=True)
     print(f"[client] 相邻目标间隔 最大 {max_gap * 1000:.1f} ms "
           f"（主站失活阈值 {TARGET_TIMEOUT_MS} ms）", flush=True)
-    print(f"[client] 单步最大 {max_step_sent} counts（上限 {max_step}）", flush=True)
+    print(f"[client] 相邻目标最大增量 {max_increment} counts"
+          f"（主站不限制这个）", flush=True)
     if stop_reason == "连接中断":
         # 主站侧结束（故障锁存或停机）：命令流的终点由主站的报告给出，客户端只报事实。
         print("[client] 命令流被主站中断，未跑满计划时长", flush=True)
@@ -500,9 +493,10 @@ def main():
     parser.add_argument("--traverse", type=float, default=3.0, help="往返单程耗时（秒）")
     parser.add_argument("--wave", choices=("triangle", "sine"), default="triangle")
     parser.add_argument("--total", type=float, default=0.0, help="往返总时长上限（秒）")
-    parser.add_argument("--max-step", type=int, default=2548,
-                        help="单步上限（counts），仅 --dry-run 使用；"
-                             "联机时以 topology 返回的 max_step 为准（默认 2548 = 2°@16384×28:1）")
+    parser.add_argument("--max-offset", type=int, default=114688,
+                        help="目标偏移上限（counts），仅 --dry-run 使用；"
+                             "联机时以 topology 返回的 max_offset 为准"
+                             "（默认 114688 = 90°@16384×28:1）")
     parser.add_argument("--report-interval", type=float, default=10.0,
                         help="打印目标/实际采样的间隔（秒），默认 10。"
                              "调小可以看到「轴从哪一刻起不再跟目标」，"
@@ -513,7 +507,7 @@ def main():
     parser.add_argument("--dry-run-axes", type=int, default=3,
                         help="仅 --dry-run 用：离线生成的轴数（默认 3）")
     parser.add_argument("--dry-run", action="store_true",
-                        help="不连主站，只生成目标并核对限幅")
+                        help="不连主站，只生成目标并核对整段位移在偏移上限之内")
     args = parser.parse_args()
 
     if args.rate <= 0 or 1.0 / args.rate >= TARGET_TIMEOUT_MS / 1000.0:
@@ -532,8 +526,7 @@ def main():
         which = "全部轴" if args.only <= 0 else f"只有第 {args.only} 轴"
         print(f"[dry-run] counts/度={per_degree:.2f} 位移={delta} counts "
               f"轴数={args.dry_run_axes} {which}", flush=True)
-        max_step = dry_run([0] * args.dry_run_axes, deltas, args)
-        return 0 if max_step <= args.max_step else 1
+        return 0 if dry_run([0] * args.dry_run_axes, deltas, args) else 1
 
     if args.socket_path is None:
         raise SystemExit("缺少套接字路径（--dry-run 可离线核对波形）")
@@ -555,45 +548,33 @@ def main():
                          [int(round(args.degrees * value)) for value in per_degree],
                          args.only)
     moving = [index + 1 for index, value in enumerate(deltas) if value != 0]
-    max_step = parse_field(topology, "max_step") or 0
+    max_offset = parse_field(topology, "max_offset") or 0
     # counts/度 与 位移 都按轴逐个打印：混装减速比时它们本来就不同，
     # 印一个数就等于把偏差藏起来。
     print(f"[client] counts/度={[round(value, 2) for value in per_degree]} "
-          f"位移={deltas} counts max_step={max_step} "
+          f"位移={deltas} counts max_offset={max_offset} "
           f"轴数={len(start)} 会动的是第 {moving} 轴", flush=True)
     print(f"[client] 起点={start}", flush=True)
+    message = check_offset_limit(deltas, max_offset)
+    if message:
+        print(message, flush=True)
 
     if args.cycles is not None:
-        traverse, message = check_step_limit(deltas, args.traverse,
-                                             args.rate, max_step)
-        if message:
-            print(message, flush=True)
-        args.traverse = traverse
         print(f"[client] 往返模式：{start} <-> "
               f"{[position + step for position, step in zip(start, deltas)]}，"
-              f"单程 {traverse:.2f}s，"
+              f"单程 {args.traverse:.2f}s，"
               f"波形 {args.wave}，"
               f"{'不限次数' if args.cycles == 0 else f'{args.cycles} 次'}",
               flush=True)
-        return run_reciprocate(client, start, deltas, args, max_step)
+        return run_reciprocate(client, start, deltas, args)
 
     targets = [position + step for position, step in zip(start, deltas)]
     print(f"[client] 终点={targets}", flush=True)
 
+    # 步长只由 --duration 与 --rate 定：主站不限制相邻目标之间的增量。起点到终点的
+    # 整段位移按**最大**的那一轴核（对主站的偏移上限），因为各轴位移不同（混装减速比）。
     period = 1.0 / args.rate
     steps = max(1, int(args.duration * args.rate))
-    # 单步限幅：主站在周期线程里按相邻两条目标之差判定，超限会判 MOTION_INVALID
-    # 并中止整个会话（协议 7.2 节）。步长按每次更新的增量折算，超过 max_step 时
-    # 拉长位移时间而不是拒绝。
-    # 限幅按**最大**的那一轴算：各轴位移不同（混装减速比），取最大的才不会被漏掉。
-    span = max((abs(value) for value in deltas), default=0)
-    if max_step > 0 and span > 0:
-        per_update = (span + steps - 1) // steps
-        if per_update > max_step:
-            steps = (span + max_step - 1) // max_step
-            period = max(period, args.duration / steps) if steps else period
-            print(f"[client] 单步 {per_update} counts 超过 max_step={max_step}，"
-                  f"改为 {steps} 步（每步约 {span // steps} counts）", flush=True)
     sent = 0
     errors = 0
     try:

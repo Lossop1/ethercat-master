@@ -116,7 +116,12 @@ static void set_client_timeout(int fd)
 static void *listen_thread(void *arg)
 {
     emaster_command_server_t *server = (emaster_command_server_t *)arg;
+    /*
+     * buffer 跨 read 保留：filled 是已收下、还没处理掉的字节数。半条命令会一直
+     * 躺在这里等下一次读补全，所以它不能是每次读都从头开始的临时空间。
+     */
     char buffer[512];
+    size_t filled = 0U;
 
     /*
      * 命令监听不是实时工作，但 pthread_create 会从主线程继承 SCHED_FIFO，不显式退
@@ -125,6 +130,8 @@ static void *listen_thread(void *arg)
      */
     (void)emaster_thread_leave_realtime("命令监听线程");
     ssize_t bytes_read;
+    char *newline;      /* 缓冲区里第一条命令的换行符位置 */
+    size_t line_len;    /* 那一条命令的长度，含换行符 */
     size_t queue_count; /* 锁内快照，供解锁后的 fprintf 使用 */
     emaster_command_t command;
     /* 开关读一次就够：环境变量在进程生命周期内不变，逐条命令去查等于把
@@ -170,6 +177,9 @@ static void *listen_thread(void *arg)
             current_client_fd = new_fd;
             pthread_mutex_unlock(&server->mutex);
             set_client_timeout(new_fd);
+            /* 换了客户端：上一个留下的半条命令再没有下文，不能拼给新客户端。 */
+            filled = 0U;
+            buffer[0] = '\0';
         }
 
         /* 读取命令前再次验证fd有效性（防止TOCTOU） */
@@ -181,30 +191,67 @@ static void *listen_thread(void *arg)
         }
         pthread_mutex_unlock(&server->mutex);
 
-        /* 读取命令（阻塞，受 SO_RCVTIMEO 限制） */
-        bytes_read = read(current_client_fd, buffer, sizeof(buffer) - 1U);
-        if (bytes_read <= 0)
+        /*
+         * 缓冲区里还没有一整行，就先读一段进来。
+         *
+         * 命令以 '\n' 结束，一次 read 可能带来零条、一条或多条。套接字流不保留写边界，
+         * 把 read 的返回值当成命令边界是错的：连发两条会粘成一条认不出的命令，一条
+         * 被拆成两次到的会变成两条错的。所以读进来的字节先攒着，按 '\n' 切，剩下的
+         * 半个留到下一次读补全。
+         */
+        if (memchr(buffer, '\n', filled) == NULL)
         {
-            /* EAGAIN/EWOULDBLOCK 表示超时：客户端已不再持有连接，回收以便下次连接。 */
-            bool timed_out = bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+            if (filled >= sizeof(buffer) - 1U)
+            {
+                /*
+                 * 攒满一整块还是没有换行：这一行不可能合法（真命令不到 100 字节）。
+                 * 丢掉并说出来——它是协议违例，不是客户端慢。
+                 */
+                if (server->stats.invalid_count != UINT64_MAX)
+                {
+                    ++server->stats.invalid_count;
+                }
+                fprintf(stderr, "警告：命令口收到超过 %zu 字节且没有换行，已丢弃\n",
+                        sizeof(buffer) - 1U);
+                filled = 0U;
+                buffer[0] = '\0';
+                continue;
+            }
 
-            pthread_mutex_lock(&server->mutex);
-            if (server->client_fd == current_client_fd)
+            /* 读取（阻塞，受 SO_RCVTIMEO 限制） */
+            bytes_read = read(current_client_fd, buffer + filled,
+                              sizeof(buffer) - 1U - filled);
+            if (bytes_read <= 0)
             {
-                close(server->client_fd);
-                server->client_fd = -1;
+                /* EAGAIN/EWOULDBLOCK 表示超时：客户端已不再持有连接，回收以便下次连接。 */
+                bool timed_out = bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK);
+
+                pthread_mutex_lock(&server->mutex);
+                if (server->client_fd == current_client_fd)
+                {
+                    close(server->client_fd);
+                    server->client_fd = -1;
+                }
+                pthread_mutex_unlock(&server->mutex);
+                /* 换了客户端，残留的半条命令再没有下文。 */
+                filled = 0U;
+                if (timed_out)
+                {
+                    fprintf(stderr, "[CMD_SERVER] Client idle for %ds, connection released\n",
+                            COMMAND_CLIENT_IDLE_TIMEOUT_S);
+                    fflush(stderr);
+                }
+                continue;
             }
-            pthread_mutex_unlock(&server->mutex);
-            if (timed_out)
-            {
-                fprintf(stderr, "[CMD_SERVER] Client idle for %ds, connection released\n",
-                        COMMAND_CLIENT_IDLE_TIMEOUT_S);
-                fflush(stderr);
-            }
+            filled += (size_t)bytes_read;
+            buffer[filled] = '\0';
+            /* 回循环开头再看一眼：这一读可能凑出了整行，也可能只补了半条。 */
             continue;
         }
 
-        buffer[bytes_read] = '\0';
+        newline = memchr(buffer, '\n', filled);
+        line_len = (size_t)(newline - buffer) + 1U; /* 含 '\n'，解析按老口径看长度 */
+        bytes_read = (ssize_t)line_len;
 
         /* 解析命令（简单文本协议：第一个单词是命令类型） */
         memset(&command, 0, sizeof(command));
@@ -274,6 +321,20 @@ static void *listen_thread(void *arg)
         {
             command.type = EMASTER_COMMAND_HALT;
             size_t payload_start = 5U;
+            size_t payload_len = (size_t)bytes_read - payload_start;
+            if (payload_len >= sizeof(command.payload))
+            {
+                payload_len = sizeof(command.payload) - 1U;
+            }
+            memcpy(command.payload, buffer + payload_start, payload_len);
+            command.payload[payload_len] = '\0';
+            command.payload[strcspn(command.payload, "\n")] = '\0';
+        }
+        else if (bytes_read >= 15 && strncmp(buffer, "recover_axis ", 13) == 0)
+        {
+            /* 注意：比较中包含空格分隔符。payload 是十进制轴号，范围由 handler 校验。 */
+            command.type = EMASTER_COMMAND_RECOVER_AXIS;
+            size_t payload_start = 13U;
             size_t payload_len = (size_t)bytes_read - payload_start;
             if (payload_len >= sizeof(command.payload))
             {
@@ -359,6 +420,15 @@ static void *listen_thread(void *arg)
                 fflush(stderr);
             }
         }
+
+        /*
+         * 这一条处理完了，把剩下的挪到缓冲区最前面——那可能是下一条命令的开头，
+         * 也可能是下一条的半截。filled 归零时必须把 buffer[0] 置成 '\0'，否则
+         * 下一轮 memchr 会在旧数据的长度之外找换行。
+         */
+        memmove(buffer, newline + 1, filled - line_len);
+        filled -= line_len;
+        buffer[filled] = '\0';
     }
 
     return NULL;

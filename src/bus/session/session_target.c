@@ -1,30 +1,40 @@
 #include "session_internal.h"
 
+#include <stdio.h>
 #include <string.h>
 
-static bool target_within_limits(
-    const emaster_control_session_axis_result_t *axis,
-    int32_t target)
-{
-    if (axis == NULL || !axis->software_position_limits_read)
-    {
-        return false;
-    }
-    /* 最小值等于最大值时，设备没有提供可用的位置区间。 */
-    if (axis->software_position_limit_min == axis->software_position_limit_max)
-    {
-        return true;
-    }
-    return target >= axis->software_position_limit_min &&
-           target <= axis->software_position_limit_max;
-}
+#include "emaster/motion/target_guard.h"
 
+/*
+ * 外部目标路径上唯一保留的判据。
+ *
+ * 这条路径原先有三道闸：软限位、力矩上限、单步限幅。三道都已删除，理由是同一个：
+ * 它们管的是"这个值合不合理"，而那属于客户端或上层；驱动器自己也有软限位与跟随
+ * 误差保护，主站再插一层只会多一层看不见的滞后，而且两边都不知道对方改了什么。
+ *
+ * 更具体的两条实证：
+ *   - 单步限幅比的是相邻两条**目标**的差。外部目标缓冲区是覆盖式最新值，客户端
+ *     发得多快就决定了每拍差多少，于是同一个配置在 200 Hz 与 1 kHz 下允许的速度
+ *     差四倍——"允许多快"本来就不是主站该定的数。
+ *   - 软限位检查用的是 607D 读回来的区间，那是**电机侧**计数区间，而客户端的
+ *     目标是同一套计数，看着对；但它的判据是"目标在不在区间内"，与客户端是否
+ *     跟得上无关，一台没回零过的轴会被它整会话打死。
+ *
+ * 保留的这一条是距离：|目标 - 当前实际位置| 逐轴比上限。它不看增量，所以与客户端
+ * 发送频率无关；正常快速跟随时目标本就贴着实际位置，不会误伤；只有符号翻转、
+ * 未初始化值、量纲错位这类才会撞上。判据本身在 src/motion/target_guard.c，
+ * 是纯函数，离线单测钉着它。
+ *
+ * 被拒不是失败：返回 TARGET_REJECTED，由调用方把这一条丢掉、会话继续跑。
+ */
 emaster_control_session_status_t emaster_soem_session_position_target_step(
     emaster_soem_session_t *session,
     bool *updated)
 {
     emaster_position_target_source_result_t source_result;
     size_t axis_index;
+    size_t offending_axis = 0U;
+    uint64_t offending_offset = 0U;
 
     if (session == NULL || session->plan == NULL || session->report == NULL ||
         session->position_target_source == NULL ||
@@ -65,52 +75,44 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
         return EMASTER_CONTROL_SESSION_MOTION_INVALID;
     }
 
-    /* 后验证：检查回调返回的所有目标 */
-    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+    /*
+     * 后验证：整条命令一起过判据。一条命令代表所有轴在同一时刻的目标，只放行其中
+     * 一部分会让轴与轴之间失去同步，所以拒就是整条拒。
+     *
+     * 上限逐轴来自会话建立时的折算（session_start.c），0 表示该轴不判。
+     */
+    if (emaster_target_guard_check(
+            session->position_target_source_targets, session->actual_positions,
+            session->external_target_limits_counts, session->plan->axis_count,
+            &offending_axis, &offending_offset) != EMASTER_TARGET_GUARD_OK)
     {
-        int32_t target = session->position_target_source_targets[axis_index];
-        const emaster_session_axis_plan_t *axis_plan = &session->plan->axes[axis_index];
-        int8_t mode = axis_plan->operation_mode != NULL ? axis_plan->operation_mode->value
-                                                        : INT8_C(0);
-
-        /* 软件限位检查 */
-        if (mode == INT8_C(8) && !target_within_limits(&session->axes[axis_index], target))
-        {
-            return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-        }
-
         /*
-         * C3：力矩模式（10）的上限，单位是额定力矩的千分比。模式 10 下前面两条位置
-         * 量纲的检查都失效（软限位本就不进门，单步限幅的阈值是 counts，±1000 永远
-         * 够不着），所以这是力矩唯一的数值护栏。超限与单步超限同判：MOTION_INVALID，
-         * 沿用 D4 已定的"整会话中止"语义。0 = 未配置，不启用。
+         * 现场每拍都刷新，计数只在"从放行进入被拒"那一次加一。
+         *
+         * 为什么计数不能按拍：缓冲区是覆盖式最新值，主站每拍都读到同一条坏目标。
+         * 1 kHz 下按拍计数，一个客户端发出去就不管的坏值会变成几百万次，那一列
+         * 就没有任何可读性。按"被拒的段"计，客户端反复发同一个坏值只算一次，
+         * 中间夹一条好目标再坏一次才算第二次——那才是"发生了几次"。
          */
-        if (mode == INT8_C(10) && session->torque_target_limit_per_mille > 0U)
+        session->report->target_rejection_axis = offending_axis;
+        session->report->target_rejection_offset_counts = offending_offset;
+        if (!session->target_rejection_active)
         {
-            int64_t limit = (int64_t)session->torque_target_limit_per_mille;
-            if ((int64_t)target > limit || (int64_t)target < -limit)
-            {
-                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-            }
+            session->target_rejection_active = true;
+            session->report->target_rejected_count += 1U;
+            /*
+             * 只在第一次打。这一条会以 1 kHz 重复（客户端不发新值就一直超距），
+             * 每拍打一行会把主站日志淹掉，而那正是要留给人看的东西。
+             */
+            fprintf(stderr,
+                    "[TARGET] 拒收外部目标：第 %zu 轴偏移 %llu counts 超过上限 %llu；"
+                    "该条目标未采纳，会话继续\n",
+                    offending_axis + 1U, (unsigned long long)offending_offset,
+                    (unsigned long long)(session->external_target_limits_counts != NULL
+                                             ? session->external_target_limits_counts[offending_axis]
+                                             : 0U));
         }
-
-        /* 单步限幅检查：拒绝相邻两条目标差超过阈值的命令。
-         * 必须与主站上一次写出的目标（607A 历史）比较，而非 PDO 读回的 6064。
-         * position_target_committed 为 false 时（首条目标尚未提交），target_positions
-         * 尚无有效历史基准，跳过检查；驱动器使能可能在任意周期才完成，
-         * 不能用 cycle_count > 0 代替。
-         * C4：阈值是位置计数，模式 10 下与目标量纲不同（千分比），跳过。 */
-        if (mode != INT8_C(10) && session->position_target_max_step_counts > 0U &&
-            session->position_target_committed)
-        {
-            int64_t delta = (int64_t)target -
-                            (int64_t)session->target_positions[axis_index];
-            uint64_t abs_delta = (uint64_t)(delta < 0 ? -delta : delta);
-            if (abs_delta > session->position_target_max_step_counts)
-            {
-                return EMASTER_CONTROL_SESSION_MOTION_INVALID;
-            }
-        }
+        return EMASTER_CONTROL_SESSION_TARGET_REJECTED;
     }
 
     /* 硬件写入：先验证所有轴写入成功 */
@@ -128,7 +130,7 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
     /* 状态提交：仅在所有硬件写入成功后更新会话状态 */
     memcpy(session->target_positions, session->position_target_source_targets,
            session->plan->axis_count * sizeof(*session->target_positions));
-    session->position_target_committed = true;
+    session->target_rejection_active = false;
 
     *updated = true;
     return EMASTER_CONTROL_SESSION_OK;

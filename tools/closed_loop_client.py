@@ -139,7 +139,7 @@ class LineReader:
 def counts_per_degree_from_topology(reply):
     """从 `topology` 的回复取每轴 1 度等于多少 counts，返回 {} 表示取不到。
 
-    回复形状：OK|axes=N,max_step=S|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|a2:...
+    回复形状：OK|axes=N,max_offset=S|a1:bus=B,enc=E1/E2,gear=G1/G2,torque=T|a2:...
     缺字段或分母为 0 就整体放弃 —— 宁可不算，也不要拿半个字段凑出一个数。
     """
     parts = reply.split("|")

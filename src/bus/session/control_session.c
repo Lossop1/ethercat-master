@@ -88,7 +88,10 @@ static emaster_control_session_status_t allocate_session(emaster_soem_session_t 
         {
             session->position_target_source_targets = calloc(
                 session->plan->axis_count, sizeof(*session->position_target_source_targets));
-            if (session->position_target_source_targets == NULL)
+            session->external_target_limits_counts = calloc(
+                session->plan->axis_count, sizeof(*session->external_target_limits_counts));
+            if (session->position_target_source_targets == NULL ||
+                session->external_target_limits_counts == NULL)
             {
                 status = EMASTER_CONTROL_SESSION_OUT_OF_MEMORY;
                 return status;
@@ -118,6 +121,7 @@ static void release_session(emaster_soem_session_t *session) {
     free(session->motion_axis_configs);
     free(session->motion_scales);
     free(session->target_positions);
+    free(session->external_target_limits_counts);
     free(session->position_target_source_targets);
     free(session->actual_positions);
     free(session->controller_outputs);
@@ -280,15 +284,8 @@ emaster_control_session_status_t emaster_soem_control_session(
         session->feedback_user_data = callbacks->feedback_user_data;
         session->position_target_source = callbacks->position_target_source;
         session->position_target_source_user_data = callbacks->position_target_source_user_data;
-        session->position_target_max_following_error_counts =
-            callbacks->position_target_max_following_error_counts;
-        session->position_target_max_step_counts =
-            callbacks->position_target_max_step_counts;
         session->external_target_buffer = callbacks->external_target_buffer;
     }
-    /* 力矩上限是部署的原始字段（不经回调折算），与错误恢复策略同样从计划里取。 */
-    session->torque_target_limit_per_mille =
-        plan->deployment->external_target_torque_limit_per_mille;
     session->transition_cycles =
         ((uint64_t)EC_TIMEOUTSTATE * UINT64_C(1000) + plan->cycle_ns - UINT64_C(1)) /
         plan->cycle_ns;

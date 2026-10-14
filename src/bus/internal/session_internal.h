@@ -108,18 +108,18 @@ typedef struct {
     emaster_control_session_position_target_source_t position_target_source;
     void *position_target_source_user_data;
     int32_t *position_target_source_targets;
-    /* 0 表示调用者未启用跟随误差检查；非零时每周期对比实际位置与上一目标。 */
-    uint64_t position_target_max_following_error_counts;
-    /* 0 表示调用者未启用单步限幅；非零时拒绝相邻目标差超过此值的命令。 */
-    uint64_t position_target_max_step_counts;
     /*
-     * 模式 10（CST）下的力矩上限，单位是额定力矩的千分比。0 表示未配置。
-     * 来自部署配置本身（plan->deployment），不经过回调——它是部署的原始事实，
-     * 不像跟随误差上限那样需要先按硬件参数折算。
+     * 逐轴的外部目标偏移上限（counts），由各轴的运行时 position_scale 折算而来，
+     * 长度与轴数相同。0 表示该轴不判（换算不可用）。判据本身在
+     * include/emaster/motion/target_guard.h，这里是它唯一的输入。
      */
-    uint32_t torque_target_limit_per_mille;
-    /* 至少已成功提交一条外部目标后置 true；用于单步限幅的基准有效性判断。 */
-    bool position_target_committed;
+    uint64_t *external_target_limits_counts;
+    /*
+     * report->target_rejected_count 数的是"被拒的段"而不是拍。外部目标缓冲区是
+     * 覆盖式最新值，主站每拍都读到同一条目标；没有这个跨周期标志，一个卡住的坏目标
+     * 会在 1 kHz 下被记成几百万次。
+     */
+    bool target_rejection_active;
     /* 错误恢复策略配置：从部署配置加载，与业务逻辑解耦 */
     const emaster_error_recovery_policy_t *error_recovery_policy;
     /* WKC 错误恢复计数器。连续段用联合计数，累计量改由下面两个滑动窗口承担。 */

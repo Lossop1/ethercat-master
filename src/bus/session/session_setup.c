@@ -5,6 +5,44 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "emaster/motion/relative_position.h"
+
+/*
+ * 外部目标偏移上限的内置默认值：90° 输出轴（负载侧）。
+ *
+ * 这个数不是限幅、不是速度限制，是一道"明显不合理"的闸：它的作用是拦住符号翻转、
+ * 未初始化值、量纲错位（把弧度当计数、把电机侧当负载侧）这类错误。真按它工作会让
+ * 主站变成限幅器，那不是它的活。90° 取的是台架往返用的 30° 的三倍——正常跟随永远
+ * 够不着，而任何量纲级别的错误都必然越过它。
+ *
+ * 部署键 external_target_max_offset_millidegrees 可以改它；配 0 即用这个默认值。
+ */
+#define EMASTER_EXTERNAL_TARGET_MAX_OFFSET_DEFAULT_MILLIDEGREES UINT32_C(90000)
+
+/*
+ * 设备档里声明的换算（conversion）落成运行时用的换算参数。
+ *
+ * 只在设备没有用 608F/6091 回答时调用；三项齐全才算声明过 —— 缺一项就不是换算，
+ * 是一半的换算，而一半的换算折算出来的计数看着像真的。encoder_motor_revolutions
+ * 固定为 1：608F:2 的语义是"多少个电机转对应 encoder_increments 个计数"，声明这一
+ * 路径下只有 1 有意义（写别的值等于把编码器不装在电机轴上这件事也算进去）。
+ */
+static void declared_position_scale(const emaster_slave_profile_t *profile,
+                                    emaster_position_scale_t *scale)
+{
+    if (profile == NULL || scale == NULL ||
+        profile->encoder_counts_per_motor_revolution_default == 0U ||
+        profile->gear_motor_revolutions_default == 0U ||
+        profile->gear_shaft_revolutions_default == 0U) {
+        return;
+    }
+    scale->source = EMASTER_FACT_SOURCE_CONFIGURED;
+    scale->encoder_increments = profile->encoder_counts_per_motor_revolution_default;
+    scale->encoder_motor_revolutions = 1U;
+    scale->gear_motor_revolutions = profile->gear_motor_revolutions_default;
+    scale->gear_shaft_revolutions = profile->gear_shaft_revolutions_default;
+}
+
 /*
  * 按配置声明的精确类型写入并立即读回，避免对象宽度由调用点猜测。
  * 返回成功只表示邮箱事务成功且读回值与配置值一致。
@@ -56,6 +94,46 @@ static bool write_and_verify_configured_sdo(emaster_soem_sdo_reader_context_t *s
     return false;
 }
 
+/*
+ * 同步管理（1C32/1C33）的同步类型：方案值写不进去，就试设备收得下的档。
+ *
+ * 方案里那个值是台架实测的，收不收由设备决定。写一个它不认的档，设备回的是
+ * 0x06090030「值超出范围」而不是"不支持"，照着配置硬写就只剩失败这一条路。
+ *
+ * 本来想问设备"支持哪些档"，但位图子索引（:03）不是每台设备都有 —— MT 台架实测读
+ * 它回 0x06010000（不支持访问对象）。所以改成直接试写：先方案值，再按"主站怎么驱动
+ * 就该怎么同步"的次序试 DC SYNC0、SM 同步、自由运行。收下的那一档读回来核对，
+ * 核对过了才算数，返回的就是设备实际停的那一档。
+ *
+ * 良质的方案值第一下就被收下，与从前一次写、一次读回完全一样。
+ */
+static bool place_sync_type(emaster_soem_sdo_reader_context_t *sdo, uint16_t index,
+                            uint16_t configured, uint16_t *used, bool *substituted) {
+    static const uint16_t candidates[] = {UINT16_C(0x0002), UINT16_C(0x0001), UINT16_C(0x0000)};
+    uint16_t observed = 0U;
+    size_t ordinal;
+
+    *substituted = false;
+    *used = configured;
+    if (emaster_soem_write_u16(sdo, index, UINT8_C(0x01), configured) &&
+        emaster_soem_read_u16(sdo, index, UINT8_C(0x01), &observed) && observed == configured) {
+        return true;
+    }
+    for (ordinal = 0U; ordinal < sizeof(candidates) / sizeof(candidates[0]); ++ordinal) {
+        if (candidates[ordinal] == configured) {
+            continue;
+        }
+        if (emaster_soem_write_u16(sdo, index, UINT8_C(0x01), candidates[ordinal]) &&
+            emaster_soem_read_u16(sdo, index, UINT8_C(0x01), &observed) &&
+            observed == candidates[ordinal]) {
+            *used = candidates[ordinal];
+            *substituted = true;
+            return true;
+        }
+    }
+    return false;
+}
+
 emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_session_t *session) {
     size_t axis_index;
     size_t io_map_capacity;
@@ -64,7 +142,6 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
     emaster_control_session_status_t status;
     emaster_discovered_slave_t *discovered = NULL;
     bool mapping_succeeded = false;
-    int i;
 
     memset(&session->context, 0, sizeof(session->context));
     if (!emaster_soem_interface_carrier(session->plan->deployment->ethercat_interface)) {
@@ -106,14 +183,6 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
     /* 执行拓扑映射 */
     mapping_succeeded = emaster_soem_session_map_topology(session, slave_count, discovered);
 
-    /* 警告未分配的从站 */
-    for (i = 0; i < slave_count; i++) {
-        if (!discovered[i].assigned) {
-            /* 未分配的从站：记录到审计日志但不失败 */
-            (void)discovered[i];  /* TODO: 添加到审计报告 */
-        }
-    }
-
     free(discovered);
 
     if (!mapping_succeeded) {
@@ -131,8 +200,10 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         uint16_t bus_position;
         const ec_slavet *slave;
         emaster_session_layout_status_t layout_status;
-        uint16_t sm2_value;
-        uint16_t sm3_value;
+        uint16_t sm2_chosen;
+        uint16_t sm3_chosen;
+        bool sm2_substituted;
+        bool sm3_substituted;
         int8_t mode_value;
         emaster_soem_sdo_reader_context_t sdo;
 
@@ -206,30 +277,77 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             layout_status =
                 emaster_session_axis_validate_layout(axis, &session->images[axis_index].layout);
         }
-        if (layout_status != EMASTER_SESSION_LAYOUT_MATCH ||
+        /*
+         * 分配选对了、映射表**条目**还对不上：设备声明的 PdoConfig 就是为这一步准备的。
+         * 走完上一段之后仍然不匹配，说明差别不在"用哪张表"而在"表里是什么"—— 厂商 ESI
+         * 与设备出厂默认的表可以逐条不同（MT 台架实测：ESI 第 7 条是假字节 0x2FFD，
+         * 设备映射 0x5FFE）。把条目按方案写下去，再重新发现一次。
+         */
+        if (layout_status == EMASTER_SESSION_LAYOUT_CONFIGURATION_REQUIRED &&
+            axis->device_profile->supports_pdo_configuration) {
+            emaster_soem_pdo_assignment_result_t configuration_result;
+
+            emaster_pdo_layout_destroy(&session->images[axis_index].layout);
+            if (!emaster_soem_configure_pdo_set_recorded(&sdo, axis->pdo_set,
+                                                         &configuration_result)) {
+                session->axes[axis_index].pdo_assignment_failed_index =
+                    configuration_result.failed_index;
+                session->axes[axis_index].pdo_assignment_failed_subindex =
+                    configuration_result.failed_subindex;
+                session->axes[axis_index].pdo_assignment_abort_code_available =
+                    configuration_result.abort_code_available;
+                session->axes[axis_index].pdo_assignment_abort_code =
+                    configuration_result.abort_code;
+                status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
+                return status;
+            }
+            if (!emaster_soem_discover_pdo_layout_recorded(&sdo,
+                                                           &session->images[axis_index].layout)) {
+                status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
+                return status;
+            }
+            layout_status =
+                emaster_session_axis_validate_layout(axis, &session->images[axis_index].layout);
+        }
+        /*
+         * 来到这里的第三种结果：逐条不同，但设备实际映射能用 —— 方向总长一致，运行方案
+         * 依赖的字段都在、位宽也对。按设备实际建映像，一个 SDO 都不写。
+         *
+         * 差异逐条记进报告：采用本身不拦会话，但"映像的字节来自哪张表"必须写出来，否则
+         * 没人知道主站认了什么。
+         */
+        if (layout_status == EMASTER_SESSION_LAYOUT_DEVICE_ADOPTED) {
+            session->axes[axis_index].pdo_device_mapping_adopted = true;
+            session->axes[axis_index].pdo_device_mapping_difference_count = (uint32_t)
+                emaster_slave_pdo_layout_differences(
+                    axis->pdo_set, &session->images[axis_index].layout,
+                    session->axes[axis_index].pdo_device_mapping_differences,
+                    EMASTER_CONTROL_SESSION_PDO_DIFFERENCE_SLOTS);
+        }
+        if ((layout_status != EMASTER_SESSION_LAYOUT_MATCH &&
+             layout_status != EMASTER_SESSION_LAYOUT_DEVICE_ADOPTED) ||
             !emaster_cia_process_image_init(axis, &session->images[axis_index])) {
             status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
             return status;
         }
         session->axes[axis_index].pdo_match = true;
 
-        if (!emaster_soem_write_u16(&sdo, UINT16_C(0x1C32), UINT8_C(0x01),
-                                    axis->operation_profile->sm2_sync_type) ||
-            !emaster_soem_write_u16(&sdo, UINT16_C(0x1C33), UINT8_C(0x01),
-                                    axis->operation_profile->sm3_sync_type) ||
+        if (!place_sync_type(&sdo, UINT16_C(0x1C32), axis->operation_profile->sm2_sync_type,
+                             &sm2_chosen, &sm2_substituted) ||
+            !place_sync_type(&sdo, UINT16_C(0x1C33), axis->operation_profile->sm3_sync_type,
+                             &sm3_chosen, &sm3_substituted) ||
             (!axis->pdo_set->mode_init_on_safeop_to_op &&
              !emaster_soem_write_i8(&sdo, UINT16_C(0x6060), UINT8_C(0x00),
                                     axis->operation_mode->value))) {
             status = EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED;
             return status;
         }
-        if (!emaster_soem_read_u16(&sdo, UINT16_C(0x1C32), UINT8_C(0x01), &sm2_value) ||
-            !emaster_soem_read_u16(&sdo, UINT16_C(0x1C33), UINT8_C(0x01), &sm3_value) ||
-            sm2_value != axis->operation_profile->sm2_sync_type ||
-            sm3_value != axis->operation_profile->sm3_sync_type ||
-            (!axis->pdo_set->mode_init_on_safeop_to_op &&
-             (!emaster_soem_read_i8(&sdo, UINT16_C(0x6060), UINT8_C(0x00), &mode_value) ||
-              mode_value != axis->operation_mode->value))) {
+        session->axes[axis_index].sm_sync_type_substituted = sm2_substituted || sm3_substituted;
+        session->axes[axis_index].sm2_sync_type_used = sm2_chosen;
+        session->axes[axis_index].sm3_sync_type_used = sm3_chosen;
+        if (!axis->pdo_set->mode_init_on_safeop_to_op &&
+            (!emaster_soem_read_i8(&sdo, UINT16_C(0x6060), UINT8_C(0x00), &mode_value) ||
+             mode_value != axis->operation_mode->value)) {
             status = EMASTER_CONTROL_SESSION_SDO_READBACK_FAILED;
             return status;
         }
@@ -240,6 +358,31 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         }
         emaster_session_observer_read_position_scale(&sdo,
                                                      &session->axes[axis_index].position_scale);
+        /*
+         * 设备不实现 608F/6091 时（对象字典里根本没有这两条），设备档里声明的换算接手。
+         *
+         * 这是"推不出来的字段由人和台架给"那条规矩的又一处：换算的分子（编码器每转
+         * 多少计数）与分母（减速比）是驱动器内部的事实，手册给不出或者不给，就只能由
+         * 拿到这台机器的人写进设备档。接手之后来源记为"设备档声明"，报告里与读回来的
+         * 分开写 —— 换一台设备时，哪一种来源都不该需要改代码。
+         */
+        if (session->axes[axis_index].position_scale.source == EMASTER_FACT_SOURCE_NONE)
+        {
+            declared_position_scale(axis->device_profile,
+                                    &session->axes[axis_index].position_scale);
+        }
+        /*
+         * 驱动器自己的跟随误差窗与超时（6065 / 6066）。只读回，不写。
+         *
+         * 主站不再自己做跟随误差判据，这条保护就成了整条链上唯一在守它的东西；它是否
+         * 存在、值是多少，只能靠这里读回来才可核对。读不回来只记 read=false，不拦会话。
+         */
+        session->axes[axis_index].following_error_window_read =
+            emaster_soem_read_u32(&sdo, UINT16_C(0x6065), UINT8_C(0),
+                                  &session->axes[axis_index].following_error_window);
+        session->axes[axis_index].following_error_timeout_read =
+            emaster_soem_read_u16(&sdo, UINT16_C(0x6066), UINT8_C(0),
+                                  &session->axes[axis_index].following_error_timeout);
         if (session->plan->motion_profile != NULL ||
             session->position_target_source != NULL) {
             session->axes[axis_index].software_position_limits_read =
@@ -250,17 +393,67 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             session->axes[axis_index].polarity_read =
                 emaster_soem_read_u8(&sdo, UINT16_C(0x607E), UINT8_C(0),
                                      &session->axes[axis_index].polarity);
-            if (!session->axes[axis_index].position_scale.read_succeeded ||
+            if (session->axes[axis_index].polarity_read) {
+                session->axes[axis_index].polarity_source = EMASTER_FACT_SOURCE_DEVICE;
+            } else if (axis->device_profile != NULL &&
+                       axis->device_profile->polarity_default >= 0) {
+                /* 设备不实现 607E：方向由设备档声明，报告里按"设备档声明"写。 */
+                session->axes[axis_index].polarity =
+                    (uint8_t)axis->device_profile->polarity_default;
+                session->axes[axis_index].polarity_source = EMASTER_FACT_SOURCE_CONFIGURED;
+            }
+            if (!emaster_position_scale_is_usable(
+                    &session->axes[axis_index].position_scale) ||
                 !session->axes[axis_index].software_position_limits_read ||
-                !session->axes[axis_index].polarity_read ||
+                session->axes[axis_index].polarity_source == EMASTER_FACT_SOURCE_NONE ||
                 session->axes[axis_index].software_position_limit_min >
                     session->axes[axis_index].software_position_limit_max) {
+                /*
+                 * 运动的前提是换算与方向都说得出来：换算来自 608F/6091 或设备档，
+                 * 方向来自 607E 或设备档。三条都没有就是"这台设备的计数与角度
+                 * 之间的对应关系没人知道"——此时不动，比按一个猜的系数动安全。
+                 */
                 status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
                 return status;
             }
             if (session->plan->motion_profile != NULL && axis->motion_axis == NULL) {
                 status = EMASTER_CONTROL_SESSION_MOTION_INVALID;
                 return status;
+            }
+            /*
+             * 外部目标的偏移上限在这里算，因为只有这里同时握着两样东西：本轴的
+             * 运行时 position_scale（上面刚读回来）和部署给的毫度值。
+             *
+             * 折算必须逐轴做。合同上第 8、12 席是 25:1、其余 28:1，同一角度折算
+             * 出来的 counts 差 12%；早先那版把首轴的系数套给所有轴，那是假逐轴。
+             *
+             * 折算不出来（608F/6091 没读回来、齿轮比为零、角度乘溢出）就把上限留成
+             * 0，该轴不判。报告里 offset_limit_checked 会如实标出这一点——不判和
+             * "上限为零"必须分得开。
+             */
+            {
+                uint32_t limit_millidegrees =
+                    session->plan->deployment->external_target_max_offset_millidegrees;
+                int64_t limit_counts = 0;
+
+                if (limit_millidegrees == 0U) {
+                    limit_millidegrees =
+                        EMASTER_EXTERNAL_TARGET_MAX_OFFSET_DEFAULT_MILLIDEGREES;
+                }
+                if (session->position_target_source != NULL &&
+                    session->external_target_limits_counts != NULL &&
+                    emaster_motion_angle_to_counts(
+                        (int32_t)limit_millidegrees, EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT,
+                        &session->axes[axis_index].position_scale, &limit_counts) &&
+                    limit_counts > 0) {
+                    session->external_target_limits_counts[axis_index] =
+                        (uint64_t)limit_counts;
+                    session->axes[axis_index].offset_limit_checked = true;
+                }
+                session->axes[axis_index].offset_limit_counts =
+                    session->external_target_limits_counts != NULL
+                        ? session->external_target_limits_counts[axis_index]
+                        : 0U;
             }
             if (session->plan->motion_profile == NULL)
             {
