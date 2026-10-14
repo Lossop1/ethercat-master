@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from esi_facts import load_esi_facts
@@ -16,11 +15,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=Path)
     args = parser.parse_args()
-    try:
-        report = load_esi_facts(args.input)
-    except (OSError, ET.ParseError, ValueError) as error:
-        print(error, file=sys.stderr)
-        return 1
+    # 读不了、不是 XML、是 XML 但不是 ESI，三种情形 load_esi_facts 都换成了一句说得
+    # 清的话再退出，所以这里不再接异常——接了也只是把同一句话再打印一遍。
+    report = load_esi_facts(args.input)
     json.dump(report, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
     return 0

@@ -48,9 +48,8 @@ static bool direction_matches(const emaster_pdo_mapping_profile_t *expected_mapp
             const emaster_pdo_entry_t *expected_entry = &expected->entries[entry_ordinal];
             const emaster_pdo_mapping_entry_t *observed_entry =
                 &observed->entries[entry_ordinal];
-            uint32_t descriptor = ((uint32_t)expected_entry->index << 16U) |
-                                  ((uint32_t)expected_entry->subindex << 8U) |
-                                  (uint32_t)expected_entry->bit_length;
+            uint32_t descriptor = emaster_pdo_mapping_descriptor(
+                expected_entry->index, expected_entry->subindex, expected_entry->bit_length);
 
             if (observed_entry->mapping_subindex != (uint8_t)(entry_ordinal + 1U) ||
                 observed_entry->raw_descriptor != descriptor ||
@@ -76,6 +75,76 @@ bool emaster_slave_pdo_set_layout_matches(const emaster_pdo_set_profile_t *pdo_s
                              pdo_set->rx_pdo_bytes, &actual->rx) &&
            direction_matches(pdo_set->tx_mappings, pdo_set->tx_mapping_count,
                              pdo_set->tx_pdo_bytes, &actual->tx);
+}
+
+/* 逐条比对，按位置对齐：第 n 条对第 n 条。多出来的按缺失记（描述符记 0）。 */
+static size_t collect_direction_differences(
+    const emaster_pdo_mapping_profile_t *expected_mappings, size_t expected_mapping_count,
+    const emaster_pdo_direction_layout_t *actual, emaster_pdo_layout_difference_t *out,
+    size_t capacity, size_t written)
+{
+    size_t mapping_ordinal;
+
+    if (actual == NULL)
+    {
+        return written;
+    }
+    for (mapping_ordinal = 0U; mapping_ordinal < expected_mapping_count; ++mapping_ordinal)
+    {
+        const emaster_pdo_mapping_profile_t *expected = &expected_mappings[mapping_ordinal];
+        const emaster_pdo_mapping_t *observed =
+            mapping_ordinal < actual->mapping_count ? &actual->mappings[mapping_ordinal] : NULL;
+        size_t entry_ordinal;
+
+        for (entry_ordinal = 0U; entry_ordinal < expected->entry_count; ++entry_ordinal)
+        {
+            const emaster_pdo_entry_t *expected_entry = &expected->entries[entry_ordinal];
+            uint32_t declared = emaster_pdo_mapping_descriptor(
+                expected_entry->index, expected_entry->subindex, expected_entry->bit_length);
+            uint32_t device = 0U;
+
+            if (observed != NULL && entry_ordinal < observed->entry_count)
+            {
+                device = observed->entries[entry_ordinal].raw_descriptor;
+            }
+            if (device != declared)
+            {
+                if (out != NULL && written < capacity)
+                {
+                    out[written].mapping_index = expected->index;
+                    out[written].subindex = (uint8_t)(entry_ordinal + 1U);
+                    out[written].declared_descriptor = declared;
+                    out[written].device_descriptor = device;
+                }
+                ++written;
+            }
+        }
+    }
+    return written;
+}
+
+size_t emaster_slave_pdo_layout_differences(const emaster_pdo_set_profile_t *pdo_set,
+                                            const emaster_pdo_layout_t *actual,
+                                            emaster_pdo_layout_difference_t *out,
+                                            size_t capacity)
+{
+    size_t written = 0U;
+
+    if (pdo_set == NULL || actual == NULL || actual->status != EMASTER_PDO_DISCOVERY_COMPLETE)
+    {
+        return 0U;
+    }
+    if (pdo_set->rx_mappings != NULL)
+    {
+        written = collect_direction_differences(pdo_set->rx_mappings, pdo_set->rx_mapping_count,
+                                                &actual->rx, out, capacity, written);
+    }
+    if (pdo_set->tx_mappings != NULL)
+    {
+        written = collect_direction_differences(pdo_set->tx_mappings, pdo_set->tx_mapping_count,
+                                                &actual->tx, out, capacity, written);
+    }
+    return written;
 }
 
 const emaster_pdo_set_profile_t *emaster_slave_pdo_set_by_id(

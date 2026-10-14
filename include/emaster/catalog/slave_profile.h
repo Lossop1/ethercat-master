@@ -141,8 +141,16 @@ typedef struct
     const char *reference_pdo_set_id;
     const emaster_pdo_set_profile_t *pdo_sets;
     size_t pdo_set_count;
-    /* 默认换算值来自设备资料，不能替代每台物理从站的指纹事实。 */
+    /*
+     * 设备资料给的换算与方向事实（设备档的 conversion）。设备实现了 608F/6091/607E
+     * 时以运行期读回为准，这三项只作对账；设备不实现这些对象时它们接手，报告写明
+     * 来源是"设备档声明"。缺省 0/0/-1 的含义是"资料里没有这条"，不是"每转 0 个计数"。
+     * polarity_default 是 607E 的取值 0/1，-1 表示设备档没声明方向。
+     */
     uint32_t encoder_counts_per_motor_revolution_default;
+    uint32_t gear_motor_revolutions_default;
+    uint32_t gear_shaft_revolutions_default;
+    int8_t polarity_default;
     /* 这是 ESI 的 CoE/PdoConfig 能力；为 false 时生命周期层不得尝试 SDO 重映射。 */
     /* PdoAssign 与 PdoConfig 是两个独立能力，不能混为一个开关。 */
     bool supports_pdo_assignment;
@@ -173,6 +181,27 @@ const emaster_pdo_set_profile_t *emaster_slave_pdo_set_by_id(
     const emaster_slave_profile_t *profile, const char *pdo_set_id);
 bool emaster_slave_pdo_set_layout_matches(const emaster_pdo_set_profile_t *pdo_set,
                                           const emaster_pdo_layout_t *actual);
+
+/* 设备实际映射里与设备档声明不同的一条，按位置对齐后逐条记下。 */
+typedef struct
+{
+    uint16_t mapping_index;
+    uint8_t subindex;
+    uint32_t declared_descriptor;
+    uint32_t device_descriptor;
+} emaster_pdo_layout_difference_t;
+
+/*
+ * 逐条列出"设备实际与设备档声明不同"的位置，供报告写明主站到底采用了什么。
+ * 返回差异总数（可能大于 capacity，实际写出的最多 capacity 条）。
+ *
+ * 有了这张清单，"按设备实际建映像"才不是一句无据的话：哪条不同、声明是什么、设备
+ * 是什么，报告里都看得到。差异本身不拦会话 —— 拦不拦由会话层的可用性判定说了算。
+ */
+size_t emaster_slave_pdo_layout_differences(const emaster_pdo_set_profile_t *pdo_set,
+                                            const emaster_pdo_layout_t *actual,
+                                            emaster_pdo_layout_difference_t *out,
+                                            size_t capacity);
 const emaster_pdo_set_profile_t *emaster_slave_reference_pdo_set(
     const emaster_slave_profile_t *profile);
 

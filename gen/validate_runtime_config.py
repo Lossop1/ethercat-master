@@ -558,7 +558,6 @@ def validate_motion_profiles(
                 axis_id = axis_id_value if non_empty_string(axis_id_value) else ""
                 relative_angle = axis.get("relative_angle_millidegrees")
                 following_error = axis.get("max_following_error_millidegrees")
-                max_step = axis.get("max_step_millidegrees")
                 expected_scale = axis.get("expected_position_scale")
                 check.require(bool(axis_id), f"运动方案 {profile_id} 的轴 ID 不能为空")
                 check.require(
@@ -576,24 +575,6 @@ def validate_motion_profiles(
                     and not isinstance(following_error, bool)
                     and 0 < following_error <= 0xFFFFFFFF,
                     f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数",
-                )
-                check.require(
-                    isinstance(max_step, int)
-                    and not isinstance(max_step, bool)
-                    and 0 < max_step <= 0xFFFFFFFF,
-                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限必须是正整数",
-                )
-                # 结构性约束：目标跳一步 S，跟随误差立刻就是 S。单步上限高于跟随
-                # 误差窗，等于让一条合法命令当场触发跟随误差保护。
-                check.require(
-                    not (
-                        isinstance(max_step, int)
-                        and not isinstance(max_step, bool)
-                        and isinstance(following_error, int)
-                        and not isinstance(following_error, bool)
-                        and max_step > following_error
-                    ),
-                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限不能大于跟随误差窗",
                 )
                 check.require(
                     isinstance(expected_scale, dict),
@@ -828,16 +809,16 @@ def validate_deployments(
             f"部署 {deployment_id} 的 external_target_timeout_ms 必须是 1..600000 的整数或 null",
         )
 
-        torque_limit = deployment.get("external_target_torque_limit_per_mille")
+        offset_limit = deployment.get("external_target_max_offset_millidegrees")
         check.require(
-            torque_limit is None
+            offset_limit is None
             or (
-                isinstance(torque_limit, int)
-                and not isinstance(torque_limit, bool)
-                and 1 <= torque_limit <= 1000
+                isinstance(offset_limit, int)
+                and not isinstance(offset_limit, bool)
+                and 0 <= offset_limit <= 3600000
             ),
-            f"部署 {deployment_id} 的 external_target_torque_limit_per_mille "
-            f"必须是 1..1000 的整数或 null",
+            f"部署 {deployment_id} 的 external_target_max_offset_millidegrees "
+            f"必须是 0..3600000 的整数或 null",
         )
 
         # 同一主机和 EtherCAT 网口允许出现多条部署记录：它们是互斥的启动方案，

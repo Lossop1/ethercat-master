@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from esi_facts import load_esi_facts  # noqa: E402
+from esi_facts import load_esi_facts, select_device  # noqa: E402
 
 # CiA 402 / CiA 301 规定的对象索引 → 主站内部使用的字段名。
 # 这张表是标准的一部分：换任何一台合规的 CiA 402 驱动器，同一索引的含义不变。
@@ -230,9 +230,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="从 ESI 推导设备档的硬件事实部分")
     parser.add_argument("esi", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--select",
+        help="ESI 里有多台设备时挑一台：清单里的序号（从 1 起），或 厂商ID:产品码:版本",
+    )
     args = parser.parse_args()
 
-    text = json.dumps(derive(load_esi_facts(args.esi)), ensure_ascii=False, indent=2)
+    facts = select_device(load_esi_facts(args.esi), args.select)
+    text = json.dumps(derive(facts), ensure_ascii=False, indent=2)
     if args.output is None:
         print(text)
     else:

@@ -338,8 +338,16 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
             "已安全。台架量准 0x6041 后填实。",
         )
 
-    # 缺省合法：厂商资料没给换算来源，是句实话；本仓也没有消费者读它
-    # （真正生效的换算是运动方案里每轴的值）。给了就必须完整。
+    # 缺省合法：厂商资料没给换算，是句实话。给了就必须完整 —— 一半的换算折算出来的
+    # 计数看着像真的。设备实现 608F/6091 时运行期以读回为准，这份声明只作对账；
+    # 设备不实现它们时（MT 的对象字典里就没有这两条）运行期用它，报告里写来源。
+    def positive_count(value: Any) -> bool:
+        return (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 < value <= 0xFFFFFFFF
+        )
+
     conversion = profile.get("conversion")
     if conversion is not None:
         check.require(
@@ -347,12 +355,32 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
             f"设备 {profile_id} 的 conversion 必须是对象",
         )
         if isinstance(conversion, dict):
-            encoder_counts = conversion.get("encoder_counts_per_motor_revolution_default")
             check.require(
-                isinstance(encoder_counts, int)
-                and not isinstance(encoder_counts, bool)
-                and 0 < encoder_counts <= 0xFFFFFFFF,
+                positive_count(conversion.get("encoder_counts_per_motor_revolution_default")),
                 f"设备 {profile_id} 的默认编码器计数必须是正整数",
+            )
+            # 减速比的两段是一件事：给一半等于没说，而按半份算出来的角度不会报错，
+            # 只会把轴按错误的系数动起来。要就两段都给，不给就整块别写。
+            if (
+                conversion.get("gear_motor_revolutions_default") is not None
+                or conversion.get("gear_shaft_revolutions_default") is not None
+            ):
+                check.require(
+                    positive_count(conversion.get("gear_motor_revolutions_default"))
+                    and positive_count(conversion.get("gear_shaft_revolutions_default")),
+                    f"设备 {profile_id} 的减速比两段必须都是正整数"
+                    "（gear_motor_revolutions_default / gear_shaft_revolutions_default）",
+                )
+            # -1 表示没声明，所以缺省与 607E 的合法取值 0/1 分得开。
+            polarity = conversion.get("polarity_default")
+            check.require(
+                polarity is None
+                or (
+                    isinstance(polarity, int)
+                    and not isinstance(polarity, bool)
+                    and polarity in (0, 1)
+                ),
+                f"设备 {profile_id} 的 polarity_default 只能是 0 或 1",
             )
 
     validate_slow_telemetry(check, profile, profile_id)

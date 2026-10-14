@@ -247,11 +247,22 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
         "revision": parse_unsigned(identity["revision"], "identity.revision", 0xFFFFFFFF),
         "reference_pdo_set_id": c_string(reference_id),
         "pdo_sets": pdo_values,
-        # 厂商资料没给换算期望时写 0：0 表示"没有这个事实"，不是"每转 0 个计数"。
-        # 这个字段全仓没有消费者，真正生效的换算是运动方案里每轴的值。
+        # 厂商资料没给换算期望时写 0 / -1：0 表示"没有这个事实"，不是"每转 0 个计数"。
+        # 设备实现了 608F/6091 时，运行期以读回为准，这三项只作对账；设备不实现它们时
+        # （MT 的对象字典里就没有），运行期用这三项，报告里写来源是"设备档声明"。
         "encoder_counts": 0
-        if conversion is None
+        if not conversion
         else int(conversion["encoder_counts_per_motor_revolution_default"]),
+        "gear_motor_revolutions": 0
+        if not conversion
+        else int(conversion.get("gear_motor_revolutions_default", 0)),
+        "gear_shaft_revolutions": 0
+        if not conversion
+        else int(conversion.get("gear_shaft_revolutions_default", 0)),
+        # -1 = 设备档没声明方向。607E 的合法取值是 0/1，所以 -1 不会与真值撞车。
+        "polarity": -1
+        if not conversion
+        else int(conversion.get("polarity_default", -1)),
         "supports_pdo_assignment": "true"
         if protocol.get("supports_pdo_assignment", False)
         else "false",
@@ -357,6 +368,9 @@ def profile_initializer(values: dict[str, object], ordinal: int) -> str:
         .pdo_sets = profile_{ordinal}_pdo_sets,
         .pdo_set_count = sizeof(profile_{ordinal}_pdo_sets) / sizeof(profile_{ordinal}_pdo_sets[0]),
         .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
+        .gear_motor_revolutions_default = UINT32_C({values['gear_motor_revolutions']}),
+        .gear_shaft_revolutions_default = UINT32_C({values['gear_shaft_revolutions']}),
+        .polarity_default = {values['polarity']},
         .supports_pdo_assignment = {values['supports_pdo_assignment']},
         .supports_pdo_configuration = {values['supports_pdo_configuration']},
         .supports_distributed_clocks = {values['supports_dc']},

@@ -626,7 +626,6 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             acceleration = axis.get("acceleration_millidegrees_per_second2", 0)
             deceleration = axis.get("deceleration_millidegrees_per_second2", 0)
             following_error = axis.get("max_following_error_millidegrees")
-            max_step = axis.get("max_step_millidegrees")
             velocity_error = axis.get("max_velocity_error_millidegrees_per_second", 0)
             expected_scale = axis.get("expected_position_scale")
             if axis_id in axis_ids:
@@ -668,22 +667,10 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 raise ValueError(
                     f"运动方案 {profile_id} 的轴 {axis_id} 跟随误差边界必须是正整数"
                 )
-            if (
-                not isinstance(max_step, int)
-                or isinstance(max_step, bool)
-                or not 0 < max_step <= 0xFFFFFFFF
-            ):
-                raise ValueError(
-                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限必须是正整数"
-                )
-            # 结构性约束，不是口味问题：目标一跳 S，跟随误差立刻就是 S。
-            # 单步上限高于跟随误差窗，等于让一条合法命令当场把跟随误差闸打跳。
-            if max_step > following_error:
-                raise ValueError(
-                    f"运动方案 {profile_id} 的轴 {axis_id} 单步上限 "
-                    f"({max_step} 毫度) 不能大于跟随误差窗 ({following_error} 毫度)："
-                    "目标跳一步就会立刻触发跟随误差保护"
-                )
+            # max_step_millidegrees 已删：它比的是相邻两条目标的差，于是同一个配置在
+            # 200 Hz 与 1 kHz 下允许的速度差四倍——那是客户端该定的数。这里不收它，
+            # 老配置里留着这个键也不再被读（运行时换成了 external_target_max_offset_
+            # millidegrees 的距离判据）。
             if not isinstance(expected_scale, dict):
                 raise ValueError(
                     f"运动方案 {profile_id} 的轴 {axis_id} 缺少 expected_position_scale"
@@ -715,7 +702,6 @@ def motion_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "acceleration_millidegrees_per_second2": acceleration,
                     "deceleration_millidegrees_per_second2": deceleration,
                     "max_following_error_millidegrees": following_error,
-                    "max_step_millidegrees": max_step,
                     "max_velocity_error_millidegrees_per_second": velocity_error,
                     "expected_position_scale": scale_values,
                 }
@@ -902,16 +888,21 @@ def deployment_values(
         if external_target_timeout_ms == 0:
             timeout_present = False
 
-        # 外部目标路径的力矩上限（额定力矩的千分比）。位置模式用不上它，
-        # null / 未配置 = 不启用——力矩模式下"没有上限"是一个明确的配置选择，
-        # 不是一个可以靠默认值蒙混过去的空缺，所以这里保留 exists 标志。
-        torque_limit_present, external_target_torque_limit_per_mille = (
-            optional_positive_integer(
-                document.get("external_target_torque_limit_per_mille"),
-                f"部署 {deployment_id} 的 external_target_torque_limit_per_mille",
-                1000,
+        # 外部目标的偏移上限（负载侧毫度）：|目标 - 当前实际位置| 超过它就把这一条
+        # 目标丢掉，会话继续。0 与"未配置"同义，都走内置默认值（90°）——与上面那条
+        # 超时同一个口径，不做"永不拒收"。
+        #
+        # 上限写死一个 3600° 的顶：这不是精度问题，是"这个数已经不是判据了"——
+        # 十圈以上的偏移不可能来自跟随，只可能来自量纲错位，而量纲错位正是它要拦的。
+        offset_present, external_target_max_offset_millidegrees = (
+            optional_non_negative_integer(
+                document.get("external_target_max_offset_millidegrees"),
+                f"部署 {deployment_id} 的 external_target_max_offset_millidegrees",
+                3600000,
             )
         )
+        if external_target_max_offset_millidegrees == 0:
+            offset_present = False
 
         # 报告历史副本保留份数。缺省即用默认值——绝大多数部署不需要显式写它，
         # 但"这个台架留多少轮证据"应当可以在部署里改，而不是重新编译。
@@ -951,8 +942,8 @@ def deployment_values(
                 "realtime_required": realtime_required,
                 "external_target_timeout_present": timeout_present,
                 "external_target_timeout_ms": external_target_timeout_ms,
-                "external_target_torque_limit_present": torque_limit_present,
-                "external_target_torque_limit_per_mille": external_target_torque_limit_per_mille,
+                "external_target_max_offset_present": offset_present,
+                "external_target_max_offset_millidegrees": external_target_max_offset_millidegrees,
                 "report_archive_keep": archive_keep,
             }
         )

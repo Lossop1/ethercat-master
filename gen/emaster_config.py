@@ -38,7 +38,7 @@ sys.path.insert(0, str(GEN_DIR / "device"))
 import merge_device_profile  # noqa: E402
 import validate_project  # noqa: E402
 from derive_device_facts import derive, module_mode_ids  # noqa: E402
-from esi_facts import load_esi_facts  # noqa: E402
+from esi_facts import load_esi_facts, select_device  # noqa: E402
 
 # CiA 402 各模式必须有的过程数据字段。这是标准定的，不是这台设备定的。
 # 生成运行方案时按这几条去设备档的 PDO 里核对，缺一条就说明这套映射跑不了这个模式。
@@ -145,17 +145,31 @@ def _file_stem(profile_id: str) -> str:
 
 
 def _resolve_esi(argument: str) -> Path:
-    """ESI 可以给文件，也可以给目录；给目录时里面必须只有一份 .xml。"""
+    """ESI 可以给文件，也可以给目录；给目录时里面必须只有一份 .xml。
+
+    **只认 .xml。** EDS（CANopen）不是 ESI，拿它进到这里，后面 `ElementTree` 会抛一个
+    裸的回溯，读的人得从栈里猜出"原来是不支持这种文件"——所以要在这里拦下来说清楚。
+    """
     path = Path(argument)
     if path.is_dir():
         candidates = sorted(path.glob("*.xml"))
-        if len(candidates) != 1:
+        if len(candidates) == 1:
+            return candidates[0]
+        others = sorted(path.glob("*.eds"))
+        if not candidates and others:
             raise SystemExit(
-                f"{path} 里有 {len(candidates)} 份 .xml，无法确定用哪一份；直接给出文件路径"
+                f"{path} 里只有 .eds，没有 .xml。EDS 是 CANopen 的设备描述，本项目读不了；"
+                "向厂商要 EtherCAT 的 ESI（XML）"
             )
-        return candidates[0]
+        raise SystemExit(
+            f"{path} 里有 {len(candidates)} 份 .xml，无法确定用哪一份；直接给出文件路径"
+        )
     if not path.is_file():
         raise SystemExit(f"找不到 ESI：{path}")
+    if path.suffix.lower() != ".xml":
+        hint = "EDS 是 CANopen 的设备描述，本项目读不了；向厂商要 EtherCAT 的 ESI（XML）" \
+            if path.suffix.lower() == ".eds" else "本项目只读 ESI（XML）"
+        raise SystemExit(f"{path} 不是 ESI（后缀 {path.suffix or '无'}）。{hint}")
     return path
 
 
@@ -210,7 +224,7 @@ def _pdo_set_draft(
 def add_device(args: argparse.Namespace) -> int:
     config = Path(args.config)
     esi_path = _resolve_esi(args.esi)
-    facts = load_esi_facts(esi_path)
+    facts = select_device(load_esi_facts(esi_path), getattr(args, "select", None))
     derived = derive(facts)
     profile_id = _profile_id(derived["identity"], derived["model"])
     stem = _file_stem(profile_id)
@@ -692,8 +706,12 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     add = sub.add_parser("add-device", help="厂商 ESI → 设备档（策略档照样给出）")
-    add.add_argument("esi", help="ESI 文件，或只装一份 .xml 的目录")
+    add.add_argument("esi", help="ESI 文件（XML），或只装一份 .xml 的目录")
     add.add_argument("--config", default="config", help="配置源目录，缺省 config")
+    add.add_argument(
+        "--select",
+        help="ESI 里有多台设备时挑一台：清单里的序号（从 1 起），或 厂商ID:产品码:版本",
+    )
     add.set_defaults(handler=add_device)
 
     site = sub.add_parser("init-site", help="现场参数 → 拓扑、运行方案和部署")

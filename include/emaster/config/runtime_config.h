@@ -135,18 +135,6 @@ typedef struct
     uint32_t acceleration_millidegrees_per_second2;
     uint32_t deceleration_millidegrees_per_second2;
     uint32_t max_following_error_millidegrees;
-    /*
-     * 相邻两条外部目标之间允许的最大增量（负载侧毫度，换算成 counts 后使用）。
-     * 它与 max_following_error_millidegrees 是**两个独立的闸**，不要合并：
-     *   - 这一条管"命令合不合理"——上一条写出的 607A 与这一条的差；
-     *   - 那一条管"轴跟没跟上"——实际位置与已提交目标的差。
-     * 两者有量级关系而非相等关系：目标跳 S 之后，跟随误差立刻就是 S，
-     * 所以上限必须满足 跟随误差窗 ≥ 单步上限，否则一条合法的大步进会当场把
-     * 跟随误差闸打跳。要收紧跟随误差窗，就必须先收紧单步上限，而单步上限
-     * 的下限由外部控制器的**发送频率**决定（50 Hz 裸发满量程摆动的单步是
-     * 40°，1 kHz 插值后每拍只有 2°）。详见 docs/requirements/layering-plan.md P12.22/P12.27。
-     */
-    uint32_t max_step_millidegrees;
     uint32_t max_velocity_error_millidegrees_per_second;
     /* 执行前必须与当前物理从站的 608F/6091 读回完全一致。 */
     uint32_t expected_encoder_increments;
@@ -239,14 +227,19 @@ typedef struct
      */
     uint32_t external_target_timeout_ms;
     /*
-     * 外部目标路径的力矩上限，单位是额定力矩的千分比（CiA402 6071/6076 的口径）。
-     * 0 表示不启用——位置模式下这个字段没有意义，也从不用到。
+     * 外部目标的偏移上限（负载侧毫度）：|目标 - 当前实际位置| 超过它就把这一条
+     * 目标丢掉。0 表示使用内置默认值（90°）。
      *
-     * 力矩模式下它是唯一的数值护栏：位置模式有软限位和单步限幅兜着，力矩那些
-     * 位置量纲的阈值一个也拦不住（±1000 千分比永远够不着 6400 counts 的门槛），
-     * 上限不配就等于把额定力矩的整幅直接交给客户端。
+     * 这不是限幅，也不是速度限制。主站不裁剪客户端给的值，也不替它规划；它只拦
+     * "明显不合理"——符号翻转、未初始化值、量纲错位。判据是**距离**而不是增量，
+     * 所以与客户端发送频率无关；上限按每轴自己的 608F/6091 读回值折算，所以 25:1
+     * 与 28:1 的轴各有各的线。
+     *
+     * 触发的后果是拒收这一条，不是中止会话：其余轴照常跑，计数与现场进报告。
+     * 这里原先还有一个 external_target_torque_limit_per_mille（CST 的力矩上限），
+     * 已删——力矩上限和位置限幅一样属于"这个值合不合理"，那是客户端与驱动器的活。
      */
-    uint32_t external_target_torque_limit_per_mille;
+    uint32_t external_target_max_offset_millidegrees;
 } emaster_deployment_config_t;
 
 /* 以下接口只返回生成目录中的只读对象，调用者不得释放或修改返回值。 */

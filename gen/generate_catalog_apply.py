@@ -49,6 +49,9 @@ def catalog_rows(values: list[dict[str, Any]]) -> list[tuple[str, str]]:
             (f"{base}.identity.revision", f"0x{profile['revision']:08X}"),
             (f"{base}.reference_pdo_set_id", raw(profile["reference_pdo_set_id"])),
             (f"{base}.encoder_counts", str(profile["encoder_counts"])),
+            (f"{base}.gear_motor_revolutions", str(profile["gear_motor_revolutions"])),
+            (f"{base}.gear_shaft_revolutions", str(profile["gear_shaft_revolutions"])),
+            (f"{base}.polarity", str(profile["polarity"])),
             (f"{base}.supports_pdo_assignment", profile["supports_pdo_assignment"]),
             (f"{base}.supports_pdo_configuration", profile["supports_pdo_configuration"]),
             (f"{base}.supports_distributed_clocks", profile["supports_dc"]),
@@ -373,6 +376,24 @@ def render(values: list[dict[str, Any]]) -> str:
     ]
     L += field("base", "encoder_counts") + [
         "    if (!emaster_config_reader_u32(reader, leaf, &out->encoder_counts_per_motor_revolution_default)) { return false; }"
+    ]
+    for name, target in (("gear_motor_revolutions", "out->gear_motor_revolutions_default"),
+                         ("gear_shaft_revolutions", "out->gear_shaft_revolutions_default")):
+        L += field("base", name) + [
+            f"    if (!emaster_config_reader_u32(reader, leaf, &{target})) {{ return false; }}"
+        ]
+    # 方向是 int8：-1 表示设备档没声明，与 607E 的合法取值 0/1 分得开，所以按有符号读。
+    L += field("base", "polarity") + [
+        "    {",
+        "        int32_t signed_number;",
+        "        if (!emaster_config_reader_i32(reader, leaf, &signed_number)) { return false; }",
+        "        if (signed_number < -1 || signed_number > 1)",
+        "        {",
+        "            emaster_config_reader_note_failure(\"方向不是 -1/0/1\");",
+        "            return false;",
+        "        }",
+        "        out->polarity_default = (int8_t)signed_number;",
+        "    }",
     ]
     for name, target in (("supports_pdo_assignment", "out->supports_pdo_assignment"),
                          ("supports_pdo_configuration", "out->supports_pdo_configuration"),

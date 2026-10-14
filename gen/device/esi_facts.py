@@ -314,12 +314,90 @@ def extract_esi_facts(
     return report
 
 
-def load_esi_facts(path: Path) -> dict[str, Any]:
-    """读取 ESI 文件并生成带 SHA-256 的只读事实报告。"""
-    content = path.read_bytes()
-    root = ET.fromstring(content)
-    return extract_esi_facts(
-        root,
-        source_path=path.as_posix(),
-        source_sha256=hashlib.sha256(content).hexdigest(),
+def device_label(index: int, entry: dict[str, Any]) -> str:
+    """一台设备在"请挑一台"清单里的那一行。序号从 1 起，与 --select 收的值一致。"""
+    device = entry.get("device") or {}
+    return "%d. %s  厂商 %s  产品 %s  版本 %s" % (
+        index + 1,
+        device.get("model") or device.get("device_name") or "（无名）",
+        device.get("vendor_id"),
+        device.get("product_code"),
+        device.get("revision"),
     )
+
+
+def select_device(facts: dict[str, Any], selector: str | None = None) -> dict[str, Any]:
+    """把一份 ESI 事实报告收敛到**一台**设备上，形状与单设备 ESI 相同。
+
+    一份 ESI 可以描述同一个厂商的整个产品线。单设备时 `extract_esi_facts` 会把那台
+    的字段铺到顶层，多设备时只有 `devices` 数组——下游一律读顶层，于是多设备 ESI 会在
+    一个 `KeyError: 'device'` 上炸掉，读的人从回溯里看不出"原来是这份 ESI 里有很多台，
+    得挑一台"。
+
+    `selector` 收两种写法：序号（照清单里那个，从 1 起），或
+    `厂商ID:产品码:版本`（大小写与 `0x` 前缀都不计较）。挑不中一律 SystemExit。
+    """
+    devices = facts.get("devices") or []
+    if not devices:
+        raise SystemExit("这份 ESI 里没有 Device")
+    if len(devices) == 1:
+        if "device" not in facts:
+            return {**facts, **devices[0]}
+        return facts
+
+    if selector is None:
+        listing = "\n".join(device_label(index, entry) for index, entry in enumerate(devices))
+        raise SystemExit(
+            f"这份 ESI 里有 {len(devices)} 台设备，用 --select 指定一台：\n{listing}"
+        )
+
+    if selector.isdigit():
+        index = int(selector) - 1
+        if 0 <= index < len(devices):
+            return {**facts, **devices[index]}
+        raise SystemExit(f"--select {selector} 超出范围：这份 ESI 有 {len(devices)} 台")
+
+    wanted = selector.lower().replace("0x", "")
+    for entry in devices:
+        device = entry.get("device") or {}
+        identity = "%s:%s:%s" % (
+            str(device.get("vendor_id", "")).lower().replace("0x", ""),
+            str(device.get("product_code", "")).lower().replace("0x", ""),
+            str(device.get("revision", "")).lower().replace("0x", ""),
+        )
+        if wanted in (identity, str(device.get("model", "")).lower()):
+            return {**facts, **entry}
+    listing = "\n".join(device_label(index, entry) for index, entry in enumerate(devices))
+    raise SystemExit(f"--select {selector} 对不上这份 ESI 里的任何一台：\n{listing}")
+
+
+def load_esi_facts(path: Path) -> dict[str, Any]:
+    """读取 ESI 文件并生成带 SHA-256 的只读事实报告。
+
+    解析失败一律换成一句说得清的 SystemExit。`ElementTree` 的异常只有行列号和一句
+    "not well-formed"，读的人从中看不出是文件没给对还是内容真坏了。三种情形分开说：
+    文件不是 XML、XML 但不是 ESI、XML 但不完整。
+    """
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise SystemExit(f"读不了 {path}：{error}") from None
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError as error:
+        suffix = path.suffix.lower()
+        hint = ("EDS 是 CANopen 的设备描述，本项目读不了；向厂商要 EtherCAT 的 ESI（XML）"
+                if suffix == ".eds" else "本工具只读 ESI（XML）")
+        if suffix != ".xml":
+            raise SystemExit(f"{path} 不是 ESI（后缀 {suffix or '无'}）。{hint}") from None
+        raise SystemExit(f"{path} 不是一份能读的 XML：{error}") from None
+
+    try:
+        facts = extract_esi_facts(
+            root,
+            source_path=path.as_posix(),
+            source_sha256=hashlib.sha256(content).hexdigest(),
+        )
+    except ValueError as error:
+        raise SystemExit(f"{path} 是一份 XML，但不是 ESI：{error}") from None
+    return facts

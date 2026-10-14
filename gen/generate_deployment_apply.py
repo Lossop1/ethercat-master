@@ -76,7 +76,8 @@ def deployment_rows(deployments: list[dict[str, Any]]) -> list[tuple[str, str]]:
             (f"{base}.realtime_cpu_core", str(d["realtime_cpu_core"])),
             (f"{base}.realtime_required", "true" if d["realtime_required"] else "false"),
             (f"{base}.external_target_timeout_ms", str(d["external_target_timeout_ms"])),
-            (f"{base}.external_target_torque_limit_per_mille", str(d["external_target_torque_limit_per_mille"])),
+            (f"{base}.external_target_max_offset_millidegrees",
+             str(d["external_target_max_offset_millidegrees"])),
             (f"{base}.topology_id", d["topology"]),
             (f"{base}.operation_profile_ids.count", str(len(d["operation_profile_ids"]))),
         ]
@@ -277,8 +278,8 @@ def render(deployments: list[dict[str, Any]]) -> str:
     out += read_signed_field("realtime_cpu_core", "out->realtime_cpu_core")
     out += read_flag_field("realtime_required", "out->realtime_required")
     out += read_num_field("external_target_timeout_ms", "out->external_target_timeout_ms")
-    out += read_num_field("external_target_torque_limit_per_mille",
-                          "out->external_target_torque_limit_per_mille")
+    out += read_num_field("external_target_max_offset_millidegrees",
+                          "out->external_target_max_offset_millidegrees")
     out += read_str_field("topology_id", "text")
     out += [
         "    out->topology = find_topology(text);",
