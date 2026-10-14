@@ -468,6 +468,11 @@ def run_reciprocate(client, start, delta, args):
           f"（主站失活阈值 {TARGET_TIMEOUT_MS} ms）", flush=True)
     print(f"[client] 相邻目标最大增量 {max_increment} counts"
           f"（主站不限制这个）", flush=True)
+    if sent > 0 and rejected == sent:
+        # 全被拒 = 主站没收到任何一条目标，轴一步没动。这时"间隔没超 200ms"照样成立，
+        # 只看空档会把"没跑"报成"跑好了"。全部被拒是独立的失败，单独占一个退出码。
+        print("[client] 全部目标被拒收：这一轮一条目标都没生效，轴不会动", flush=True)
+        return 4
     if stop_reason == "连接中断":
         # 主站侧结束（故障锁存或停机）：命令流的终点由主站的报告给出，客户端只报事实。
         print("[client] 命令流被主站中断，未跑满计划时长", flush=True)

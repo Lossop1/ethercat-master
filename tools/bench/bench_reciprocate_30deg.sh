@@ -36,7 +36,8 @@
 #                就没了（P12.1 修好后如此）。
 #
 # 退出码：0 = 客户端跑满且命令流连续；1 = 命令流出现过 200ms 空档；2 = 主站中途
-#         中断了命令流；3 = P12.1 端到端判据失败（命令口 shutdown 没让主站退出）。
+#         中断了命令流；3 = P12.1 端到端判据失败（命令口 shutdown 没让主站退出）；
+#         4 = 目标全被拒收（这一轮轴根本没动，等同没跑）。
 #
 # 报告路径取自部署配置的 run_report_path，无需另行指定。
 
@@ -165,9 +166,8 @@ else
     echo "注意：没有网卡名或找不到 $DISABLE_BIN，跳过起主站前的停用"
 fi
 
-# OBS_PREFIX 为空时下面那行就是原样的命令行；为 "env EMASTER_OBSERVATION=1" 时
-# 由 env 把开关递进主站的环境。不写成 "$OBS_PREFIX ./build/..." 是因为空字符串会
-# 展开成一个空参数，主站会把它当成可执行文件名（P12.11 在 gui_e2e 上踩过这个）。
+# 要观测口就经 env 把开关递进主站的环境。不写成 "$OBS_PREFIX ./build/..." 是因为
+# 空字符串会展开成一个空参数，主站会把它当成可执行文件名（P12.11 在 gui_e2e 上踩过）。
 if [ "$OBSERVATION" = "1" ]; then
     env EMASTER_OBSERVATION=1 $BUILD/apps/master/emaster-master --deployment "$DEPLOYMENT" > "$LOG" 2>&1 &
 else
@@ -215,7 +215,7 @@ python3 -u "$REPO/tools/bench/test_external_motion_client.py" "$SOCK" \
     --report-interval "$REPORT_INTERVAL" --only "$ONLY_AXIS" \
     > "$CLIENT_LOG" 2>&1
 CLIENT_RC=$?
-echo "客户端退出码=$CLIENT_RC（0=跑满时长且命令流连续，1=出现过 200ms 空档，2=主站中断了命令流）"
+echo "客户端退出码=$CLIENT_RC（0=跑满时长且命令流连续，1=出现过 200ms 空档，2=主站中断了命令流，4=目标全被拒、轴没动）"
 tail -6 "$CLIENT_LOG"
 
 echo ""
