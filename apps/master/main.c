@@ -256,8 +256,7 @@ static bool install_rt_primitives(const emaster_deployment_config_t *deployment)
     cpu_set_t cpuset;
     bool failed = false;
 
-    /* mlockall 不受 realtime 块控制：不管绑不绑核、设不设优先级，控制周期都不该被
-     * 换页打断，这是全有或全无的一条。它是否"声明过"不改变它该不该失败即中止。 */
+    /* mlockall 不受 realtime 块控制：绑不绑核、设不设优先级，控制周期都不该被换页打断。 */
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
         perror("mlockall");
         failed = true;
@@ -277,18 +276,12 @@ static bool install_rt_primitives(const emaster_deployment_config_t *deployment)
     if (deployment->has_realtime_cpu_core) {
         const int32_t requested_core = deployment->realtime_cpu_core;
 
-        /*
-         * 先挡住越界编号。CPU_SET 对 >= CPU_SETSIZE 的下标是**越界写**，不是返回错误：
-         * 配置里一个手滑的 9999 会先破坏栈再谈什么降级。CPU_SETSIZE 是 glibc 的
-         * 编译期常量，这里按它判，不按实际核数判。
-         */
+        /* CPU_SET 对 >= CPU_SETSIZE 的下标是越界写，不是返回错误，先挡住。 */
         if (requested_core < 0 || requested_core >= CPU_SETSIZE) {
             fprintf(stderr, "[RT] CPU 核编号 %d 超出可表示范围（0..%d），未绑定\n",
                     (int)requested_core, (int)(CPU_SETSIZE - 1));
             failed = true;
         } else {
-            /* 过了上界检查才转无符号：CPU_SET 内部按下标除以每字位数，传有符号数会
-             * 触发 -Wsign-conversion（内核宏里的下标是无符号的）。 */
             const size_t core = (size_t)requested_core;
 
             CPU_ZERO(&cpuset);
@@ -304,11 +297,25 @@ static bool install_rt_primitives(const emaster_deployment_config_t *deployment)
 
     if (!failed) {
         if (deployment->has_realtime_priority || deployment->has_realtime_cpu_core) {
-            fprintf(stderr, "[RT] 已应用：mlockall + %s%s%s\n",
-                    deployment->has_realtime_priority ? "SCHED_FIFO" : "",
-                    (deployment->has_realtime_priority &&
-                     deployment->has_realtime_cpu_core) ? " + " : "",
-                    deployment->has_realtime_cpu_core ? "绑定指定核" : "");
+            /* 两个字段各说各的实况：只声明优先级时不能只报"已应用 SCHED_FIFO"，
+             * 那样读的人会以为亲和也配好了。没声明的项写成"未声明"。 */
+            char priority_text[48];
+            char affinity_text[48];
+
+            if (deployment->has_realtime_priority) {
+                (void)snprintf(priority_text, sizeof(priority_text), "SCHED_FIFO %d",
+                               (int)deployment->realtime_priority);
+            } else {
+                (void)snprintf(priority_text, sizeof(priority_text), "未声明");
+            }
+            if (deployment->has_realtime_cpu_core) {
+                (void)snprintf(affinity_text, sizeof(affinity_text), "CPU %d",
+                               (int)deployment->realtime_cpu_core);
+            } else {
+                (void)snprintf(affinity_text, sizeof(affinity_text), "未声明");
+            }
+            fprintf(stderr, "[RT] 已应用：mlockall；调度 %s；亲和 %s\n", priority_text,
+                    affinity_text);
         } else {
             /* 没声明任何实时参数不是失败，但必须说出来：报告里的 thread_schedstat
              * 会显示 policy=0 且亲和掩码是全集，别让人以为那是没配好。 */

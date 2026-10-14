@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -708,6 +709,22 @@ static void capture_thread_schedstat(emaster_control_session_report_t *report)
             (void)fclose(stream);
         }
         /*
+         * /proc/<tid>/sched 的 prio 是内核的静态优先级，不是配置里写的那个数：RT 线程
+         * 报成 99 − rt_priority，非 RT 报成 120 + nice。照抄进报告的话，部署里写的
+         * SCHED_FIFO 80 会显示成 19，读报告的人只会得出"优先级没设上"这一条错结论。
+         *
+         * 换回配置侧的口径：RT 线程给 rt_priority，非 RT 给 0（0 就是"没有实时优先级"）。
+         * 判据不变——policy 与 cpus_allowed 照旧是内核的实况。
+         */
+        if (row->policy == SCHED_FIFO || row->policy == SCHED_RR)
+        {
+            row->priority = 99 - row->priority;
+        }
+        else
+        {
+            row->priority = 0;
+        }
+        /*
          * 亲和掩码取自 status 而非 sched：sched 里没有这一项，而且 Cpus_allowed
          * （十六进制掩码）与 Cpus_allowed_list（"0-11" 这种列表）是两行，后者才有
          * 人能直接读的形式。比较 18 个字符，刚好把 "Cpus_allowed:" 排除在外。
@@ -1315,7 +1332,7 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
          ++row_index) {
         const emaster_thread_schedstat_t *row = &session->report->thread_schedstat[row_index];
 
-        printf("[SHUTDOWN] 线程 tid=%u policy=%d prio=%d 运行 %.3f s 排队等待 %.3f ms 切换 %"
+        printf("[SHUTDOWN] 线程 tid=%u policy=%d rt_prio=%d 运行 %.3f s 排队等待 %.3f ms 切换 %"
                PRIu64 " 次\n",
                row->tid, row->policy, row->priority, (double)row->exec_ns / 1e9,
                (double)row->wait_ns / 1e6, row->switches);
