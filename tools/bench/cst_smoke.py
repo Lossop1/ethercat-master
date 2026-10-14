@@ -229,11 +229,13 @@ def load_plan(args):
     客户端与驱动器的活。**所以现在没有任何一层会替这次冒烟把关，上限只能由
     操作者当场声明**，不给就不跑。
     """
+    repo_root = pathlib.Path(args.repo).resolve() if args.repo else REPO_ROOT
     deployment = find_config_document(
-        str(REPO_ROOT), "deployments", "deployment_id", args.deployment)
+        str(repo_root), "deployments", "deployment_id", args.deployment)
     if deployment is None:
-        raise SystemExit(f"找不到部署 {args.deployment}（config/deployments/）")
-    mode = deployment_selected_mode(str(REPO_ROOT), args.deployment)
+        raise SystemExit(
+            f"找不到部署 {args.deployment}（{repo_root}/config/deployments/）")
+    mode = deployment_selected_mode(str(repo_root), args.deployment)
     if mode != "cst":
         raise SystemExit(
             f"这个部署选的是 {mode or '(读不出模式)'} 模式，不是 cst。"
@@ -297,6 +299,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="CST 常值力矩冒烟（只走命令套接字）")
     parser.add_argument("socket", nargs="?", help="命令套接字路径")
     parser.add_argument("--deployment", help="部署 ID（读模式和上限）")
+    parser.add_argument("--repo", default=None,
+                        help="部署树/仓库根，找 config/deployments；缺省是本脚本所在的仓库。"
+                             "在部署树（主站 --config-dir 指向的那棵）上跑时要显式给"
+                             "——交付树的 config 里没有电机配置，部署在部署树里")
     parser.add_argument("--axis", type=int, default=1, help="加力矩的轴号（从 1 起）")
     parser.add_argument("--torque", type=int, default=50, help="力矩目标（额定千分比）")
     parser.add_argument("--torque-limit", dest="torque_limit", type=int, default=None,

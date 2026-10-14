@@ -5,6 +5,12 @@ import os
 import sys
 import argparse
 
+# Windows 控制台默认 GBK，远端输出里的非 GBK 字节会在 print 时抛 UnicodeEncodeError，
+# 连命令结果都看不到。统一按 UTF-8 出不认识的字节用替代字符。
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 # 台架地址会随网络环境变化（ICS 共享网络 / 独立路由器给的不是同一个网段），
 # 写成环境变量可覆盖，免得每次改代码。
 HOST = os.environ.get("EMASTER_PI_HOST", "192.168.124.81")
@@ -29,17 +35,28 @@ def run_command(client, command, use_pty=False):
 
 
 def upload_file(client, local_path, remote_path):
-    """上传文件"""
+    """上传文件。
+
+    远程路径要写成相对路径（相对登录后的家目录）。这台机器上的 sftp-server 对
+    "/tmp/xxx" 这类绝对路径一律回 ENOENT —— 报的是"没有那个文件"，看着像本地文件
+    不存在，其实是远端不收绝对路径。写成 "xxx" 或 "ethercat-master/src/xxx" 即可。
+    """
+    with open(local_path, "rb") as source:
+        data = source.read()
     sftp = client.open_sftp()
-    sftp.put(local_path, remote_path)
+    with sftp.open(remote_path, "wb") as target:
+        target.write(data)
     sftp.close()
 
 
 def download_file(client, remote_path, local_path):
-    """下载文件"""
+    """下载文件，远程路径同样要写相对路径（见 upload_file）。"""
     sftp = client.open_sftp()
-    sftp.get(remote_path, local_path)
+    with sftp.open(remote_path, "rb") as source:
+        data = source.read()
     sftp.close()
+    with open(local_path, "wb") as target:
+        target.write(data)
 
 
 def main():
@@ -86,11 +103,11 @@ def main():
 
         elif args.command == 'upload':
             upload_file(client, args.local, args.remote)
-            print(f"✓ 已上传: {args.local} -> {args.remote}")
+            print(f"已上传: {args.local} -> {args.remote}")
 
         elif args.command == 'download':
             download_file(client, args.remote, args.local)
-            print(f"✓ 已下载: {args.remote} -> {args.local}")
+            print(f"已下载: {args.remote} -> {args.local}")
 
         elif args.command == 'shell':
             import pty
