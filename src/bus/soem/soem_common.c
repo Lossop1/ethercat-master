@@ -174,38 +174,101 @@ static bool assignment_failed(emaster_soem_sdo_reader_context_t *reader,
     return false;
 }
 
-static bool assign_direction(emaster_soem_sdo_reader_context_t *reader, uint16_t index,
+/* SDO 中止码：子索引不存在。 */
+#define EMASTER_SDO_ABORT_NO_SUBINDEX UINT32_C(0x06090011)
+
+/* 写失败之后把中止码取出来看清楚，返回值沿用 assignment_failed 的失败语义。 */
+static bool abort_code_is(emaster_soem_sdo_reader_context_t *reader,
+                          emaster_soem_pdo_assignment_result_t *result,
+                          uint16_t index, uint8_t subindex, uint32_t code)
+{
+    (void)assignment_failed(reader, result, index, subindex);
+    return result->abort_code_available && result->abort_code == code;
+}
+
+/*
+ * 断开分配：条目数写 0 并读回。
+ *
+ * 本来就是 0 就不写这一句。多写一次没好处，而且在"按条目数决定子索引可见性"的固件上
+ * 反而有害：断开之后 1C12:01 就不存在了。
+ *
+ * touched 只在这里真的写过之后才置真，供还原逻辑判断这个对象要不要写回去。
+ */
+static bool detach_direction(emaster_soem_sdo_reader_context_t *reader, uint16_t index,
+                             bool *touched, emaster_soem_pdo_assignment_result_t *result)
+{
+    uint8_t count;
+
+    if (touched != NULL)
+    {
+        *touched = false;
+    }
+    if (!emaster_soem_read_u8(reader, index, UINT8_C(0), &count))
+    {
+        return assignment_failed(reader, result, index, UINT8_C(0));
+    }
+    if (count == 0U)
+    {
+        return true;
+    }
+    if (!emaster_soem_write_u8(reader, index, UINT8_C(0), UINT8_C(0)) ||
+        !emaster_soem_read_u8(reader, index, UINT8_C(0), &count) || count != 0U)
+    {
+        return assignment_failed(reader, result, index, UINT8_C(0));
+    }
+    if (touched != NULL)
+    {
+        *touched = true;
+    }
+    return true;
+}
+
+/*
+ * 把本方向的映射表挂到分配对象上。顺序照厂商手册的三步：断开 -> 写通道号 -> 写激活数。
+ *
+ * 一处与"边写边读回"的直觉写法不同：**条目号写完之前不读回**。有的固件按条目数决定
+ * 子索引可不可见（MT 台架实测）：条目数为 0 时，写 1C12:01 设备收下，随即读 1C12:01
+ * 却回中止码 0x06090011（子索引不存在）。逐条写、逐条读回就会在这里误判成"写失败"而
+ * 掉头，其实是自己把顺序读早了。读回统一放到"写激活数"之后。
+ *
+ * 若某台设备连写都拒（同样回 0x06090011），就把激活数先写上去让子索引出现再写一次；
+ * PRE-OP 下同步管理器没运行，中间那个半挂的分配不会被用上。认的是设备自己的答复，
+ * 不是"哪个厂商的设备"。
+ */
+static bool attach_direction(emaster_soem_sdo_reader_context_t *reader, uint16_t index,
                              const emaster_pdo_mapping_profile_t *mappings,
                              size_t mapping_count,
                              emaster_soem_pdo_assignment_result_t *result)
 {
     size_t ordinal;
     uint8_t count;
-    uint16_t observed_index;
+    bool raised_count = false;
 
-    if (mapping_count > UINT8_MAX || (mapping_count > 0U && mappings == NULL) ||
-        result == NULL)
+    if (!detach_direction(reader, index, NULL, result))
     {
         return false;
     }
-    if (!emaster_soem_write_u8(reader, index, UINT8_C(0), UINT8_C(0)))
-    {
-        return assignment_failed(reader, result, index, UINT8_C(0));
-    }
-    if (!emaster_soem_read_u8(reader, index, UINT8_C(0), &count) || count != 0U)
-    {
-        return assignment_failed(reader, result, index, UINT8_C(0));
-    }
     for (ordinal = 0U; ordinal < mapping_count; ++ordinal)
     {
-        if (!emaster_soem_write_u16(reader, index, (uint8_t)(ordinal + 1U),
-                                    mappings[ordinal].index) ||
-            !emaster_soem_read_u16(reader, index, (uint8_t)(ordinal + 1U),
-                                   &observed_index) ||
-            observed_index != mappings[ordinal].index)
+        uint8_t subindex = (uint8_t)(ordinal + 1U);
+
+        if (!emaster_soem_write_u16(reader, index, subindex, mappings[ordinal].index))
         {
-            return assignment_failed(reader, result, index,
-                                     (uint8_t)(ordinal + 1U));
+            if (raised_count ||
+                !abort_code_is(reader, result, index, subindex,
+                               EMASTER_SDO_ABORT_NO_SUBINDEX))
+            {
+                return false;
+            }
+            if (!emaster_soem_write_u8(reader, index, UINT8_C(0), (uint8_t)mapping_count))
+            {
+                return assignment_failed(reader, result, index, UINT8_C(0));
+            }
+            raised_count = true;
+            if (!emaster_soem_write_u16(reader, index, subindex, mappings[ordinal].index))
+            {
+                return assignment_failed(reader, result, index, subindex);
+            }
         }
     }
     if (!emaster_soem_write_u8(reader, index, UINT8_C(0), (uint8_t)mapping_count) ||
@@ -213,7 +276,22 @@ static bool assign_direction(emaster_soem_sdo_reader_context_t *reader, uint16_t
     {
         return assignment_failed(reader, result, index, UINT8_C(0));
     }
-    return count == (uint8_t)mapping_count;
+    if (count != (uint8_t)mapping_count)
+    {
+        return assignment_failed(reader, result, index, UINT8_C(0));
+    }
+    for (ordinal = 0U; ordinal < mapping_count; ++ordinal)
+    {
+        uint16_t observed_index;
+
+        if (!emaster_soem_read_u16(reader, index, (uint8_t)(ordinal + 1U),
+                                   &observed_index) ||
+            observed_index != mappings[ordinal].index)
+        {
+            return assignment_failed(reader, result, index, (uint8_t)(ordinal + 1U));
+        }
+    }
+    return true;
 }
 
 static bool assignment_matches(emaster_soem_sdo_reader_context_t *reader, uint16_t index,
@@ -245,6 +323,397 @@ static bool assignment_matches(emaster_soem_sdo_reader_context_t *reader, uint16
     return true;
 }
 
+/*
+ * F030 是模块化从站的配置模块列表。非模块化设备（直连档）没有这个对象，写它只会换来
+ * SDO 中止，所以整段跳过。
+ */
+static bool select_module_if_needed(emaster_soem_sdo_reader_context_t *reader,
+                                    const emaster_pdo_set_profile_t *pdo_set,
+                                    emaster_soem_pdo_assignment_result_t *result)
+{
+    uint32_t module_ident;
+    uint32_t observed_module_ident;
+
+    if (pdo_set->assignment_style != EMASTER_PDO_ASSIGNMENT_MODULE_SLOT)
+    {
+        return true;
+    }
+    module_ident = pdo_set->module_ident;
+    if (!emaster_soem_write_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
+                                module_ident) ||
+        !emaster_soem_read_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
+                               &observed_module_ident) ||
+        observed_module_ident != module_ident)
+    {
+        return assignment_failed(reader, result, UINT16_C(0xF030), pdo_set->module_slot);
+    }
+    return true;
+}
+
+/*
+ * 改写是"先断开分配、再改映射表、最后挂回分配"。断开那一步一旦成功，设备就不是动手前
+ * 的样子了；后面任何一步失败——设备拒写映射表（MT 台架实测 0x1600:00 回 0x06010002）、
+ * 读回不符、掉链——就地返回会把设备留在"分配被清零"的半途：PDO 不再交换，这次上电期间
+ * 都用不了。所以动手前先记现场，失败就还原。
+ */
+enum
+{
+    ROLLBACK_MAX_MAPPINGS = 4,
+    ROLLBACK_MAX_ENTRIES = 16
+};
+
+/*
+ * dirty 只由"动手的那一句写成功了"来置位。没动过的对象不还原 —— 还原就是往里写一遍，
+ * 那对只读对象同样会被拒，而拒一次就足以让整段还原半途而废，把分配留在 0。
+ */
+typedef struct
+{
+    uint16_t index;
+    uint8_t count;
+    bool dirty;
+    uint16_t entries[ROLLBACK_MAX_ENTRIES];
+} assignment_snapshot_t;
+
+typedef struct
+{
+    uint16_t index;
+    uint8_t count;
+    bool dirty;
+    uint32_t descriptors[ROLLBACK_MAX_ENTRIES];
+} mapping_snapshot_t;
+
+typedef struct
+{
+    assignment_snapshot_t assignment;
+    mapping_snapshot_t tables[ROLLBACK_MAX_MAPPINGS];
+    size_t table_count;
+    bool complete;
+} direction_snapshot_t;
+
+static bool capture_assignment(emaster_soem_sdo_reader_context_t *reader, uint16_t index,
+                               assignment_snapshot_t *snapshot)
+{
+    uint8_t ordinal;
+
+    snapshot->index = index;
+    if (!emaster_soem_read_u8(reader, index, UINT8_C(0), &snapshot->count) ||
+        snapshot->count > ROLLBACK_MAX_ENTRIES)
+    {
+        return false;
+    }
+    for (ordinal = 0U; ordinal < snapshot->count; ++ordinal)
+    {
+        if (!emaster_soem_read_u16(reader, index, (uint8_t)(ordinal + 1U),
+                                   &snapshot->entries[ordinal]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool capture_mapping(emaster_soem_sdo_reader_context_t *reader,
+                            const emaster_pdo_mapping_profile_t *mapping,
+                            mapping_snapshot_t *snapshot)
+{
+    uint8_t ordinal;
+
+    snapshot->index = mapping->index;
+    if (!emaster_soem_read_u8(reader, mapping->index, UINT8_C(0), &snapshot->count) ||
+        snapshot->count > ROLLBACK_MAX_ENTRIES)
+    {
+        return false;
+    }
+    for (ordinal = 0U; ordinal < snapshot->count; ++ordinal)
+    {
+        if (!emaster_soem_read_u32(reader, mapping->index, (uint8_t)(ordinal + 1U),
+                                   &snapshot->descriptors[ordinal]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* 逐条写回并读回校验，任一步不成立就停手。返回值只说明这次还原动作有没有走完。 */
+static bool restore_assignment(emaster_soem_sdo_reader_context_t *reader,
+                               const assignment_snapshot_t *snapshot)
+{
+    uint8_t count;
+    uint8_t ordinal;
+
+    if (!emaster_soem_write_u8(reader, snapshot->index, UINT8_C(0), UINT8_C(0)) ||
+        !emaster_soem_read_u8(reader, snapshot->index, UINT8_C(0), &count) || count != 0U)
+    {
+        return false;
+    }
+    for (ordinal = 0U; ordinal < snapshot->count; ++ordinal)
+    {
+        uint16_t observed;
+
+        if (!emaster_soem_write_u16(reader, snapshot->index, (uint8_t)(ordinal + 1U),
+                                    snapshot->entries[ordinal]) ||
+            !emaster_soem_read_u16(reader, snapshot->index, (uint8_t)(ordinal + 1U),
+                                   &observed) ||
+            observed != snapshot->entries[ordinal])
+        {
+            return false;
+        }
+    }
+    return emaster_soem_write_u8(reader, snapshot->index, UINT8_C(0), snapshot->count);
+}
+
+static bool restore_mapping(emaster_soem_sdo_reader_context_t *reader,
+                            const mapping_snapshot_t *snapshot)
+{
+    uint8_t count;
+    uint8_t ordinal;
+
+    if (!emaster_soem_write_u8(reader, snapshot->index, UINT8_C(0), UINT8_C(0)) ||
+        !emaster_soem_read_u8(reader, snapshot->index, UINT8_C(0), &count) || count != 0U)
+    {
+        return false;
+    }
+    for (ordinal = 0U; ordinal < snapshot->count; ++ordinal)
+    {
+        uint32_t observed;
+
+        if (!emaster_soem_write_u32(reader, snapshot->index, (uint8_t)(ordinal + 1U),
+                                    snapshot->descriptors[ordinal]) ||
+            !emaster_soem_read_u32(reader, snapshot->index, (uint8_t)(ordinal + 1U),
+                                   &observed) ||
+            observed != snapshot->descriptors[ordinal])
+        {
+            return false;
+        }
+    }
+    return emaster_soem_write_u8(reader, snapshot->index, UINT8_C(0), snapshot->count);
+}
+
+static bool capture_direction(emaster_soem_sdo_reader_context_t *reader,
+                              uint16_t assignment_index,
+                              const emaster_pdo_mapping_profile_t *mappings,
+                              size_t mapping_count, direction_snapshot_t *snapshot,
+                              emaster_soem_pdo_assignment_result_t *result)
+{
+    size_t ordinal;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    if (mapping_count > ROLLBACK_MAX_MAPPINGS)
+    {
+        /* 装不下就不动手：没有现场可回滚的改写，不如整段不做。 */
+        return assignment_failed(reader, result, assignment_index, UINT8_C(0));
+    }
+    snapshot->table_count = mapping_count;
+    if (!capture_assignment(reader, assignment_index, &snapshot->assignment))
+    {
+        return assignment_failed(reader, result, assignment_index, UINT8_C(0));
+    }
+    for (ordinal = 0U; ordinal < mapping_count; ++ordinal)
+    {
+        if (!capture_mapping(reader, &mappings[ordinal], &snapshot->tables[ordinal]))
+        {
+            return assignment_failed(reader, result, mappings[ordinal].index, UINT8_C(0));
+        }
+    }
+    snapshot->complete = true;
+    return true;
+}
+
+/*
+ * 还原顺序与改写顺序相反：先把动过的映射表写回原样，再挂回分配。任何一张动过的表没还原
+ * 成功就不再挂回分配——把分配指回一张半截的表，比让分配停在 0 更糟：前者主站会按错误的
+ * 映像跑起来，后者设备只是停在 PRE-OP、不交换 PDO。
+ */
+static void rollback_direction(emaster_soem_sdo_reader_context_t *reader,
+                               const direction_snapshot_t *snapshot)
+{
+    size_t ordinal;
+
+    if (!snapshot->complete)
+    {
+        return;
+    }
+    for (ordinal = snapshot->table_count; ordinal > 0U; --ordinal)
+    {
+        const mapping_snapshot_t *table = &snapshot->tables[ordinal - 1U];
+
+        if (table->dirty && !restore_mapping(reader, table))
+        {
+            return;
+        }
+    }
+    if (snapshot->assignment.dirty)
+    {
+        (void)restore_assignment(reader, &snapshot->assignment);
+    }
+}
+
+/*
+ * 把一套映射表的**条目**按设备档重写一遍。
+ *
+ * 为什么需要它。1C12/1C13 只选"用哪几张映射表"，选对了不等于表里的内容对：
+ * 设备出厂默认的表与厂商 ESI 声明的表可以逐条不同（MT 台架实测：ESI 说第 7 条是
+ * 假字节 0x2FFD，设备实际映射 0x5FFE）。这时只有把条目本身写下去才会一致，
+ * 而这正是 CoE 的 PdoConfig 能力；设备声明了它才允许走这条路。
+ *
+ * 顺序按标准：先把映射表的条目数写 0（表在编辑中不能被使用），逐条写描述符并读回，
+ * 最后把条目数写回去。分配对象由 configure_direction 在更外层断开与重挂。
+ */
+static bool configure_mapping_entries(emaster_soem_sdo_reader_context_t *reader,
+                                      const emaster_pdo_mapping_profile_t *mapping,
+                                      mapping_snapshot_t *snapshot,
+                                      emaster_soem_pdo_assignment_result_t *result)
+{
+    uint8_t count;
+    size_t ordinal;
+
+    if (mapping->entry_count > UINT8_MAX ||
+        (mapping->entry_count > 0U && mapping->entries == NULL))
+    {
+        return assignment_failed(reader, result, mapping->index, UINT8_C(0));
+    }
+    if (!emaster_soem_write_u8(reader, mapping->index, UINT8_C(0), UINT8_C(0)) ||
+        !emaster_soem_read_u8(reader, mapping->index, UINT8_C(0), &count) || count != 0U)
+    {
+        return assignment_failed(reader, result, mapping->index, UINT8_C(0));
+    }
+    /* 从这一句起表已经被动过；此后失败就必须还原。拒在上一句的设备（MT 就是）
+     * 表还是出厂原样，这时还原反而是往里再写一遍、再被拒一次。 */
+    snapshot->dirty = true;
+    for (ordinal = 0U; ordinal < mapping->entry_count; ++ordinal)
+    {
+        const emaster_pdo_entry_t *entry = &mapping->entries[ordinal];
+        uint8_t subindex = (uint8_t)(ordinal + 1U);
+        uint32_t descriptor = emaster_pdo_mapping_descriptor(
+            entry->index, entry->subindex, entry->bit_length);
+        uint32_t observed_descriptor;
+
+        if (!emaster_soem_write_u32(reader, mapping->index, subindex, descriptor) ||
+            !emaster_soem_read_u32(reader, mapping->index, subindex, &observed_descriptor) ||
+            observed_descriptor != descriptor)
+        {
+            return assignment_failed(reader, result, mapping->index, subindex);
+        }
+    }
+    if (!emaster_soem_write_u8(reader, mapping->index, UINT8_C(0),
+                               (uint8_t)mapping->entry_count) ||
+        !emaster_soem_read_u8(reader, mapping->index, UINT8_C(0), &count))
+    {
+        return assignment_failed(reader, result, mapping->index, UINT8_C(0));
+    }
+    return count == (uint8_t)mapping->entry_count;
+}
+
+/*
+ * 一个方向的写序列：断开分配 -> 逐张映射表重写条目 -> 重挂分配。
+ *
+ * 必须按这个顺序：分配还没断开时改映射表，多半换来 SDO 中止 —— 表正在被同步管理器使用。
+ */
+static bool write_direction(emaster_soem_sdo_reader_context_t *reader,
+                            uint16_t assignment_index,
+                            const emaster_pdo_mapping_profile_t *mappings,
+                            size_t mapping_count, direction_snapshot_t *snapshot,
+                            emaster_soem_pdo_assignment_result_t *result)
+{
+    size_t ordinal;
+
+    if (!detach_direction(reader, assignment_index, &snapshot->assignment.dirty, result))
+    {
+        return false;
+    }
+    for (ordinal = 0U; ordinal < mapping_count; ++ordinal)
+    {
+        if (!configure_mapping_entries(reader, &mappings[ordinal], &snapshot->tables[ordinal],
+                                      result))
+        {
+            return false;
+        }
+    }
+    return attach_direction(reader, assignment_index, mappings, mapping_count, result);
+}
+
+/*
+ * 一个方向（Rx 或 Tx）的完整配置序列：记现场 -> 写 -> 失败还原。写成功时现场自然作废。
+ */
+static bool configure_direction(emaster_soem_sdo_reader_context_t *reader,
+                                uint16_t assignment_index,
+                                const emaster_pdo_mapping_profile_t *mappings,
+                                size_t mapping_count,
+                                emaster_soem_pdo_assignment_result_t *result)
+{
+    direction_snapshot_t snapshot;
+
+    if (mapping_count > UINT8_MAX || (mapping_count > 0U && mappings == NULL))
+    {
+        return assignment_failed(reader, result, assignment_index, UINT8_C(0));
+    }
+    if (!capture_direction(reader, assignment_index, mappings, mapping_count, &snapshot,
+                           result))
+    {
+        return false;
+    }
+    if (write_direction(reader, assignment_index, mappings, mapping_count, &snapshot, result))
+    {
+        return true;
+    }
+    rollback_direction(reader, &snapshot);
+    return false;
+}
+
+/*
+ * 只改分配、不动映射表内容的那条路。同样先记现场再动手：断开之后合不回去的分配，
+ * 比一开始就不动它更糟——这一路上台架实测过（1C12:00 停在 0，设备此后不映射 PDO）。
+ */
+static bool assign_direction(emaster_soem_sdo_reader_context_t *reader, uint16_t index,
+                             const emaster_pdo_mapping_profile_t *mappings,
+                             size_t mapping_count,
+                             emaster_soem_pdo_assignment_result_t *result)
+{
+    assignment_snapshot_t snapshot;
+
+    if (mapping_count > UINT8_MAX || (mapping_count > 0U && mappings == NULL))
+    {
+        return assignment_failed(reader, result, index, UINT8_C(0));
+    }
+    memset(&snapshot, 0, sizeof(snapshot));
+    if (!capture_assignment(reader, index, &snapshot))
+    {
+        return assignment_failed(reader, result, index, UINT8_C(0));
+    }
+    if (attach_direction(reader, index, mappings, mapping_count, result))
+    {
+        return true;
+    }
+    (void)restore_assignment(reader, &snapshot);
+    return false;
+}
+
+bool emaster_soem_configure_pdo_set_recorded(
+    emaster_soem_sdo_reader_context_t *reader,
+    const emaster_pdo_set_profile_t *pdo_set,
+    emaster_soem_pdo_assignment_result_t *result)
+{
+    if (result != NULL)
+    {
+        memset(result, 0, sizeof(*result));
+    }
+    if (reader == NULL || reader->context == NULL || reader->slave == 0U ||
+        pdo_set == NULL || result == NULL || pdo_set->rx_mappings == NULL ||
+        pdo_set->tx_mappings == NULL)
+    {
+        return false;
+    }
+    if (!select_module_if_needed(reader, pdo_set, result))
+    {
+        return false;
+    }
+    return configure_direction(reader, UINT16_C(0x1C12), pdo_set->rx_mappings,
+                               pdo_set->rx_mapping_count, result) &&
+           configure_direction(reader, UINT16_C(0x1C13), pdo_set->tx_mappings,
+                               pdo_set->tx_mapping_count, result);
+}
+
 bool emaster_soem_assign_pdo_set_recorded(
     emaster_soem_sdo_reader_context_t *reader,
     const emaster_pdo_set_profile_t *pdo_set,
@@ -263,22 +732,9 @@ bool emaster_soem_assign_pdo_set_recorded(
     {
         return false;
     }
-    /* F030 是模块化从站的配置模块列表；先选择方案对应模块，再分配 PDO。
-       非模块化设备没有这个对象，写它只会换来 SDO 中止，所以整段跳过 —— 这一类
-       设备的生效 PDO 由 1C12/1C13 自己决定，下面那两步就够了。 */
-    if (pdo_set->assignment_style == EMASTER_PDO_ASSIGNMENT_MODULE_SLOT)
+    if (!select_module_if_needed(reader, pdo_set, result))
     {
-        uint32_t module_ident = pdo_set->module_ident;
-        uint32_t observed_module_ident;
-        if (!emaster_soem_write_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
-                                    module_ident) ||
-            !emaster_soem_read_u32(reader, UINT16_C(0xF030), pdo_set->module_slot,
-                                   &observed_module_ident) ||
-            observed_module_ident != module_ident)
-        {
-            return assignment_failed(reader, result, UINT16_C(0xF030),
-                                     pdo_set->module_slot);
-        }
+        return false;
     }
     if (!assignment_matches(reader, UINT16_C(0x1C12), pdo_set->rx_mappings,
                             pdo_set->rx_mapping_count, &rx_matches, result) ||

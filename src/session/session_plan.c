@@ -344,6 +344,109 @@ bool emaster_session_axis_mode_allows_control(const emaster_session_axis_plan_t 
             axis->operation_mode->mode_display_policy == EMASTER_MODE_DISPLAY_DIAGNOSTIC);
 }
 
+/* 设备档里名字叫 name 的那一条；找不到说明运行方案与设备档本身对不上。 */
+static const emaster_pdo_entry_t *declared_entry_named(
+    const emaster_pdo_mapping_profile_t *mappings, size_t mapping_count, const char *name)
+{
+    size_t mapping_ordinal;
+
+    if (mappings == NULL || name == NULL)
+    {
+        return NULL;
+    }
+    for (mapping_ordinal = 0U; mapping_ordinal < mapping_count; ++mapping_ordinal)
+    {
+        const emaster_pdo_mapping_profile_t *mapping = &mappings[mapping_ordinal];
+        size_t entry_ordinal;
+
+        for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count; ++entry_ordinal)
+        {
+            const emaster_pdo_entry_t *entry = &mapping->entries[entry_ordinal];
+
+            if (entry->name != NULL && strcmp(entry->name, name) == 0)
+            {
+                return entry;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* 这一条要用的对象，设备当前映射里有没有、位宽对不对。按对象号找，不看位置。 */
+static bool device_provides_field(const emaster_pdo_direction_layout_t *actual,
+                                  const emaster_pdo_mapping_profile_t *mappings,
+                                  size_t mapping_count, const char *name)
+{
+    const emaster_pdo_entry_t *declared = declared_entry_named(mappings, mapping_count, name);
+    size_t mapping_ordinal;
+
+    if (declared == NULL || actual == NULL)
+    {
+        return false;
+    }
+    for (mapping_ordinal = 0U; mapping_ordinal < actual->mapping_count; ++mapping_ordinal)
+    {
+        const emaster_pdo_mapping_t *mapping = &actual->mappings[mapping_ordinal];
+        size_t entry_ordinal;
+
+        for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count; ++entry_ordinal)
+        {
+            const emaster_pdo_mapping_entry_t *entry = &mapping->entries[entry_ordinal];
+
+            if (entry->object_index == declared->index &&
+                entry->object_subindex == declared->subindex)
+            {
+                return entry->bit_length == declared->bit_length;
+            }
+        }
+    }
+    return false;
+}
+
+/*
+ * 设备当前生效的映射能不能直接用。
+ *
+ * 只问两件事：方向总长对不对；运行方案真正依赖的每个字段在不在、位宽对不对（按对象号
+ * 找，不看位置）。设备多映射的、或与声明标签不同而主站从不读的字节（填充）不影响这个
+ * 判断 —— 映像里每个字段的偏移都由设备实际布局现算，不由声明的位置假设。
+ *
+ * 这一条存在的理由：厂商 ESI 与固件出厂默认可以逐条不同，而设备未必允许改写。MT 台架
+ * 实测：ESI 的 0x1600 第 7 条是假字节 0x2FFD，设备映射 0x5FFE；且 0x1600:00 是只读对象，
+ * 改写被中止码 0x06010002 拒绝。差异只落在谁都不读的字节上时，映像照样能用。
+ */
+static bool layout_usable_with_device(const emaster_session_axis_plan_t *axis,
+                                      const emaster_pdo_layout_t *actual)
+{
+    size_t field_ordinal;
+
+    if (actual->rx.bit_length != (uint32_t)axis->pdo_set->rx_pdo_bytes * UINT32_C(8) ||
+        actual->tx.bit_length != (uint32_t)axis->pdo_set->tx_pdo_bytes * UINT32_C(8))
+    {
+        return false;
+    }
+    for (field_ordinal = 0U; field_ordinal < axis->operation_mode->required_rx_field_count;
+         ++field_ordinal)
+    {
+        if (!device_provides_field(&actual->rx, axis->pdo_set->rx_mappings,
+                                   axis->pdo_set->rx_mapping_count,
+                                   axis->operation_mode->required_rx_fields[field_ordinal]))
+        {
+            return false;
+        }
+    }
+    for (field_ordinal = 0U; field_ordinal < axis->operation_mode->required_tx_field_count;
+         ++field_ordinal)
+    {
+        if (!device_provides_field(&actual->tx, axis->pdo_set->tx_mappings,
+                                   axis->pdo_set->tx_mapping_count,
+                                   axis->operation_mode->required_tx_fields[field_ordinal]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 emaster_session_layout_status_t
 emaster_session_axis_validate_layout(const emaster_session_axis_plan_t *axis,
                                      const emaster_pdo_layout_t *actual)
@@ -360,6 +463,10 @@ emaster_session_axis_validate_layout(const emaster_session_axis_plan_t *axis,
     if (emaster_slave_pdo_set_layout_matches(axis->pdo_set, actual))
     {
         return EMASTER_SESSION_LAYOUT_MATCH;
+    }
+    if (layout_usable_with_device(axis, actual))
+    {
+        return EMASTER_SESSION_LAYOUT_DEVICE_ADOPTED;
     }
     return (axis->device_profile->supports_pdo_assignment ||
             axis->device_profile->supports_pdo_configuration)

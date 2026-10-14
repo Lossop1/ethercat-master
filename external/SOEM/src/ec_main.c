@@ -1667,6 +1667,19 @@ int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft **mbx, int ti
          mbxh = (ec_mbxheadert *)mbxin;
          do
          {
+            if (mbxin == NULL)
+            {
+               /* 上一轮把接收缓冲收回了（邮箱错误应答与 EMCY 都走那条路），而这一轮是
+                  重读：不重新申请，就是把 NULL 当接收缓冲交给 ecx_FPRD，它拿到 WKC 后
+                  会往这个地址 memcpy —— 段错误。取不到按读失败退出，不猜。 */
+               mbxin = ecx_getmbx(context);
+               mbxh = (ec_mbxheadert *)mbxin;
+               if (mbxin == NULL)
+               {
+                  wkc = 0;
+                  break;
+               }
+            }
             wkc = ecx_FPRD(&context->port, configadr, mbxro, mbxl, mbxin, EC_TIMEOUTRET); /* get mailbox */
             if ((wkc > 0) && ((mbxh->mbxtype & 0x0f) == 0x00))                            /* Mailbox error response? */
             {

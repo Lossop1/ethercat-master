@@ -39,6 +39,13 @@ void emaster_pdo_layout_destroy(emaster_pdo_layout_t *layout)
     memset(layout, 0, sizeof(*layout));
 }
 
+uint32_t emaster_pdo_mapping_descriptor(uint16_t object_index, uint8_t object_subindex,
+                                        uint8_t bit_length)
+{
+    return ((uint32_t)object_index << 16U) | ((uint32_t)object_subindex << 8U) |
+           (uint32_t)bit_length;
+}
+
 static emaster_pdo_discovery_status_t fail(emaster_pdo_layout_t *layout,
                                             emaster_pdo_discovery_status_t status,
                                             uint16_t index, uint8_t subindex)

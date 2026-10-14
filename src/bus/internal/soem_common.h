@@ -103,4 +103,17 @@ bool emaster_soem_assign_pdo_set_recorded(
     const emaster_pdo_set_profile_t *pdo_set,
     emaster_soem_pdo_assignment_result_t *result);
 
+/*
+ * 按方案**重写**设备侧的 PDO 映射条目（CoE PdoConfig），而不只是选一套已有的映射。
+ *
+ * 与 assign 的分工：assign 问"用哪几张映射表"，本函数问"表里的条目是什么"。设备出厂
+ * 默认的条目与厂商 ESI 声明的不一致时（MT 台架实测过：ESI 第 7 条是假字节 0x2FFD，
+ * 设备实际映射 0x5FFE），只有重写条目才会一致。设备档声明 supports_pdo_configuration
+ * 时才可调用。
+ */
+bool emaster_soem_configure_pdo_set_recorded(
+    emaster_soem_sdo_reader_context_t *reader,
+    const emaster_pdo_set_profile_t *pdo_set,
+    emaster_soem_pdo_assignment_result_t *result);
+
 #endif

@@ -73,4 +73,13 @@ emaster_pdo_layout_discover(const emaster_pdo_sdo_reader_t *reader,
 /* 释放两方向的映射数组并清零结果；允许传入空指针。 */
 void emaster_pdo_layout_destroy(emaster_pdo_layout_t *layout);
 
+/*
+ * 一个映射条目的 32 位描述符：对象号 << 16 | 子索引 << 8 | 位长。
+ *
+ * 发现侧用它把读回来的裸字拆开，配置侧用它把设备档里的条目拼回去。两侧共用一个函数，
+ * 是为了让"读回来的东西"和"写下去的东西"在同一个公式上成立 —— 各写一份迟早会漂。
+ */
+uint32_t emaster_pdo_mapping_descriptor(uint16_t object_index, uint8_t object_subindex,
+                                        uint8_t bit_length);
+
 #endif

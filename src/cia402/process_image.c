@@ -43,6 +43,28 @@ static const emaster_pdo_mapping_profile_t *profile_mapping_for(
     return NULL;
 }
 
+static const emaster_pdo_entry_t *profile_entry_for(
+    const emaster_pdo_mapping_profile_t *mapping, uint16_t object_index,
+    uint8_t object_subindex)
+{
+    size_t entry_ordinal;
+
+    if (mapping == NULL || mapping->entries == NULL)
+    {
+        return NULL;
+    }
+    for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count; ++entry_ordinal)
+    {
+        const emaster_pdo_entry_t *entry = &mapping->entries[entry_ordinal];
+
+        if (entry->index == object_index && entry->subindex == object_subindex)
+        {
+            return entry;
+        }
+    }
+    return NULL;
+}
+
 static emaster_pdo_codec_value_kind_t field_kind_for(const emaster_pdo_entry_t *entry)
 {
     if (entry == NULL || entry->data_type == NULL)
@@ -194,8 +216,7 @@ static bool build_direction_codec(
             profile_mapping_for(profiles, profile_count, mapping->mapping_index);
         size_t entry_ordinal;
 
-        if (profile_mapping == NULL || profile_mapping->entries == NULL ||
-            profile_mapping->entry_count != mapping->entry_count)
+        if (profile_mapping == NULL || profile_mapping->entries == NULL)
         {
             return false;
         }
@@ -203,21 +224,29 @@ static bool build_direction_codec(
         {
             const emaster_pdo_mapping_entry_t *actual_entry =
                 &mapping->entries[entry_ordinal];
-            const emaster_pdo_entry_t *profile_entry =
-                &profile_mapping->entries[entry_ordinal];
-            emaster_pdo_codec_value_kind_t kind;
+            /*
+             * 按对象号认字段，不按位置认。设备实际映射里多出来的那些条目 —— 厂商 ESI
+             * 没声明、主站也不读 —— 在这里就是填充：不参与解码，也不会顶着别的字段的
+             * 名字被写出去。厂商 ESI 与固件出厂默认可以逐条不同（MT 台架实测：ESI 第 7
+             * 条假字节是 0x2FFD，设备映射 0x5FFE），差在谁都不读的字节上时映像照样能用，
+             * 设备也不必为这条差异被改写。
+             */
+            const emaster_pdo_entry_t *profile_entry = profile_entry_for(
+                profile_mapping, actual_entry->object_index, actual_entry->object_subindex);
+            emaster_pdo_codec_value_kind_t kind = EMASTER_PDO_CODEC_VALUE_PADDING;
 
-            if (actual_entry->object_index != profile_entry->index ||
-                actual_entry->object_subindex != profile_entry->subindex ||
-                actual_entry->bit_length != profile_entry->bit_length)
+            if (profile_entry != NULL)
             {
-                return false;
-            }
-            kind = field_kind_for(profile_entry);
-            if (kind == EMASTER_PDO_CODEC_VALUE_PADDING &&
-                profile_entry->index != UINT16_C(0))
-            {
-                return false;
+                if (actual_entry->bit_length != profile_entry->bit_length)
+                {
+                    return false;
+                }
+                kind = field_kind_for(profile_entry);
+                if (kind == EMASTER_PDO_CODEC_VALUE_PADDING &&
+                    profile_entry->index != UINT16_C(0))
+                {
+                    return false;
+                }
             }
             fields[field_ordinal].kind = kind;
             if (actual_entry->object_index == mode_index &&
@@ -465,12 +494,38 @@ bool emaster_cia_process_image_decode_input(
     {
         return false;
     }
-    for (size_t field = 0U; field < image->tx_field_count; ++field)
+    /*
+     * 保留位回读必须为零。判据按**布局里的条目**认，不按字段类型认：类型为填充的
+     * 字段有两种身份——对象号零是布局明写的保留位，非零是设备实际映射里有、设备档
+     * 没声明的厂商对象（同样按填充编码）。后者不是保留位，设备往里放什么值主站没有
+     * 契约可依，拿它判反馈无效会把一台正常的设备判死。MT 台架就是这么一条。
+     */
     {
-        if (image->tx_values[field].kind == EMASTER_PDO_CODEC_VALUE_PADDING &&
-            image->tx_values[field].value.unsigned_value != 0U)
+        size_t mapping_ordinal;
+        size_t field_ordinal = 0U;
+
+        for (mapping_ordinal = 0U; mapping_ordinal < image->layout.tx.mapping_count;
+             ++mapping_ordinal)
         {
-            return false;
+            const emaster_pdo_mapping_t *mapping = &image->layout.tx.mappings[mapping_ordinal];
+            size_t entry_ordinal;
+
+            for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count; ++entry_ordinal)
+            {
+                const emaster_pdo_mapping_entry_t *entry = &mapping->entries[entry_ordinal];
+
+                if (field_ordinal >= image->tx_field_count)
+                {
+                    return false;
+                }
+                if (entry->object_index == UINT16_C(0) &&
+                    entry->object_subindex == UINT8_C(0) &&
+                    image->tx_values[field_ordinal].value.unsigned_value != UINT64_C(0))
+                {
+                    return false;
+                }
+                ++field_ordinal;
+            }
         }
     }
     *mode_display = 0;

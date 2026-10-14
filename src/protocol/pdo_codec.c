@@ -132,8 +132,18 @@ emaster_pdo_codec_validate(const emaster_pdo_direction_layout_t *layout,
             {
                 return EMASTER_PDO_CODEC_INVALID_ARGUMENT;
             }
-            if (entry_is_padding(entry) !=
-                (field->kind == EMASTER_PDO_CODEC_VALUE_PADDING))
+            /*
+             * 只有对象号为零的条目才算真保留位，它的字段必须是填充——这条是布局与
+             * 字段两个数组对同一件事的说法必须一致。
+             *
+             * 反方向不成立：对象号非零而字段是填充，是设备实际映射里有、设备档没声明
+             * 的厂商对象。主站既不读它，也不顶着别的字段的名字写它，所以按填充编码
+             * （不参与解码、发出去的恒为零）。MT 台架实测就是这么一条：声明 0x2FFD，
+             * 设备实际 0x5FFE。早先这里写成双向等价，等于要求设备与 ESI 逐条相同，
+             * 那条采用设备实际布局的路就永远走不通。
+             */
+            if (entry_is_padding(entry) &&
+                field->kind != EMASTER_PDO_CODEC_VALUE_PADDING)
             {
                 return EMASTER_PDO_CODEC_VALUE_KIND_MISMATCH;
             }
