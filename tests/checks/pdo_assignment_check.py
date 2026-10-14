@@ -61,6 +61,9 @@ def _template():
             "assign_activate_by_strategy": {"dc": "0x00000300"},
             "safe_stop_status_mask": "0x0004",
             "safe_stop_status_value": "0x0000",
+            # 模式集合是档里必填的一条；这条检查问的不是它，但缺了它生成器会让整份档
+            # 过不去。它自己的链由 tests/checks/device_facts_check.py 钉。
+            "supported_modes": {"csp": 8},
         },
         "reference_pdo_set_id": "mod-csp",
         "pdo_sets": [

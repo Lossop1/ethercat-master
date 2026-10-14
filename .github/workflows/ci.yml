@@ -54,6 +54,16 @@ jobs:
       - name: 控制台观测开关（离线）
         run: bash tests/checks/console_obs_switch_check.sh
 
+      # 同一种"开关没递到就不喊"，病根在别处。命令口的目标入口被压到了设点口的开关
+      # （EMASTER_SETPOINT）上之后，默认关着的新开关悄悄废掉了已经交付的入口：每一条
+      # set_external_target 都被拒、轴一步不动，而脚本要看的周期推进/命令流连续/界面
+      # 自检退出码**全部照样成立**——2026-10-14 在 MT 上正是这样拿到一次"通过"。
+      - name: 命令口目标入口不受设点开关管（离线）
+        run: python3 tests/checks/target_entry_check.py
+
+      - name: 目标入口检查的判别力
+        run: python3 tests/checks/target_entry_check.py --mutate
+
       - name: 报告慢速遥测渲染（离线）
         run: python3 tests/checks/report_telemetry_check.py
 
@@ -203,6 +213,23 @@ jobs:
       # 文档试的人才会发现"问它怎么用，它报了个错"。所以拿真二进制量一遍。
       - name: 可交付入口的 --help 与 --version
         run: bash tests/checks/cli_contract_check.sh build/linux-debug
+
+      # 模式能力的运行期守卫。设备档声明的 0x6060 取值集合与主站过程映像的能力是两个
+      # 独立的事实，分别落在 catalog.flat 与 runtime.flat 两个运行时文件里，主站启动时
+      # 各自独立装载 —— 生成链只管得住"生成那一刻"两者一致。谁手工改过一份、或者换了
+      # 设备档却没重新生成运行方案，运行期就只有这条门能拦住。拦不住是不出声的：主站
+      # 照常进 OP，把设备带进它不认的模式，然后轴不动，而报告里每个字段都正常。
+      # 这条要用真二进制，所以只能放在构建之后；接口名是刻意不存在的，一个报文都不发。
+      - name: 模式集合的运行期校核（离线）
+        run: python3 tests/checks/mode_gate_check.py build/linux-debug
+
+      # 断供与拒收的判据来自模式声明，不来自模式号。三种量各有各的正确行为：位置模式
+      # 断供保持原位并判距离，速度与力矩模式断供写 0 且不判距离。按模式号认会错 ——
+      # 同一个取值在不同厂商的说明书里指的不是同一件事。这条检查跑的四种形态里，③ 与
+      # ② 的模式号是一个数、只有声明不同：两句告警一个有一个没有，才证明读的是声明。
+      # 缺声明必须是硬失败，不能静默按模式号兜底。
+      - name: 目标量的断供语义（离线）
+        run: python3 tests/checks/mode_target_check.py build/linux-debug
 
       # 观测通道的离线自测。它不需要 EtherCAT 硬件，因此能在 CI 上跑；这条命令的
       # 价值在于把"读者不得撕裂、不得阻塞写者"这类性质钉进回归，而不是等台架上

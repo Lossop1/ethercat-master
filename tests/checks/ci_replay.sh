@@ -28,6 +28,8 @@ run "主站线程调度（离线）"     python3 tests/checks/master_thread_sche
 run "界面证据判定（离线）"     python3 tests/checks/gui_evidence_check.py
 run "绑核缓存（离线）"         python3 tests/checks/rt_affinity_check.py
 run "控制台观测开关（离线）"   bash tests/checks/console_obs_switch_check.sh
+run "命令口目标入口不受设点开关管（离线）" python3 tests/checks/target_entry_check.py
+run "目标入口检查的判别力"     python3 tests/checks/target_entry_check.py --mutate
 run "报告慢速遥测渲染（离线）" python3 tests/checks/report_telemetry_check.py
 run "报告库源文件清单与闭包一致（离线）" python3 tests/checks/report_sources_closure.py
 run "分析工具不得硬编码（离线）" python3 tests/checks/analysis_tools_check.py
@@ -71,6 +73,8 @@ echo "----- 构建前步骤：fails=$fails -----"
 run "配置（linux-debug 预设）"  cmake --preset linux-debug
 run "构建（linux-debug 预设）"  cmake --build --preset linux-debug --parallel 2
 run "可交付入口的 --help 与 --version" bash tests/checks/cli_contract_check.sh build/linux-debug
+run "模式集合的运行期校核（离线）" python3 tests/checks/mode_gate_check.py build/linux-debug
+run "目标量的断供语义（离线）"  python3 tests/checks/mode_target_check.py build/linux-debug
 run "观测通道离线自测"          ./build/linux-debug/apps/observation_selftest/observation-selftest
 run "单元测试"                  ctest --test-dir build/linux-debug --output-on-failure
 run "静态分析"                  cppcheck --enable=warning,performance,portability --error-exitcode=1 --std=c11 --suppress=missingIncludeSystem -I include -I build/linux-debug/generated src/catalog src/bus/soem src/bus/observation apps/fingerprint
