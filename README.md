@@ -12,8 +12,10 @@
 | --- | --- |
 | `README.md` | 本文件：交付内容、上手、运行、配置、命令接口、工具、排查 |
 | [`docs/architecture.md`](docs/architecture.md) | 实现说明：架构、周期、两层状态、报告、DC 与同步 |
+| [`docs/protocol/command-protocol-v1.md`](docs/protocol/command-protocol-v1.md) | 三个套接字的协议：命令文法、响应文法、设点记录格式 |
 | [`docs/test-plan.md`](docs/test-plan.md) | 测试条件、判据、已采集的证据、未决项 |
 | [`docs/time-and-space.txt`](docs/time-and-space.txt) | 对象、空间、时间与读写的运行期资料 |
+| [`docs/product/twincat-function-gap.md`](docs/product/twincat-function-gap.md) | 功能对标：本主站在哪一层、与 TwinCAT 逐层比什么、明确不做什么 |
 | `esi/README.md` | 设备描述放哪、从哪来 |
 | `config/README.md` | 配置各族逐个字段的语义 |
 | `gen/device/README.md` | 设备上手工具的边界 |
@@ -26,7 +28,7 @@
 
 你必须自己带进来两样东西：
 
-- 电机厂商的设备描述原文件。EtherCAT 是 ESI（XML），CANopen 是 EDS。
+- 电机厂商的 ESI 文件（XML）。**本项目只读 ESI，不收 CANopen 的 EDS。**
 - 现场参数：网口名、轴数与总线顺序、正方向、零点和限幅。
 
 ```text
@@ -37,7 +39,7 @@
   config-runtime/   配置的运行时形态。构建期由 gen/ 生成，主站启动时读它
 
 配置（三层：设备描述 → 出厂设计 → 现场）
-  esi/              设备描述。**出厂是空的**，放入你自己那台电机的 ESI/EDS
+  esi/              设备描述。**出厂是空的**，放入你自己那台电机的 ESI（XML）
   config/           配置源。六族出厂为空：
                     devices/ device_policies/ topologies/ operation_profiles/
                     motion_profiles/ deployments/
@@ -54,14 +56,14 @@
   gen/device/       设备上手工具
 
 运行期工具
-  tools/            Python 工具：客户端、控制台、图形界面、观测、跨机桥
+  tools/            Python 工具：客户端、控制台、图形界面、观测、设点、跨机桥
 
 资料
-  docs/             实现说明、测试方案、运行期资料
+  docs/             实现说明、接口协议、测试方案、功能对标、运行期资料
 
 开发与验证
   tests/            单元测试。第 2 节的 ctest 要用它，构建时不能少
-  checks/           离线检查脚本
+  checks/           离线检查脚本；ci_replay.sh 一条命令按 CI 顺序跑完整套
   scripts/          台架脚本
   analysis/         报告离线判读工具
   evidence/         已采集的测试证据
@@ -126,8 +128,8 @@ python3 gen/emaster_config.py add-device esi/<你的型号>/*.xml
 # 3 补上推不出来的字段。<文件名> 由第 2 步打印
 $EDITOR config/device_policies/<文件名>.json
 
-# 4 只读扫描总线：环上有几台、每台各是什么型号
-build/apps/diagnose_slave/emaster-scan <网卡> > scan.txt
+# 4 只读扫描总线：环上有几台、每台各是什么型号。要 root：原始套接字
+sudo build/apps/diagnose_slave/emaster-scan <网卡> > scan.txt
 
 # 5 生成拓扑、运行方案与部署。轴数和逐台身份都取自扫描
 python3 gen/emaster_config.py init-site --device <设备档 ID> \
@@ -202,7 +204,7 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< status | grep -o 'state=[0
 
 ```bash
 sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
-# OK|axes=<轴数>,max_step=<单步上限计数>|a1:bus=<轴号>,enc=<增量数>/<电机转数>,gear=<M>/<S>,torque=0|a2:...
+# OK|axes=<轴数>,max_offset=<目标偏移上限计数>|a1:bus=<轴号>,enc=<增量数>/<电机转数>,gear=<M>/<S>,torque=0|a2:...
 ```
 
 `torque` 是保留字段，恒为 `0`。额定力矩在设备描述和配置里都没有数据源，所以不填猜测值。
@@ -215,7 +217,7 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
 
 ## 5 命令接口
 
-命令口是 AF_UNIX 流套接字，路径 `/tmp/emaster-<部署ID>.sock`。它接收换行结尾的文本命令。
+命令口是 AF_UNIX 流套接字，路径 `/tmp/emaster-<部署ID>.sock`。它按行分帧：命令以换行符结尾，主站把读进来的字节攒着按行切。一次发送可以带多条命令，一条命令也可以分几次发送——两种都按条处理，每条回一行。没有换行符的字节一直攒着，攒满 511 字节还没有换行就整块丢弃并打一条警告。
 
 **权限警告：`src/bus/io/command_server.c` 对套接字执行 `chmod 0666`，而且没有应用层认证。任何本机用户都能下发运动和停机命令。** 跨机桥 `tools/socket_bridge.py` 同样没有认证。只能在可信、隔离网络、单用户测试环境使用。
 
@@ -229,10 +231,22 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
 | `stop` | 当前实现与 `shutdown` 一样请求会话有序退出。它不只是暂停轨迹，也不代表断电 |
 | `shutdown` | 请求完整停机并退出 |
 | `quick_stop`、`halt <参数>`、`fault_reset` | 解析器已有入口。入口存在不代表相关安全功能已经验收 |
+| `recover_axis <轴号>` | 恢复一台处于故障隔离的轴。解析入口是后补上的，**未经台架验证** |
 
-发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。不要假定一次 socket read 就是一条完整回复。
+发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
 
 外部目标超时由 `external_target_timeout_ms` 指定，默认 200 ms。客户端 100 Hz 的目标更新率与主站 1 kHz 的 PDO 交换率不同。断连、目标暂停、重连必须分别测试。**不能假定自动恢复运动。**
+
+**设点通道（可选，默认关）**
+
+外部控制器高频送目标可以走第三个套接字：`/tmp/emaster-<部署ID>-sp.sock`，AF_UNIX 加 `SOCK_SEQPACKET`，**只写不回**。要 `EMASTER_SETPOINT=1` 才建。
+
+它和 `set_external_target` 写的是同一个目标汇点：覆盖式最新值，两条入口不各有各的语义。位置是原始计数，与观测通道同口径。
+
+- 客户端连上就发，主站连上就收，**没有就绪握手**。挡住"连上之前发了一个离谱的值"的是目标判据，它从第一拍起就生效。先等 `status` 报 `state=4` 再起发送端。
+- **只有 `mode` 与 `q` 进输出路径。** 其余四个量（`dq`、`tau`、`kp`、`kd`）会解码、校验、计数，但今天不用。
+- 记录格式与四种拒收原因见[接口协议](docs/protocol/command-protocol-v1.md)。拒收是局部的：只丢这一条，会话继续，`status` 的 `rejected=` 加一。
+- 发送端参考实现是 `tools/setpoint_send.py`，它的 `--dry-run` 不连主站，只打印会发出去的记录。**这条通道同样没有认证。** `tools/socket_bridge.py` 不转发设点口。
 
 **两层状态不能混。**
 
@@ -247,11 +261,12 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
 
 观测口是独立的只读 unix 套接字 `/tmp/emaster-<部署ID>-obs.sock`。**它要 `EMASTER_OBSERVATION=1` 才存在。**
 
-**主站认的环境变量只有这 8 个。**
+**主站认的环境变量只有这 9 个。**
 
 | 变量 | 作用 |
 | --- | --- |
 | `EMASTER_OBSERVATION` | 建不建观测口。默认关 |
+| `EMASTER_SETPOINT` | 建不建设点口。默认关 |
 | `EMASTER_OBSERVER_VERBOSE` | 观测线程每约 1 秒打一条全部 12 项读数 |
 | `EMASTER_FRAME_TIMEOUT_US` | 覆盖帧超时。默认周期/4 = 250 µs |
 | `EMASTER_AUDIT_MAX_ACCESSES` | 审计访问记录容量上限 |
@@ -307,12 +322,12 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 
 | 目录 | 谁写 | 内容 |
 | --- | --- | --- |
-| `esi/<你的型号>/` | 你放进去 | 厂商的 ESI/EDS 原文件。设备档的权威来源 |
+| `esi/<你的型号>/` | 你放进去 | 厂商的 ESI 原文件（XML）。设备档的权威来源 |
 | `device_policies/` | `add-device` 出草稿，人改 | 人写的那一半：停机掩码、PDO 组选择、支持的模式集合 |
 | `devices/` | `add-device` 合成 | 设备档：身份、PDO 映射、`slow_telemetry` 清单、状态字掩码 |
 | `topologies/` | `init-site` | 拓扑：环上有哪些从站、顺序、每台的身份期望与位置 |
 | `operation_profiles/` | `init-site` | 运行方案：周期、DC 策略（`dc`/`sm`）、SM2/SM3 同步类型、相位与偏移 |
-| `motion_profiles/` | 你写 | 运动方案：单步上限、跟随误差限幅、轨迹、每轴的换算 |
+| `motion_profiles/` | 你写 | 运动方案：跟随误差限幅、轨迹、每轴的换算 |
 | `deployments/` | `init-site` | 部署：主机名、网口、轴数、引用哪套拓扑／运行方案／运动方案、报告路径 |
 | `error_recovery_policies/` | 随产品交付 | 容错阈值。与电机无关 |
 | `messages/zh_CN.json` | 随产品交付 | 中文文案 |
@@ -343,7 +358,7 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | `emaster-dc-prepare` | PRE-OP DC 准备。不改状态 |
 | `emaster-target-probe` | 目标源探针 |
 
-`tools/` 下是 Python 工具：`emaster_client.py`（命令口客户端）、`interactive_control.py`、`emaster_console.py`（终端面板引擎）、`emaster_gui/`（图形界面）、`observation_client.py`（观测口）、`socket_bridge.py`（跨机桥）。
+`tools/` 下是 Python 工具：`emaster_client.py`（命令口客户端）、`interactive_control.py`、`emaster_console.py`（终端面板引擎）、`emaster_gui/`（图形界面）、`observation_client.py`（观测口）、`closed_loop_client.py`（闭环样板：观测→策略→命令）、`setpoint_send.py`（设点口发送端）、`socket_bridge.py`（跨机桥）。另四个是它们共用的支撑与自测：`emaster_endpoint.py`（主站端点）、`rt_affinity.py`（躲开实时核）、`gui_evidence.py`（判界面自检日志）、`test_client_reconnect.py`（重连逻辑的离线自测）。
 
 **`emaster-scan` 会把驱动器拉出 OP 再恢复**，因为它要发 INIT→PRE-OP 请求。**运行中不要用它。**
 
@@ -364,9 +379,9 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 
 还须核对正方向、机械零点和整数舍入。**原始位置零点不是自动校准出的机械零点。**
 
-单步上限由运动方案的 `max_step_millidegrees` 决定，取值看 `topology` 回报的 `max_step`。
+主站不限制目标之间的增量，也不限制速度。步长和速度由客户端决定，取值看客户端自己的规划。
 
-**单步超限不返回错误，而是判定 `MOTION_INVALID` 后中止整个会话、轴失能。** 客户端要把大角度拆成小步流式发送。
+**主站只留一条判据：`|目标 - 当前实际位置|` 超过上限就拒收这一条。** 上限由部署的 `external_target_max_offset_millidegrees` 决定，默认 90°；取值看 `topology` 回报的 `max_offset`（各轴的最小值）。**拒收不中止会话**：该条目标不采纳，上一目标继续保持，其余轴照常跑。轴号与偏移量写进报告与 `status`。
 
 超过 `external_target_timeout_ms` 没收到新目标时，CSP 入口回调返回 `HOLD`，保留最后目标。它不等于驱动器失能。
 
@@ -440,12 +455,12 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | 限制 | 证据与影响 |
 | --- | --- |
 | 命令口权限过宽 | `src/bus/io/command_server.c` 将套接字 `chmod 0666`，无认证。本机任意用户都能控制运动、故障复位或停机 |
-| 命令接收依赖一次 `read()` | 同一文件对 `SOCK_STREAM` 单次 read 缓冲后立即按命令比较。拆包会拒绝合法命令，粘包可能把多条合为一条，超长输入可能被截断后按局部有效值处理 |
+| 命令口超长行整块丢弃 | `command_server.c` 攒到 511 字节还没有换行时丢掉整块并打一条警告。丢弃的是那一行，连接不断——但是这一行里的命令不会被执行 |
 | 外部目标超时不构成安全停机 | `main.c` 在超时后让 CSP 保持上个位置。若产品要求断连后撤使能或受控减速，现行为不满足需求 |
-| 每轴保护统一使用首轴比例 | `main.c` 用 `plan.axes[0]` 的运动配置和换算计算跟随误差与单步计数上限，再作为统一回调限制 |
+| 换算未读回的轴不做目标判据 | `session_setup.c` 只在 `position_scale.read_succeeded` 为真时折算该轴的偏移上限。读不回换算的轴照常跑，只是不判；报告里 `offset_limit_checked=false` 如实标出 |
 | 同型号从站不能唯一确定物理轴 | `topology_mapper.c` 按 vendor/product/revision 选择首个未分配的匹配项，没有序列号或物理标签参与映射。**环序不等于物理关节标签** |
 | DC/Sync0 可靠性是模型估计 | `sync0_margin_ns` 使用参考 DC 时间、启动期 `pdelay` 和配置的 Sync0 相位，没有直接采集 Sync0 边沿或 SM2 完成时间。非负裕量不能证明目标已在正确的 Sync0 前由每个驱动器锁存 |
-| 默认软限位与首次单步检查存在例外 | `session_target.c` 在读回 min=max 时放行位置范围，首目标未提交时跳过单步检查 |
+| 目标判据不是速度限制 | `session_target.c` 只查 `|目标 - 实际位置|`。客户端连发两条各自合法的目标，两条之间的速度可以任意大，主站不看这个 |
 | 模式之间的超时语义不统一 | `main.c` 仅按第一轴是否 CST 选择归零策略，其余模式走保持目标分支。CSV 若继续保持非零速度目标，不能据 CSP 的"保持位置"说明判定已停止 |
 
 **不作为当前已支持能力承诺**：热插拔、动态轴数、多主站协同、功能安全。
