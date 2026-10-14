@@ -37,6 +37,23 @@ typedef struct
 bool emaster_position_scale_is_usable(const emaster_position_scale_t *scale);
 
 /*
+ * 设备档里声明的换算（conversion）落成运行时用的换算参数。设备用 608F/6091 回答了
+ * 就不走这条；设备不实现那两个对象时（MT 的对象字典里就没有它们），声明值接手。
+ *
+ * 三项齐全才算声明过：编码器每转多少计数、减速比的电机侧与负载侧。缺一项就不是换算，
+ * 是一半的换算 —— 而按半份算出来的计数看着像真的，只会把轴按错的系数动起来。缺项时
+ * 返回 false 且**不碰** scale，调用方据此把来源留成"没有"（报告里写 none）。
+ *
+ * encoder_motor_revolutions 固定为 1：608F:2 的语义是"多少个电机转对应
+ * encoder_increments 个计数"，声明这条路径下只有 1 有意义 —— 写别的值等于把"编码器
+ * 不装在电机轴上"这件事也说成声明里有的。
+ */
+bool emaster_position_scale_from_declaration(uint32_t encoder_counts_per_motor_revolution,
+                                             uint32_t gear_motor_revolutions,
+                                             uint32_t gear_shaft_revolutions,
+                                             emaster_position_scale_t *scale);
+
+/*
  * 来源的显示名（简体中文），给控制台那几行用。报告里用的是 ASCII 标识
  * （device / configured / none），两者不能混：报告是给工具读的，控制台是给人的。
  * 有这一行，"换算读取=未通过"与后面两个非零的读数就不会同时出现在同一个操作员眼前。

@@ -29,6 +29,24 @@ bool emaster_position_scale_is_usable(const emaster_position_scale_t *scale)
     return scale != NULL && scale->source != EMASTER_FACT_SOURCE_NONE;
 }
 
+bool emaster_position_scale_from_declaration(uint32_t encoder_counts_per_motor_revolution,
+                                             uint32_t gear_motor_revolutions,
+                                             uint32_t gear_shaft_revolutions,
+                                             emaster_position_scale_t *scale)
+{
+    if (scale == NULL || encoder_counts_per_motor_revolution == 0U ||
+        gear_motor_revolutions == 0U || gear_shaft_revolutions == 0U)
+    {
+        return false;
+    }
+    scale->source = EMASTER_FACT_SOURCE_CONFIGURED;
+    scale->encoder_increments = encoder_counts_per_motor_revolution;
+    scale->encoder_motor_revolutions = 1U;
+    scale->gear_motor_revolutions = gear_motor_revolutions;
+    scale->gear_shaft_revolutions = gear_shaft_revolutions;
+    return true;
+}
+
 const char *emaster_fact_source_label(emaster_fact_source_t source)
 {
     switch (source)

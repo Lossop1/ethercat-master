@@ -20,30 +20,6 @@
 #define EMASTER_EXTERNAL_TARGET_MAX_OFFSET_DEFAULT_MILLIDEGREES UINT32_C(90000)
 
 /*
- * 设备档里声明的换算（conversion）落成运行时用的换算参数。
- *
- * 只在设备没有用 608F/6091 回答时调用；三项齐全才算声明过 —— 缺一项就不是换算，
- * 是一半的换算，而一半的换算折算出来的计数看着像真的。encoder_motor_revolutions
- * 固定为 1：608F:2 的语义是"多少个电机转对应 encoder_increments 个计数"，声明这一
- * 路径下只有 1 有意义（写别的值等于把编码器不装在电机轴上这件事也算进去）。
- */
-static void declared_position_scale(const emaster_slave_profile_t *profile,
-                                    emaster_position_scale_t *scale)
-{
-    if (profile == NULL || scale == NULL ||
-        profile->encoder_counts_per_motor_revolution_default == 0U ||
-        profile->gear_motor_revolutions_default == 0U ||
-        profile->gear_shaft_revolutions_default == 0U) {
-        return;
-    }
-    scale->source = EMASTER_FACT_SOURCE_CONFIGURED;
-    scale->encoder_increments = profile->encoder_counts_per_motor_revolution_default;
-    scale->encoder_motor_revolutions = 1U;
-    scale->gear_motor_revolutions = profile->gear_motor_revolutions_default;
-    scale->gear_shaft_revolutions = profile->gear_shaft_revolutions_default;
-}
-
-/*
  * 按配置声明的精确类型写入并立即读回，避免对象宽度由调用点猜测。
  * 返回成功只表示邮箱事务成功且读回值与配置值一致。
  */
@@ -368,10 +344,15 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
          * 拿到这台机器的人写进设备档。接手之后来源记为"设备档声明"，报告里与读回来的
          * 分开写 —— 换一台设备时，哪一种来源都不该需要改代码。
          */
-        if (session->axes[axis_index].position_scale.source == EMASTER_FACT_SOURCE_NONE)
+        if (session->axes[axis_index].position_scale.source == EMASTER_FACT_SOURCE_NONE &&
+            axis->device_profile != NULL)
         {
-            declared_position_scale(axis->device_profile,
-                                    &session->axes[axis_index].position_scale);
+            /* 缺项时函数返回 false 且不碰 scale：来源仍是"没有"，后面那道门会拦。 */
+            (void)emaster_position_scale_from_declaration(
+                axis->device_profile->encoder_counts_per_motor_revolution_default,
+                axis->device_profile->gear_motor_revolutions_default,
+                axis->device_profile->gear_shaft_revolutions_default,
+                &session->axes[axis_index].position_scale);
         }
         /*
          * 驱动器自己的跟随误差窗与超时（6065 / 6066）。只读回，不写。

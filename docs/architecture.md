@@ -57,7 +57,7 @@
 
 | 阶段 | 做什么 |
 | --- | --- |
-| `PREOP_CONFIGURATION` | 等全体到 PRE-OP → 读换算 SDO → 发现设备实际映射并判定（逐条相同 / 采用设备实际 / 要求改写）→ 只在要求改写时才分配 PDO → 配 DC |
+| `PREOP_CONFIGURATION` | 等全体到 PRE-OP → 读换算 SDO（读不到 `608F`/`6091` 时用设备档 `conversion` 的声明值兜底，来源记进报告）→ 发现设备实际映射并判定（逐条相同 / 采用设备实际 / 要求改写）→ 只在要求改写时才分配 PDO → 配 DC |
 | `SAFEOP_INITIALIZATION` | 进 SAFE-OP，读回实际位置作为起点（**此时输出不生效**） |
 | `OPERATION_REQUEST` | 请求 OP |
 | `CYCLIC_OPERATION` | 1 ms 周期交换 |
