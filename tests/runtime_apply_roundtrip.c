@@ -66,6 +66,7 @@ int main(int argc, char **argv)
             const emaster_operation_mode_t *m = &o->modes[mi];
             printf("operation.%zu.modes.%zu.id\t%s\n", oi, mi, m->mode_id);
             printf("operation.%zu.modes.%zu.value\t%d\n", oi, mi, (int)m->value);
+            printf("operation.%zu.modes.%zu.quantity\t%d\n", oi, mi, (int)m->quantity);
             printf("operation.%zu.modes.%zu.display\t%d\n", oi, mi, (int)m->mode_display_policy);
             printf("operation.%zu.modes.%zu.rx_fields.count\t%zu\n", oi, mi, m->required_rx_field_count);
             printf("operation.%zu.modes.%zu.tx_fields.count\t%zu\n", oi, mi, m->required_tx_field_count);

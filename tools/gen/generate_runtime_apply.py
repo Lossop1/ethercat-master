@@ -81,6 +81,7 @@ def operation_enum_ids() -> dict[str, set[str]]:
         "approval": set(enum_identifiers("operation_approval")),
         "strategy": set(enum_identifiers("sync_strategy")),
         "display": set(enum_identifiers("mode_display")),
+        "quantity": set(enum_identifiers("mode_quantity")),
         "sdo": set(enum_identifiers("sdo_value")),
     }
 
@@ -129,6 +130,10 @@ def runtime_rows(operations: list[dict[str, Any]], motions: list[dict[str, Any]]
             rows += [
                 (f"{mbase}.id", mode["id"]),
                 (f"{mbase}.value", str(mode["value"])),
+                (
+                    f"{mbase}.quantity",
+                    f"EMASTER_MODE_QUANTITY_{mode['quantity'].upper()}",
+                ),
                 (f"{mbase}.display", f"EMASTER_MODE_DISPLAY_{mode['mode_display_policy'].upper()}"),
                 (f"{mbase}.rx_fields.count", str(len(mode["rx_fields"]))),
                 (f"{mbase}.tx_fields.count", str(len(mode["tx_fields"]))),
@@ -253,6 +258,8 @@ def render(operations: list[dict[str, Any]], motions: list[dict[str, Any]]) -> s
     L += [""]
     L += enum_resolver("resolve_display_policy", "emaster_mode_display_policy_t", oids["display"])
     L += [""]
+    L += enum_resolver("resolve_mode_quantity", "emaster_mode_quantity_t", oids["quantity"])
+    L += [""]
     L += enum_resolver("resolve_sdo_type", "emaster_config_sdo_value_type_t", oids["sdo"])
     L += [""]
     L += enum_resolver("resolve_motion_approval", "emaster_motion_profile_approval_t", mids["approval"])
@@ -282,6 +289,9 @@ def render(operations: list[dict[str, Any]], motions: list[dict[str, Any]]) -> s
         '    if (!key_push(leaf, sizeof(leaf), "value") ||',
         "        !emaster_config_reader_i32(reader, leaf, &signed_number)) { return false; }",
         "    out->value = (int8_t)signed_number;",
+        "    memcpy(leaf, base, sizeof(leaf));",
+        '    if (!key_push(leaf, sizeof(leaf), "quantity") ||',
+        "        !resolve_mode_quantity(reader, leaf, &out->quantity)) { return false; }",
         "    memcpy(leaf, base, sizeof(leaf));",
         '    if (!key_push(leaf, sizeof(leaf), "display") ||',
         "        !resolve_display_policy(reader, leaf, &out->mode_display_policy)) { return false; }",

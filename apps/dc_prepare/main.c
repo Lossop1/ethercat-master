@@ -258,9 +258,10 @@ int main(int argc, char **argv)
     plan_status = emaster_session_plan_build(deployment, plan_axes, axis_capacity, &plan);
     if (plan_status != EMASTER_SESSION_PLAN_READY)
     {
+        emaster_session_plan_report_failure(
+            plan_status, &plan, emaster_text(EMASTER_TEXT_DC_PREPARE_PLAN_FAILED));
         free(plan_axes);
         free(results);
-        fputs(emaster_text(EMASTER_TEXT_DC_PREPARE_PLAN_FAILED), stderr);
         return 1;
     }
     if (!confirm_prepare(deployment, plan.axis_count))

@@ -34,6 +34,31 @@ typedef enum
     EMASTER_MODE_DISPLAY_DIAGNOSTIC = 1
 } emaster_mode_display_policy_t;
 
+/*
+ * 一个模式的目标量。外部目标通道收的是一个**数**，而这个数是什么量、量纲如何，
+ * 由模式决定，不是主站猜的：同一条通道在位置模式下是位置计数、在速度模式下是
+ * 计数每秒、在力矩模式下是千分比。判据与断供行为随之完全不同：
+ *
+ *   NONE      该模式没有周期目标（回零：参考点搜寻由驱动器自己走）。反馈仍是
+ *             实际位置——那是参考点搜寻的结果。
+ *   POSITION  目标与反馈都是位置。目标离实际位置太远要拒收；断供保持在原位。
+ *   VELOCITY  目标与反馈都是速度。**不判距离**（速度减位置没有意义，判了就是
+ *             每条都拒）；断供写 0——保持上一条速度等于轴一直跑。
+ *   TORQUE    目标与反馈都是力矩。同样不判距离；断供写 0——保持上一条力矩等于
+ *             轴一直出力。
+ *
+ * 为什么声明而不是按模式号推断：模式号在不同厂商的说明书里指的不是同一件事
+ * （同一取值在一家是 PVT、在另一家可能是别的），而"这个数是位置还是速度"必须
+ * 与设备档声明的模式集合、与运行方案选的模式一起说清楚才成立。
+ */
+typedef enum
+{
+    EMASTER_MODE_QUANTITY_NONE = 0,
+    EMASTER_MODE_QUANTITY_POSITION,
+    EMASTER_MODE_QUANTITY_VELOCITY,
+    EMASTER_MODE_QUANTITY_TORQUE
+} emaster_mode_quantity_t;
+
 typedef enum
 {
     EMASTER_MOTION_PROFILE_DRAFT = 0,
@@ -81,6 +106,8 @@ typedef struct
 {
     const char *mode_id;
     int8_t value;
+    /* 目标通道收的那个数是什么量；外部目标通道的判据与断供行为都按它分。 */
+    emaster_mode_quantity_t quantity;
     const char *const *required_rx_fields;
     size_t required_rx_field_count;
     const char *const *required_tx_fields;

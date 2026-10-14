@@ -302,6 +302,12 @@ def validate_modes(
             f"运行方案 {operation_id} 的模式 {mode_label} 必须明确声明 "
             "mode_display_policy 为 required 或 diagnostic",
         )
+        check.require(
+            mode.get("quantity") in ("none", "position", "velocity", "torque"),
+            f"运行方案 {operation_id} 的模式 {mode_label} 必须明确声明 quantity 为 "
+            "none、position、velocity 或 torque 之一——"
+            "目标通道收的那个数是什么量，主站不从模式号猜",
+        )
         sdo_writes = mode.get("safeop_to_op_sdo_writes", [])
         check.require(
             isinstance(sdo_writes, list),

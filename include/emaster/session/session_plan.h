@@ -24,6 +24,14 @@ typedef enum
     EMASTER_SESSION_PLAN_OPERATION_PROFILE_AMBIGUOUS,
     EMASTER_SESSION_PLAN_OPERATION_PROFILE_NOT_APPROVED,
     EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE,
+    /*
+     * 模式两分。运行方案要跑的模式必须同时满足两个独立的事实，缺哪一边决定了操作员
+     * 该去改什么，所以不合成一句"运行方案不完整"：
+     *   MODE_NOT_DECLARED  —— 设备档声明的模式集合里没有它。配置配错了设备。
+     *   MODE_NOT_DRIVABLE  —— 设备声明支持，主站的过程映像还表达不了它。缺口在主站。
+     */
+    EMASTER_SESSION_PLAN_MODE_NOT_DECLARED,
+    EMASTER_SESSION_PLAN_MODE_NOT_DRIVABLE,
     EMASTER_SESSION_PLAN_PDO_SET_NOT_FOUND,
     EMASTER_SESSION_PLAN_DC_NOT_SUPPORTED,
     EMASTER_SESSION_PLAN_CYCLE_TIME_MISMATCH,
@@ -59,6 +67,15 @@ typedef struct
     const emaster_motion_profile_t *motion_profile;
     /* P2.5: 故障隔离策略 */
     emaster_fault_policy_t fault_policy;
+    /*
+     * 失败现场：哪一根轴、哪个模式。只在两个模式类失败上有值。
+     *
+     * 打印中止原因要能点到名字。只说"运行方案不完整"，操作员拿不到任何线索去分辨
+     * 是自己配错了设备，还是主站根本还没实现那个模式 —— 这两件事的下一步完全不同。
+     */
+    size_t failing_axis_ordinal;
+    const char *failing_mode_id;
+    int8_t failing_mode_value;
 } emaster_session_plan_t;
 
 /*
@@ -70,9 +87,29 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
                            emaster_session_axis_plan_t *axis_storage,
                            size_t axis_capacity, emaster_session_plan_t *result);
 
+/*
+ * 计划失败时把中止原因写到 stderr。
+ *
+ * 两个模式类失败会点到名字（哪根轴、哪个模式、缺的是设备还是主站），其余失败原样
+ * 打印 fallback —— 那是各入口自己的通用话术。三个入口共用一个实现，同一种失败才
+ * 不会在三个工具里报出三种说法。
+ */
+void emaster_session_plan_report_failure(emaster_session_plan_status_t status,
+                                         const emaster_session_plan_t *plan,
+                                         const char *fallback);
+
 /* 诊断策略只能放行保持位置；配置了运动的轴始终要求有效模式匹配。 */
 bool emaster_session_axis_mode_allows_control(const emaster_session_axis_plan_t *axis,
                                               bool mode_matches);
+
+/*
+ * 计划里每一根轴是否都有周期目标。回零（模式 6）没有。
+ *
+ * 外部目标通道按"一条记录覆盖全部轴"提交，所以只要有一根轴没有目标，这条通道就
+ * 不成立：把它建起来，设点口会照常收记录、计数照常涨，而那一根轴的目标无处可去。
+ * 空计划返回 false。
+ */
+bool emaster_session_plan_has_cyclic_targets(const emaster_session_plan_t *plan);
 
 typedef enum
 {

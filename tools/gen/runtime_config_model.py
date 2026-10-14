@@ -31,6 +31,10 @@ ENUM_VOCABULARY: dict[str, tuple[str, tuple[str, ...]]] = {
     "operation_approval": ("EMASTER_OPERATION_PROFILE_", ("draft", "approved")),
     "sync_strategy": ("EMASTER_SYNC_STRATEGY_", ("sm", "dc")),
     "mode_display": ("EMASTER_MODE_DISPLAY_", ("required", "diagnostic")),
+    "mode_quantity": (
+        "EMASTER_MODE_QUANTITY_",
+        ("none", "position", "velocity", "torque"),
+    ),
     "sdo_value": (
         "EMASTER_CONFIG_SDO_VALUE_",
         ("u8", "i8", "u16", "i16", "u32", "i32"),
@@ -369,6 +373,14 @@ def operation_values(
                     "mode_display_policy 为 required 或 diagnostic"
                 )
 
+            quantity = mode.get("quantity")
+            if quantity not in enum_values("mode_quantity"):
+                raise ValueError(
+                    f"运行方案 {operation_id} 的模式 {mode_id} 必须明确声明 quantity 为 "
+                    f"{'、'.join(enum_values('mode_quantity'))} 之一——"
+                    "目标通道收的那个数是什么量，主站不从模式号猜"
+                )
+
             sdo_writes_value = mode.get("safeop_to_op_sdo_writes", [])
             if not isinstance(sdo_writes_value, list):
                 raise ValueError(
@@ -510,6 +522,7 @@ def operation_values(
                 {
                     "id": mode_id,
                     "value": mode_value,
+                    "quantity": quantity,
                     "rx_fields": required_rx_fields,
                     "tx_fields": required_tx_fields,
                     "mode_display_policy": mode_display_policy,

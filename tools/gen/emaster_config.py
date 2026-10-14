@@ -42,25 +42,38 @@ from esi_facts import load_esi_facts, select_device  # noqa: E402
 
 # CiA 402 各模式必须有的过程数据字段。这是标准定的，不是这台设备定的。
 # 生成运行方案时按这几条去设备档的 PDO 里核对，缺一条就说明这套映射跑不了这个模式。
-MODE_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+# 每个模式的三件事：Rx 侧要哪些字段、Tx 侧要哪些字段、目标通道收的那个数是什么量。
+# 第三项进运行方案的 `quantity`，运行期据此决定判据与断供行为 —— 不按模式号分支。
+MODE_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...], str]] = {
     "csp": (
         ("control_word", "target_position", "mode_of_operation"),
         ("status_word", "actual_position", "mode_display"),
+        "position",
     ),
     "csv": (
         ("control_word", "target_velocity", "mode_of_operation"),
         ("status_word", "actual_velocity", "mode_display"),
+        "velocity",
     ),
     "cst": (
         ("control_word", "target_torque", "mode_of_operation"),
         ("status_word", "actual_torque", "mode_display"),
+        "torque",
+    ),
+    # 回零没有周期目标：Rx 侧只要控制字与模式，Tx 侧要实际位置（参考点搜寻的结果）。
+    "homing": (
+        ("control_word", "mode_of_operation"),
+        ("status_word", "actual_position", "mode_display"),
+        "none",
     ),
 }
 
 # 一个模块支持多种模式时先挑哪个。CSP 是位置主轴的核心模式，其余按使用频率排。
+# 回零（homing）不在这张表里：它是特殊用途的一次性模式，不该被自动挑中。
 MODE_PREFERENCE = ("csp", "csv", "cst")
 
 # ESI 里观察不到模式集合时的兜底：CiA 402 标准三件套的模式号。
+# 兜底里不含 homing：它是不是支持只有设备自己知道，不能替客户猜。
 STANDARD_MODE_VALUES = {"csp": 8, "csv": 9, "cst": 10}
 
 # 台架实测的 DC 同步参数（1 ms 周期的取值）。周期变了按比例缩放，见 _sync_block。
@@ -195,7 +208,9 @@ def _pdo_set_draft(
     draft: list[dict[str, Any]] = []
     for module in modules:
         modes = module_mode_ids(module)
-        usable = [mode for mode in MODE_PREFERENCE if mode in modes]
+        # 常用模式优先；一个模块只写得出 homing 时（纯回零通道）也要起草得出来，
+        # 所以退回到它认得的全部模式里排第一个。
+        usable = [mode for mode in MODE_PREFERENCE if mode in modes] or sorted(modes)
         if not usable:
             raise SystemExit(
                 f"模块 {module['module_ident']}（{module.get('type')}）没写出任何"
@@ -311,7 +326,7 @@ def add_device(args: argparse.Namespace) -> int:
 
 
 def _mode_rank(mode_id: str) -> int:
-    """模式在运行方案里的排列顺序：认识的按 MODE_PREFERENCE，不认识的排最后。"""
+    """模式在运行方案里的排列顺序：常用的按 MODE_PREFERENCE，其余（含 homing）排最后。"""
     return (
         MODE_PREFERENCE.index(mode_id)
         if mode_id in MODE_PREFERENCE
@@ -372,7 +387,7 @@ def _modes_block(
         layout = MODE_FIELDS.get(mode_id)
         if layout is None:
             continue
-        rx_fields, tx_fields = layout
+        rx_fields, tx_fields, quantity = layout
         missing = [name for name in rx_fields + tx_fields if name not in rx_names | tx_names]
         if missing:
             continue
@@ -380,6 +395,7 @@ def _modes_block(
             {
                 "id": mode_id,
                 "value": value,
+                "quantity": quantity,
                 "required_rx_fields": list(rx_fields),
                 "required_tx_fields": list(tx_fields),
                 "mode_display_policy": "required",
@@ -388,7 +404,8 @@ def _modes_block(
     if not any(mode["id"] == wanted for mode in modes):
         raise SystemExit(
             f"PDO 方案 {pdo_set['id']} 表达不了模式 {wanted}："
-            "缺字段，或者这个模式的字段布局本工具不认识（只认 csp/csv/cst）"
+            "缺字段，或者这个模式的字段布局本工具不认识（只认 "
+            f"{'、'.join(sorted(MODE_FIELDS))}）"
         )
     return modes
 

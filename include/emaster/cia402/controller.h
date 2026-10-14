@@ -4,6 +4,39 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/*
+ * 运行模式（0x6060 写 / 0x6061 读）里执行层认得的几个。
+ *
+ * 模式 6 是回零：参考点搜寻由驱动器自己走，**没有周期目标**。8/9/10 各有自己的目标
+ * 与反馈字段。其余模式一律不认，会话计划阶段就拒绝——认了却绑不上目标字段，
+ * 只会得到一台进了 OP 但不动、且报告全绿的轴。
+ *
+ * 这三个数是 CiA 402 定的，不是这台设备定的。
+ */
+enum
+{
+    EMASTER_CIA402_MODE_HOMING = 6,
+    EMASTER_CIA402_MODE_CSP = 8,
+    EMASTER_CIA402_MODE_CSV = 9,
+    EMASTER_CIA402_MODE_CST = 10
+};
+
+/* 执行层是否接受这个运行模式。 */
+static inline bool emaster_cia402_mode_is_supported(int8_t mode)
+{
+    return mode == (int8_t)EMASTER_CIA402_MODE_HOMING ||
+           mode == (int8_t)EMASTER_CIA402_MODE_CSP ||
+           mode == (int8_t)EMASTER_CIA402_MODE_CSV ||
+           mode == (int8_t)EMASTER_CIA402_MODE_CST;
+}
+
+/*
+ * 这里原先有一个 emaster_cia402_mode_has_cyclic_target(mode)，按模式号答"有没有周期
+ * 目标"。它已删除：这个问题的答案现在由运行方案按模式声明（`quantity == none` 就没有），
+ * 因为模式号跨厂商有歧义 —— 同一个取值在一家的说明书里是一个意思，在另一家可能不是。
+ * 谁需要这个答案，读那份声明，不要再按号推断。
+ */
+
 /* CiA 402 状态字的标准状态集合；未知组合必须作为阻断状态处理。 */
 typedef enum
 {

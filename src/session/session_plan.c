@@ -1,5 +1,7 @@
 #include "emaster/session/session_plan.h"
 
+#include "emaster/cia402/controller.h"
+
 #include <stdbool.h>
 #include <string.h>
 
@@ -17,6 +19,44 @@ fail_plan(emaster_session_plan_t *result, emaster_session_axis_plan_t *axes,
         result->status = status;
     }
     return status;
+}
+
+/*
+ * 带失败现场的收尾。只有模式类失败用它 —— 那两种失败的下一步取决于"缺的是哪一边"，
+ * 不点名就只能让操作员把三份配置从头翻一遍。
+ */
+static emaster_session_plan_status_t
+fail_mode_plan(emaster_session_plan_t *result, emaster_session_axis_plan_t *axes,
+               size_t axis_count, emaster_session_plan_status_t status,
+               size_t axis_ordinal, const emaster_operation_mode_t *mode)
+{
+    fail_plan(result, axes, axis_count, status);
+    if (result != NULL)
+    {
+        result->failing_axis_ordinal = axis_ordinal;
+        result->failing_mode_id = mode->mode_id;
+        result->failing_mode_value = mode->value;
+    }
+    return status;
+}
+
+/* 设备档声明的模式集合里有没有这个取值。设备档缺集合时按"没声明"处理，不许瞎放行。 */
+static bool device_declares_mode(const emaster_slave_profile_t *device, int8_t mode_value)
+{
+    size_t index;
+
+    if (device->supported_modes == NULL)
+    {
+        return false;
+    }
+    for (index = 0U; index < device->supported_mode_count; ++index)
+    {
+        if (device->supported_modes[index] == mode_value)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 static emaster_session_plan_status_t
@@ -236,13 +276,30 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
             return fail_plan(result, axis_storage, topology->slave_count,
                              EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);
         }
-        /* 三种 CiA 402 模式由过程映像按各自目标/反馈字段绑定；未知模式拒绝运行。 */
-        if (operation_mode->value != INT8_C(8) &&
-            operation_mode->value != INT8_C(9) &&
-            operation_mode->value != INT8_C(10))
+        /*
+         * 模式能力是两个独立的事实，缺哪一边决定了下一步该做什么，所以分开报。
+         *
+         * 设备这一边：设备档声明它认哪几个 0x6060 取值。这个事实推不出来又必须准 ——
+         * ESI 的模块类型只有模块化设备才写，非模块化设备一个字都没有；而同一个取值在
+         * 两家的说明书里可能指的不是同一件事（台架那台 MT 的通道 0x1601 是 PVT 控制
+         * 通道，良质的 0x1601 是精简 CSP）。所以运行期不按型号分支、也不猜通道号，
+         * 只认档里这一份声明。它不在里面，就是这份配置配错了设备。
+         *
+         * 主站这一边：值认出来了，还得有把目标字段绑进过程映像的能力。8/9/10 各有目标，
+         * 模式 6（回零）没有目标、只写控制字与模式本身（见 cia402/controller.h）。
+         * 缺口在主站这一侧，跟设备没关系。
+         */
+        if (!device_declares_mode(device, operation_mode->value))
         {
-            return fail_plan(result, axis_storage, topology->slave_count,
-                             EMASTER_SESSION_PLAN_OPERATION_PROFILE_INCOMPLETE);
+            return fail_mode_plan(result, axis_storage, topology->slave_count,
+                                  EMASTER_SESSION_PLAN_MODE_NOT_DECLARED,
+                                  axis_index, operation_mode);
+        }
+        if (!emaster_cia402_mode_is_supported(operation_mode->value))
+        {
+            return fail_mode_plan(result, axis_storage, topology->slave_count,
+                                  EMASTER_SESSION_PLAN_MODE_NOT_DRIVABLE,
+                                  axis_index, operation_mode);
         }
         if (operation->sync_strategy == EMASTER_SYNC_STRATEGY_DC &&
             !device->supports_distributed_clocks)
@@ -328,6 +385,29 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
     result->motion_profile = deployment->motion_profile;
     result->fault_policy = deployment->fault_policy;  /* P2.5: 传递故障策略 */
     return result->status;
+}
+
+bool emaster_session_plan_has_cyclic_targets(const emaster_session_plan_t *plan)
+{
+    size_t axis_index;
+
+    if (plan == NULL || plan->axes == NULL || plan->axis_count == 0U)
+    {
+        return false;
+    }
+    for (axis_index = 0U; axis_index < plan->axis_count; ++axis_index)
+    {
+        /*
+         * "有没有周期目标"就是宣不声明量：声明了 none 的模式（回零）没有周期目标。
+         * 不按模式号认——同一个号在不同厂商的说明书里指的不是同一件事。
+         */
+        if (plan->axes[axis_index].operation_mode == NULL ||
+            plan->axes[axis_index].operation_mode->quantity == EMASTER_MODE_QUANTITY_NONE)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool emaster_session_axis_mode_allows_control(const emaster_session_axis_plan_t *axis,
