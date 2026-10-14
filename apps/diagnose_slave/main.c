@@ -247,6 +247,18 @@ int main(int argc, char *argv[])
         char encoder_revolutions_text[24];
         bool gear_read = false;
         bool encoder_read = false;
+        uint32_t max_motor_speed = 0U;
+        uint32_t profile_velocity = 0U;
+        uint32_t profile_acceleration = 0U;
+        uint32_t profile_deceleration = 0U;
+        char max_motor_speed_text[24];
+        char profile_velocity_text[24];
+        char profile_acceleration_text[24];
+        char profile_deceleration_text[24];
+        bool max_motor_speed_read = false;
+        bool profile_velocity_read = false;
+        bool profile_acceleration_read = false;
+        bool profile_deceleration_read = false;
 
         if (preop_reached && (slave->mbx_proto & ECT_MBXPROT_COE) != 0U)
         {
@@ -305,6 +317,28 @@ int main(int argc, char *argv[])
                                          UINT8_C(0x00), &vendor_fault);
             vendor_ext_fault_read = read_u32(&context, (uint16_t)index, UINT16_C(0x203E),
                                              UINT8_C(0x00), &vendor_ext_fault);
+            /*
+             * 速度与加速度的限制配置：0x6080 最大电机转速、0x6081 轮廓速度、
+             * 0x6083 轮廓加速度、0x6084 轮廓减速度。
+             *
+             * 加这四条是因为"轴只走到指令的一部分，限制在哪"在报告里没有依据：主站从不
+             * 读它们，报告里也不会出现。手册把 0x6081 的换算写死了 ——
+             *   POSPLAN_MAXSPD(RPM) = ProfileVelocity / (Resolution × GearRatio) × 60
+             * ——但它是不是也管 CSP，手册没说。值本身读出来之前，谈不了。
+             *
+             * 放在**这一组**（与 6041/603F 同批），不放在上面读 6091/608F 那一组：
+             * 那组在 PRE-OP 刚落地时就发，2026-10-14 实测整组返回 na——同一轮里
+             * 晚几十个邮箱往返的 6041/603F 却读得回来。先按"邮箱还没热"处理，
+             * 换组重试；若这里仍是 na，那就是驱动器真的不做这几条。
+             */
+            max_motor_speed_read = read_u32(&context, (uint16_t)index, UINT16_C(0x6080),
+                                            UINT8_C(0x00), &max_motor_speed);
+            profile_velocity_read = read_u32(&context, (uint16_t)index, UINT16_C(0x6081),
+                                             UINT8_C(0x00), &profile_velocity);
+            profile_acceleration_read = read_u32(&context, (uint16_t)index, UINT16_C(0x6083),
+                                                 UINT8_C(0x00), &profile_acceleration);
+            profile_deceleration_read = read_u32(&context, (uint16_t)index, UINT16_C(0x6084),
+                                                 UINT8_C(0x00), &profile_deceleration);
         }
         char statusword_text[16];
         char error_code_text[16];
@@ -354,6 +388,14 @@ int main(int argc, char *argv[])
                    encoder_increments);
         format_u32(encoder_revolutions_text, sizeof(encoder_revolutions_text), encoder_read,
                    encoder_revolutions);
+        format_u32(max_motor_speed_text, sizeof(max_motor_speed_text), max_motor_speed_read,
+                   max_motor_speed);
+        format_u32(profile_velocity_text, sizeof(profile_velocity_text), profile_velocity_read,
+                   profile_velocity);
+        format_u32(profile_acceleration_text, sizeof(profile_acceleration_text),
+                   profile_acceleration_read, profile_acceleration);
+        format_u32(profile_deceleration_text, sizeof(profile_deceleration_text),
+                   profile_deceleration_read, profile_deceleration);
 
         /*
          * state 是这一拍读回来的 AL 状态：1=INIT、2=PRE-OP、4=SAFE-OP、8=OP。
@@ -406,6 +448,7 @@ int main(int argc, char *argv[])
                "state=%u al_status=0x%04X dc=%d coe=%d mbx_rl=%u cfgadr=%u al_wkc=%d "
                "alctl_wkc=%d state_after=%u ack_wkc=%d al_code=0x%04X errbit=%d "
                "gear=%s/%s enc=%s/%s "
+               "maxspeed_6080=%s pvel_6081=%s pacc_6083=%s pdec_6084=%s "
                "cia402_6041=%s cia402=%s cia402_603f=%s fault_203f=%s fault_203e=%s\n",
                index, slave->name, (unsigned)slave->eep_man, (unsigned)slave->eep_id,
                (unsigned)slave->eep_rev, (unsigned)slave->state,
@@ -415,8 +458,9 @@ int main(int argc, char *argv[])
                alctl_wkc, (unsigned)(etohs(al_after) & 0x0fU), al_after_wkc,
                (unsigned)al_code, al_error_bit ? 1 : 0,
                gear_motor_text, gear_shaft_text, encoder_increments_text,
-               encoder_revolutions_text, statusword_text, cia402_state, error_code_text,
-               vendor_fault_text, vendor_ext_text);
+               encoder_revolutions_text, max_motor_speed_text, profile_velocity_text,
+               profile_acceleration_text, profile_deceleration_text, statusword_text,
+               cia402_state, error_code_text, vendor_fault_text, vendor_ext_text);
     }
 
     /* 看完就把全体请求回 INIT：本工具不参与运行，不该把从站留在 PRE-OP。 */
