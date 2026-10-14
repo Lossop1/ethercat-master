@@ -57,8 +57,11 @@ def catalog_rows(values: list[dict[str, Any]]) -> list[tuple[str, str]]:
             (f"{base}.supports_distributed_clocks", profile["supports_dc"]),
             (f"{base}.safe_stop_status_mask", str(profile["safe_stop_status_mask"])),
             (f"{base}.safe_stop_status_value", str(profile["safe_stop_status_value"])),
+            (f"{base}.supported_modes.count", str(len(profile["supported_modes"]))),
             (f"{base}.pdo_sets.count", str(len(profile["pdo_sets"]))),
         ]
+        for mi, mode in enumerate(profile["supported_modes"]):
+            rows.append((f"{base}.supported_modes.{mi}", str(mode)))
         for si, pdo in enumerate(profile["pdo_sets"]):
             pbase = f"{base}.pdo_sets.{si}"
             rows += [
@@ -344,6 +347,7 @@ def render(values: list[dict[str, Any]]) -> str:
         "    char leaf[EMASTER_KEY_CAPACITY];",
         "    emaster_pdo_set_profile_t *sets;",
         "    emaster_slow_telemetry_t *telemetry;",
+        "    int8_t *modes;",
         "    size_t index;",
         "    size_t count;",
         "    uint32_t number = 0U;",
@@ -408,6 +412,42 @@ def render(values: list[dict[str, Any]]) -> str:
             "    if (number > UINT16_MAX) { emaster_config_reader_note_failure(\"超出 uint16 范围\"); return false; }",
             f"    {target} = (uint16_t)number;",
         ]
+    # 设备声明的模式集合。空集合与缺项都不是"随便跑什么模式都行"：前者是设备说它一个
+    # 都不支持，后者是这份档没受过生成链的校验。两种都在这里拒绝，不许运行期去猜。
+    L += [
+        "    memcpy(key, base, sizeof(key));",
+        '    if (!key_push(key, sizeof(key), "supported_modes") ||',
+        '        !key_push(key, sizeof(key), "count") ||',
+        "        !emaster_config_reader_size(reader, key, &count))",
+        "    {",
+        "        return false;",
+        "    }",
+        "    if (count == 0U)",
+        "    {",
+        "        emaster_config_reader_note_failure(\"设备档没声明支持哪些运行模式\");",
+        "        return false;",
+        "    }",
+        "    modes = (int8_t *)calloc(count, sizeof(*modes));",
+        "    if (modes == NULL) { return false; }",
+        "    out->supported_modes = modes;",
+        "    out->supported_mode_count = count;",
+        "    for (index = 0U; index < count; ++index)",
+        "    {",
+        "        memcpy(key, base, sizeof(key));",
+        '        if (!key_push(key, sizeof(key), "supported_modes") ||',
+        "            !key_push_index(key, sizeof(key), index))",
+        "        {",
+        "            return false;",
+        "        }",
+        "        if (!emaster_config_reader_i32(reader, key, &signed_number)) { return false; }",
+        "        if (signed_number < -128 || signed_number > 127)",
+        "        {",
+        "            emaster_config_reader_note_failure(\"模式取值超出 int8 范围\");",
+        "            return false;",
+        "        }",
+        "        modes[index] = (int8_t)signed_number;",
+        "    }",
+    ]
     # PDO 方案
     L += [
         "    memcpy(key, base, sizeof(key));",

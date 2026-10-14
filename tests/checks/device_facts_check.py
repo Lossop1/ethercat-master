@@ -6,13 +6,16 @@
 
 为什么查这一条。这条链是"客户换自己的电机、不重编主站"的唯一入口，而它坏掉的样子
 是不出声的：映射条目顺序被重排、位偏移整体错位，设备照样进 OP、反馈值照样有数，
-只是数对不上。所以这里钉住三件事 —— 推导结果逐项固定、合成出的设备档字段位置正确、
-**推不出来的时候必须非零退出**。猜着往下走的代价是拿错的映射跑真轴。
+只是数对不上。所以这里钉住五件事 —— 推导结果逐项固定、合成出的设备档字段位置正确、
+**换算声明三项不全时必须被拒**、**模式集合缺声明时必须被拒且要走到运行期**、
+**推不出来的时候必须非零退出**。猜着往下走的代价是拿错的映射跑真轴；换算给半份的
+代价更隐蔽：折算出来的计数看着像真的；模式集合缺声明则是每一种模式都被安静地放行。
 
 样本从哪来。这份检查自带的 ESI 是本文件里的字符串，不读仓库里任何 ESI：项目交付
 时不含任何电机配置（连 ESI 都没有，客户把自己那份放进 esi/）。用合成样本的好处是
 每条断言背后的输入就写在旁边，改了推导规则立刻看得出哪条断言该跟着改。
 """
+import copy
 import json
 import os
 import subprocess
@@ -23,9 +26,12 @@ from pathlib import Path
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "tools", "gen", "device"))
+sys.path.insert(0, os.path.join(REPO, "tools", "gen"))
 
 from derive_device_facts import derive  # noqa: E402
 from esi_facts import extract_esi_facts, select_device  # noqa: E402
+import validate_device_config  # noqa: E402
+from validation_common import Validation  # noqa: E402
 
 
 def _entry(index: str, bits: int, data_type: str = "UINT") -> str:
@@ -386,7 +392,13 @@ def check_optional_facts_round_trip(failures):
     with tempfile.TemporaryDirectory() as scratch:
         facts = derive(_facts_of(DIRECT_ESI))
         policy = _direct_policy()
-        policy["conversion"] = {"encoder_counts_per_motor_revolution_default": 65536}
+        # 三项齐全：校验器只收完整的声明（见 check_conversion_declaration），
+        # 样本自己也别拿半份当例子，否则读者会以为半份是能用的。
+        policy["conversion"] = {
+            "encoder_counts_per_motor_revolution_default": 65536,
+            "gear_motor_revolutions_default": 10,
+            "gear_shaft_revolutions_default": 1,
+        }
         policy["slow_telemetry"] = ["0x6079", "0x200B"]
         code, path = _merge(scratch, facts, policy)
         if code != 0:
@@ -398,6 +410,163 @@ def check_optional_facts_round_trip(failures):
             failures.append("策略给的 conversion 没原样带进设备档")
         if profile.get("slow_telemetry") != policy["slow_telemetry"]:
             failures.append("策略给的 slow_telemetry 没原样带进设备档")
+
+
+def _conversion_errors(conversion):
+    """把一份只带 conversion 的残缺档喂给配置校验器，只回换算相关的错误。
+
+    档的其余部分是故意缺的 —— 这里问的是换算那一条，别的错误是样本本身的形状，
+    所以按关键词过滤，不看总错误数。
+    """
+    # 设备名里不许出现 conversion：每条错误都带 "设备 <id>"，名字带这个词的话，
+    # 其余字段缺失的错也会被下面的过滤捞进来。
+    profile = {"schema_version": 2, "profile_id": "check.facts", "model": "check"}
+    if conversion is not None:
+        profile["conversion"] = conversion
+    check = Validation(errors=[])
+    validate_device_config.validate_profile(check, profile)
+    return [error for error in check.errors if "conversion" in error or "polarity" in error]
+
+
+def check_conversion_declaration(failures):
+    """设备档的换算声明：三项一起给才算声明过；给半份、给零、给错方向都必须拒。
+
+    运行期把这份声明当成一整份换算用（`emaster_position_scale_from_declaration`：
+    三项齐全才认），缺任一项来源就留成"没有"，会话判运动无效、轴一步不动。所以这里
+    问的是同一个问题：配置期能不能放一份运行期必然用不了的声明过去。能过去，失败就
+    推到了运行期 —— 那时看到的是一句跟配置无关的错。
+
+    这一条自己就带判别力：期望非零的那几例在一个"什么都收"的校验器上会一起红。
+    """
+    full = {
+        "encoder_counts_per_motor_revolution_default": 131072,
+        "gear_motor_revolutions_default": 19612,
+        "gear_shaft_revolutions_default": 1000,
+    }
+    cases = {
+        "三项齐全": (dict(full), 0),
+        "只有编码器，减速比两段都没给": (
+            {"encoder_counts_per_motor_revolution_default": 131072}, 1),
+        "半份减速比：只有电机侧": (
+            {"encoder_counts_per_motor_revolution_default": 131072,
+             "gear_motor_revolutions_default": 19612}, 1),
+        "半份减速比：只有负载侧": (
+            {"encoder_counts_per_motor_revolution_default": 131072,
+             "gear_shaft_revolutions_default": 1000}, 1),
+        "编码器计数为零": (
+            {"encoder_counts_per_motor_revolution_default": 0,
+             "gear_motor_revolutions_default": 19612,
+             "gear_shaft_revolutions_default": 1000}, 1),
+        "减速比分母为零": (
+            {"encoder_counts_per_motor_revolution_default": 131072,
+             "gear_motor_revolutions_default": 19612,
+             "gear_shaft_revolutions_default": 0}, 1),
+        "方向值越界": (dict(full, polarity_default=2), 1),
+    }
+    for label, (conversion, expected) in cases.items():
+        got = len(_conversion_errors(conversion))
+        if got != expected:
+            failures.append(
+                "换算声明「%s」：校验器给了 %d 条换算错误，应 %d 条" % (label, got, expected)
+            )
+    # 整块不写是合法的：厂商资料没给换算，是句实话，不是"每转 0 个计数"。
+    if _conversion_errors(None):
+        failures.append("不写 conversion 却被判成错：缺省是合法的一句实话")
+
+
+def _generate_catalog(scratch, profile):
+    """把一份设备档喂给目录生成器，返回（退出码, 扁平文件文本）。
+
+    每次先清掉上一次的产物：这条检查问的是"这一次生成了什么"，上一轮的残留会让
+    "生成失败却留下旧产物"看起来像成功。
+    """
+    devices = os.path.join(scratch, "devices")
+    if not os.path.isdir(devices):
+        os.makedirs(devices)
+    for name in os.listdir(devices):
+        os.remove(os.path.join(devices, name))
+    _write(os.path.join(devices, "device.json"), profile)
+    flat = os.path.join(scratch, "catalog.flat")
+    if os.path.exists(flat):
+        os.remove(flat)
+    code = _run(
+        [
+            "tools/gen/generate_catalog_apply.py",
+            "--devices", devices,
+            "--c-output", os.path.join(scratch, "catalog.c"),
+            "--h-output", os.path.join(scratch, "generated_catalog.h"),
+            "--flat-output", flat,
+        ]
+    )
+    text = ""
+    if os.path.exists(flat):
+        with open(flat, encoding="utf-8") as handle:
+            text = handle.read()
+    return code, text
+
+
+def check_mode_set_reaches_runtime(failures):
+    """档里声明的模式集合必须一路走到运行期，缺声明必须硬失败。
+
+    这个事实推不出来：ESI 的模块类型只有模块化设备才写得出，非模块化设备一个字都
+    没有；而同一个取值在两家的说明书里指的不是同一件事（台架那台 MT 的通道 0x1601
+    是 PVT 控制通道，良质的 0x1601 是精简 CSP）。所以运行期不按型号分支、也不猜
+    通道号，只认档里这一份声明 —— 而它得先真的到得了运行期。
+
+    在这里钉两头：
+    ① 合成出的设备档经目录生成器后，扁平文件里带着模式集合，且升序去重 ——
+       运行期才能拿它跟运行方案要跑的模式对账；少了这一项，运行期就只能放行一切。
+    ② 缺声明、空集合、取值越界都必须被拒，且校验器要报出这一条。缺省成"什么都
+       支持"会把设备带进它不认的模式；缺省成"什么都不支持"会让每一份配置都跑不
+       起来。两种都不是实话，所以不给缺省。
+    """
+    with tempfile.TemporaryDirectory() as scratch:
+        facts = derive(_facts_of(MODULAR_ESI))
+        code, path = _merge(scratch, facts, _modular_policy(), name="modes.json")
+        if code != 0:
+            failures.append("模式集合的样本档合成失败，merge 返回 %d（应 0）" % code)
+            return
+        with open(path, encoding="utf-8") as handle:
+            profile = json.load(handle)
+
+        check = Validation(errors=[])
+        validate_device_config.validate_profile(check, profile)
+        if check.errors:
+            failures.append("合成出的设备档没过校验器：%s" % check.errors[0])
+
+        code, text = _generate_catalog(scratch, profile)
+        if code != 0:
+            failures.append("带模式集合的设备档生成目录失败（%d）" % code)
+        else:
+            if "profile.0.supported_modes.count\t3" not in text:
+                failures.append("扁平文件没带出模式集合的条数")
+            for ordinal, value in enumerate((8, 9, 10)):
+                if "profile.0.supported_modes.%d\t%d" % (ordinal, value) not in text:
+                    failures.append("扁平文件里的第 %d 项不是模式 %d" % (ordinal, value))
+
+        def set_modes(broken, modes):
+            broken["protocol"]["supported_modes"] = modes
+
+        cases = {}
+        missing = copy.deepcopy(profile)
+        missing["protocol"].pop("supported_modes")
+        cases["档里没有 supported_modes"] = missing
+
+        empty = copy.deepcopy(profile)
+        set_modes(empty, {})
+        cases["supported_modes 是空对象"] = empty
+
+        too_big = copy.deepcopy(profile)
+        set_modes(too_big, {"csp": 200})
+        cases["模式取值超出 int8"] = too_big
+
+        for label, broken in cases.items():
+            if _generate_catalog(scratch, broken)[0] == 0:
+                failures.append("%s：目录生成器返回 0（应非零）" % label)
+            check = Validation(errors=[])
+            validate_device_config.validate_profile(check, broken)
+            if not [error for error in check.errors if "supported_modes" in error or "模式" in error]:
+                failures.append("%s：校验器没报这一条" % label)
 
 
 def check_broken_esi(failures):
@@ -511,8 +680,10 @@ def main():
     check_direct(failures)
     check_direct_merge(failures)
     check_optional_facts_round_trip(failures)
+    check_conversion_declaration(failures)
     check_broken_esi(failures)
     check_supported_modes_conflict(failures)
+    check_mode_set_reaches_runtime(failures)
     check_multi_device(failures)
 
     for failure in failures:

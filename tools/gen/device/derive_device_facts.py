@@ -54,7 +54,9 @@ STANDARD_FIELD_NAMES: dict[str, str] = {
 }
 
 # ESI 里 module 的 type 字符串 → CiA 402 模式号。同样是标准取值。
-STANDARD_MODE_VALUES: dict[str, int] = {"csp": 8, "csv": 9, "cst": 10}
+# homing 是模式 6：ESI 里的写法是 "homing - axis"。它没有周期目标，程序映像只写
+# 控制字与模式本身——这一点由运行期按模式判，不是在这里。
+STANDARD_MODE_VALUES: dict[str, int] = {"csp": 8, "csv": 9, "cst": 10, "homing": 6}
 
 
 def _field_name(index: str) -> str:

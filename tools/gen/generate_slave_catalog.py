@@ -202,6 +202,32 @@ def slow_telemetry_values(document: dict[str, Any], profile_id: str) -> list[dic
     return values
 
 
+def supported_mode_values(document: dict[str, Any], profile_id: str) -> list[int]:
+    """设备声明的模式集合：0x6060 的取值，升序去重。
+
+    这一项推不出来。ESI 的模块类型只有模块化设备才写得出，非模块化设备一个字都没有；
+    而同一个取值在两家的说明书里可能指的不是同一件事（台架那台 MT 的通道 0x1601 是
+    PVT 控制通道，良质的 0x1601 是精简 CSP）。所以它由人在档里声明，缺了就是硬失败：
+
+    缺省成"什么都支持"会让运行期把设备带进它不认的模式；缺省成"什么都不支持"会让
+    每一份配置都跑不起来。两种都不是实话，所以不给缺省。
+    """
+    modes = document["protocol"].get("supported_modes")
+    if not isinstance(modes, dict) or not modes:
+        raise ValueError(
+            f"设备 {profile_id} 的 protocol.supported_modes 必须是非空对象"
+            "（模式名 → 0x6060 取值）；模式能力推不出来，必须由人声明"
+        )
+    values: set[int] = set()
+    for name, value in modes.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"设备 {profile_id} 的模式名必须是非空字符串")
+        if not isinstance(value, int) or isinstance(value, bool) or not -128 <= value <= 127:
+            raise ValueError(f"设备 {profile_id} 的模式 {name} 取值必须是 -128..127 的整数")
+        values.add(value)
+    return sorted(values)
+
+
 def profile_values(document: dict[str, Any]) -> dict[str, object]:
     """提取设备事实，并保留全部 PDO 方案供运行方案选择。"""
     profile_id = required_string(document, "profile_id", "设备配置")
@@ -246,6 +272,7 @@ def profile_values(document: dict[str, Any]) -> dict[str, object]:
         ),
         "revision": parse_unsigned(identity["revision"], "identity.revision", 0xFFFFFFFF),
         "reference_pdo_set_id": c_string(reference_id),
+        "supported_modes": supported_mode_values(document, profile_id),
         "pdo_sets": pdo_values,
         # 厂商资料没给换算期望时写 0 / -1：0 表示"没有这个事实"，不是"每转 0 个计数"。
         # 设备实现了 608F/6091 时，运行期以读回为准，这三项只作对账；设备不实现它们时
@@ -365,6 +392,8 @@ def profile_initializer(values: dict[str, object], ordinal: int) -> str:
             .revision = UINT32_C(0x{values['revision']:08X}),
         }},
         .reference_pdo_set_id = {values['reference_pdo_set_id']},
+        .supported_modes = profile_{ordinal}_supported_modes,
+        .supported_mode_count = sizeof(profile_{ordinal}_supported_modes) / sizeof(profile_{ordinal}_supported_modes[0]),
         .pdo_sets = profile_{ordinal}_pdo_sets,
         .pdo_set_count = sizeof(profile_{ordinal}_pdo_sets) / sizeof(profile_{ordinal}_pdo_sets[0]),
         .encoder_counts_per_motor_revolution_default = UINT32_C({values['encoder_counts']}),
@@ -392,6 +421,11 @@ def generate(documents: list[dict[str, Any]]) -> str:
     values = [profile_values(item) for item in ordered]
     declarations: list[str] = []
     for profile_ordinal, value in enumerate(values):
+        declarations.append(
+            f"static const int8_t profile_{profile_ordinal}_supported_modes[] = {{"
+            + ", ".join(f"INT8_C({mode})" for mode in value["supported_modes"])
+            + "};"
+        )
         for pdo_set_ordinal, pdo_set in enumerate(value["pdo_sets"]):
             declarations.extend(mapping_declarations(pdo_set, profile_ordinal, pdo_set_ordinal))
         declarations.append(

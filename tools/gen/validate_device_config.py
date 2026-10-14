@@ -302,6 +302,29 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
                 f"设备 {profile_id} 的 {field} 必须是布尔值",
             )
 
+        # 模式能力必须由档声明：ESI 的模块类型只有模块化设备才写得出，非模块化设备
+        # 一个字都没有。缺省成"什么都支持"会把设备带进它不认的模式；缺省成"什么都不
+        # 支持"会让每一份配置都跑不起来。两种都不是实话，所以不给缺省。
+        modes = protocol.get("supported_modes")
+        modes_valid = isinstance(modes, dict) and bool(modes)
+        check.require(
+            modes_valid,
+            f"设备 {profile_id} 的 supported_modes 必须是非空对象（模式名 → 0x6060 取值）；"
+            "模式能力推不出来，必须由人声明",
+        )
+        if modes_valid:
+            for name, value in sorted(modes.items()):
+                check.require(
+                    non_empty_string(name),
+                    f"设备 {profile_id} 的 supported_modes 键必须是非空字符串",
+                )
+                check.require(
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and -128 <= value <= 127,
+                    f"设备 {profile_id} 的模式 {name} 取值必须是 -128..127 的整数",
+                )
+
         # ESI 声明的 AssignActivate：DC 与 SM 各一个。这个映射里没有哪种同步方式，
         # 就表示厂商没写它 —— 于是不能生成要求它的运行方案（生成器也会拒绝），
         # 而不是替厂商编一个"标准上一般是这样"的值填上。
@@ -355,21 +378,28 @@ def validate_profile(check: Validation, profile: dict[str, Any]) -> bool:
             f"设备 {profile_id} 的 conversion 必须是对象",
         )
         if isinstance(conversion, dict):
-            check.require(
-                positive_count(conversion.get("encoder_counts_per_motor_revolution_default")),
-                f"设备 {profile_id} 的默认编码器计数必须是正整数",
-            )
-            # 减速比的两段是一件事：给一半等于没说，而按半份算出来的角度不会报错，
-            # 只会把轴按错误的系数动起来。要就两段都给，不给就整块别写。
-            if (
-                conversion.get("gear_motor_revolutions_default") is not None
-                or conversion.get("gear_shaft_revolutions_default") is not None
-            ):
-                check.require(
-                    positive_count(conversion.get("gear_motor_revolutions_default"))
-                    and positive_count(conversion.get("gear_shaft_revolutions_default")),
-                    f"设备 {profile_id} 的减速比两段必须都是正整数"
-                    "（gear_motor_revolutions_default / gear_shaft_revolutions_default）",
+            # 三项是一件事：编码器每转计数、减速比电机侧与负载侧。少一项就不是换算，
+            # 是一半的换算 —— 而按半份算出来的角度不会报错，只会把轴按错的系数动起来。
+            #
+            # 为什么"少给减速比"也在这里拒，而不是留给运行期。运行期把这一整份声明灌
+            # 进一个换算（relative_position.h 的 emaster_position_scale_from_declaration：
+            # 三项齐全才认），缺任一项来源就留成"没有"，会话判 MOVEMENT_INVALID，轴一步
+            # 不动。让这种档过了配置校验，失败就推到了运行期，那时看到的是一句跟配置
+            # 无关的错。直驱（无减速）就写 1:1，别省。
+            missing = [
+                key
+                for key in (
+                    "encoder_counts_per_motor_revolution_default",
+                    "gear_motor_revolutions_default",
+                    "gear_shaft_revolutions_default",
+                )
+                if not positive_count(conversion.get(key))
+            ]
+            if missing:
+                check.errors.append(
+                    f"设备 {profile_id} 的 conversion 三项必须一起给，且都是正整数"
+                    f"（编码器每转计数、减速比电机侧与负载侧）；缺 "
+                    + "、".join(missing)
                 )
             # -1 表示没声明，所以缺省与 607E 的合法取值 0/1 分得开。
             polarity = conversion.get("polarity_default")

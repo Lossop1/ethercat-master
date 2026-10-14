@@ -160,6 +160,18 @@ typedef struct
     /* 供应商状态字位条件仅作设备诊断，停用完成由完整 CiA 402 状态确认。 */
     uint16_t safe_stop_status_mask;
     uint16_t safe_stop_status_value;
+    /*
+     * 设备声明的模式集合：0x6060 的取值，升序、去重，非空。
+     *
+     * 模式号在不同厂商的说明书里指的不是同一件事 —— 台架那台 MT 的通道 0x1601 是 PVT
+     * 控制通道，良质的 0x1601 是精简 CSP。所以运行期不猜通道号、也不按型号分支，只认
+     * 这份设备自己声明的集合：运行方案要跑的模式不在里面，就是这份配置配错了设备。
+     *
+     * 这个事实推不出来：ESI 的模块类型只有模块化设备才写，非模块化设备一个字都没有，
+     * 所以它由人在设备档里声明，与 ESI 对不上时生成链硬失败（见 merge_device_profile）。
+     */
+    const int8_t *supported_modes;
+    size_t supported_mode_count;
     /* 慢速遥测对象字典。设备不需要就留空；通用代码遍历它，不写死对象号。 */
     const emaster_slow_telemetry_t *slow_telemetry;
     size_t slow_telemetry_count;
