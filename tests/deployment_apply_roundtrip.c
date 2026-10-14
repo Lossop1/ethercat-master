@@ -73,7 +73,7 @@ int main(int argc, char **argv)
         printf("deployment.%zu.realtime_cpu_core\t%d\n", di, (int)d->realtime_cpu_core);
         printf("deployment.%zu.realtime_required\t%s\n", di, d->realtime_required ? "true" : "false");
         printf("deployment.%zu.external_target_timeout_ms\t%u\n", di, d->external_target_timeout_ms);
-        printf("deployment.%zu.external_target_torque_limit_per_mille\t%u\n", di, d->external_target_torque_limit_per_mille);
+        printf("deployment.%zu.external_target_max_offset_millidegrees\t%u\n", di, d->external_target_max_offset_millidegrees);
         printf("deployment.%zu.topology_id\t%s\n", di, d->topology->topology_id);
         printf("deployment.%zu.operation_profile_ids.count\t%zu\n", di, d->operation_profile_count);
         for (ii = 0U; ii < d->operation_profile_count; ++ii)

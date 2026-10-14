@@ -24,6 +24,25 @@ static bool multiply_u64(uint64_t left, uint64_t right, uint64_t *result)
     return true;
 }
 
+bool emaster_position_scale_is_usable(const emaster_position_scale_t *scale)
+{
+    return scale != NULL && scale->source != EMASTER_FACT_SOURCE_NONE;
+}
+
+const char *emaster_fact_source_label(emaster_fact_source_t source)
+{
+    switch (source)
+    {
+    case EMASTER_FACT_SOURCE_DEVICE:
+        return "设备读回";
+    case EMASTER_FACT_SOURCE_CONFIGURED:
+        return "设备档声明";
+    case EMASTER_FACT_SOURCE_NONE:
+    default:
+        return "无";
+    }
+}
+
 /* 先约分再相乘，避免角度、编码器分辨率和减速比直接连乘造成静默溢出。 */
 static bool angle_to_counts(uint32_t angle_millidegrees,
                             emaster_motion_coordinate_t coordinate,
@@ -37,7 +56,7 @@ static bool angle_to_counts(uint32_t angle_millidegrees,
     size_t numerator_index;
     size_t denominator_index;
 
-    if (scale == NULL || counts == NULL || !scale->read_succeeded ||
+    if (scale == NULL || counts == NULL || !emaster_position_scale_is_usable(scale) ||
         scale->encoder_increments == 0U ||
         scale->encoder_motor_revolutions == 0U ||
         (coordinate != EMASTER_MOTION_COORDINATE_MOTOR_ROTOR &&
@@ -121,7 +140,7 @@ bool emaster_position_scale_matches(
     const emaster_motion_axis_config_t *axis_config,
     const emaster_position_scale_t *scale)
 {
-    return axis_config != NULL && scale != NULL && scale->read_succeeded &&
+    return axis_config != NULL && emaster_position_scale_is_usable(scale) &&
            scale->encoder_increments == axis_config->expected_encoder_increments &&
            scale->encoder_motor_revolutions ==
                axis_config->expected_encoder_motor_revolutions &&

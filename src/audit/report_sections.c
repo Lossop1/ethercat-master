@@ -6,6 +6,8 @@
 #include "emaster/diagnostics/al_status.h"
 #include "emaster/diagnostics/cia402_error.h"
 #include "emaster/diagnostics/error_class.h"
+/* 设点通道的拒收原因文本。与主站往 stderr 打的是同一句话（同一实现）。 */
+#include "emaster/setpoint/wire.h"
 
 #include <inttypes.h>
 
@@ -134,6 +136,41 @@ static const char *configured_sdo_name(
     return NULL;
 }
 
+/*
+ * 设备实际映射与设备档声明不同的地方，逐条写出。
+ *
+ * 主站按设备实际建的映像，上面那份声明只说明"我们以为设备长什么样"。差异不写出来，
+ * 报告里就只剩一个 verified=true，没人知道映像的字节从哪张表来的。
+ */
+static bool write_device_mapping_differences(
+    FILE *stream,
+    const emaster_control_session_axis_result_t *axis)
+{
+    size_t listed = axis->pdo_device_mapping_difference_count;
+    size_t ordinal;
+
+    if (listed > EMASTER_CONTROL_SESSION_PDO_DIFFERENCE_SLOTS)
+    {
+        listed = EMASTER_CONTROL_SESSION_PDO_DIFFERENCE_SLOTS;
+    }
+    REQUIRE_WRITE(fputs(",\"device_mapping_differences\":[", stream) != EOF);
+    for (ordinal = 0U; ordinal < listed; ++ordinal)
+    {
+        const emaster_pdo_layout_difference_t *difference =
+            &axis->pdo_device_mapping_differences[ordinal];
+
+        REQUIRE_WRITE(fprintf(
+            stream,
+            "%s{\"mapping\":\"0x%04X\",\"subindex\":%u,\"declared\":\"0x%08lX\","
+            "\"device\":\"0x%08lX\"}",
+            ordinal == 0U ? "" : ",", (unsigned int)difference->mapping_index,
+            (unsigned int)difference->subindex,
+            (unsigned long)difference->declared_descriptor,
+            (unsigned long)difference->device_descriptor) >= 0);
+    }
+    return fputs("]", stream) != EOF;
+}
+
 static bool write_mapping_direction(
     FILE *stream,
     const emaster_pdo_mapping_profile_t *mappings,
@@ -175,16 +212,35 @@ static bool write_mapping_direction(
     return fputs("]", stream) != EOF;
 }
 
+/* 事实来源写成报告里的字面值。三态各有各的话：设备回答的、设备档声明的、没有的。 */
+static const char *fact_source_name(emaster_fact_source_t source)
+{
+    switch (source)
+    {
+    case EMASTER_FACT_SOURCE_DEVICE:
+        return "device";
+    case EMASTER_FACT_SOURCE_CONFIGURED:
+        return "configured";
+    case EMASTER_FACT_SOURCE_NONE:
+    default:
+        return "none";
+    }
+}
+
 static bool write_position_scale(FILE *stream,
                                  const emaster_position_scale_t *scale)
 {
+    /* source 与 read_succeeded 不是同义词：前者是这些数的来路，后者只回答"设备用
+       608F/6091 答了没有"。保留后者给读报告的现成工具，新增前者是因为设备档声明的
+       换算与设备回答的换算在这份报告里必须分得开。 */
     return fprintf(
                stream,
-               "{\"read_succeeded\":%s,\"encoder_increments\":%" PRIu32
+               "{\"source\":\"%s\",\"read_succeeded\":%s,\"encoder_increments\":%" PRIu32
                ",\"encoder_motor_revolutions\":%" PRIu32
                ",\"gear_motor_revolutions\":%" PRIu32
                ",\"gear_shaft_revolutions\":%" PRIu32 "}",
-               scale->read_succeeded ? "true" : "false",
+               fact_source_name(scale->source),
+               scale->source == EMASTER_FACT_SOURCE_DEVICE ? "true" : "false",
                scale->encoder_increments, scale->encoder_motor_revolutions,
                scale->gear_motor_revolutions, scale->gear_shaft_revolutions) >= 0;
 }
@@ -437,21 +493,29 @@ static bool write_axis(FILE *stream,
     REQUIRE_WRITE(fprintf(
         stream,
         ",\"mode_value\":%d,\"sync_strategy\":\"%s\","
-        "\"sm2_sync_type\":\"0x%04X\",\"sm3_sync_type\":\"0x%04X\"},",
+        "\"sm2_sync_type\":\"0x%04X\",\"sm3_sync_type\":\"0x%04X\","
+        "\"sm_sync_type_substituted\":%s,"
+        "\"sm2_sync_type_used\":\"0x%04X\",\"sm3_sync_type_used\":\"0x%04X\"},",
         (int)axis_plan->operation_mode->value,
         operation->sync_strategy == EMASTER_SYNC_STRATEGY_DC ? "dc" : "sm",
         (unsigned int)operation->sm2_sync_type,
-        (unsigned int)operation->sm3_sync_type) >= 0);
+        (unsigned int)operation->sm3_sync_type,
+        axis->sm_sync_type_substituted ? "true" : "false",
+        (unsigned int)axis->sm2_sync_type_used,
+        (unsigned int)axis->sm3_sync_type_used) >= 0);
     REQUIRE_WRITE(fputs("\"pdo\":{\"set_id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, pdo->pdo_set_id));
     REQUIRE_WRITE(fprintf(
         stream,
         ",\"verified\":%s,\"process_image_verified\":%s,"
+        "\"adopted_device_layout\":%s,\"device_mapping_difference_count\":%" PRIu32 ","
         "\"output_bytes\":%" PRIu32 ",\"input_bytes\":%" PRIu32 ","
         "\"output_bits\":%" PRIu32 ",\"input_bits\":%" PRIu32 ","
         "\"output_offset_bytes\":%zu,\"input_offset_bytes\":%zu,\"rx\":",
         axis->pdo_match ? "true" : "false",
         axis->process_map_match ? "true" : "false",
+        axis->pdo_device_mapping_adopted ? "true" : "false",
+        axis->pdo_device_mapping_difference_count,
         axis->output_bytes, axis->input_bytes,
         axis->output_bits, axis->input_bits, axis->output_offset_bytes,
         axis->input_offset_bytes) >= 0);
@@ -460,6 +524,7 @@ static bool write_axis(FILE *stream,
     REQUIRE_WRITE(fputs(",\"tx\":", stream) != EOF);
     REQUIRE_WRITE(write_mapping_direction(stream, pdo->tx_mappings,
                                           pdo->tx_mapping_count));
+    REQUIRE_WRITE(write_device_mapping_differences(stream, axis));
     REQUIRE_WRITE(fputs("},\"dc\":{", stream) != EOF);
     REQUIRE_WRITE(fprintf(
         stream,
@@ -706,7 +771,21 @@ static bool write_axis(FILE *stream,
         "\"software_position_limit_min\":%" PRId32 ","
         "\"software_position_limit_max\":%" PRId32 ","
         "\"following_error_read\":%s,\"following_error_actual\":%" PRId32 ","
-        "\"polarity_read\":%s,\"polarity\":%u,"
+        /*
+         * 驱动器自己的跟随误差窗与超时（6065 / 6066，设置期读回）。主站不做这道判据，
+         * 所以这两个读数就是"这条保护到底在不在"的全部依据；read 与值必须一起看，
+         * 只看值会把它当成"驱动器报 0 就是不保护"。
+         */
+        "\"following_error_window_read\":%s,\"following_error_window\":%" PRIu32 ","
+        "\"following_error_timeout_read\":%s,\"following_error_timeout\":%u,"
+        /* 外部目标偏移上限（counts）与它到底有没有被判。两个必须一起读：
+         * 只看 limit=0 会以为"不设防"，其实可能是"根本没判"（换算用不了）。
+         * 逐轴折算，所以 25:1 与 28:1 的轴在这里是不同的数。
+         * 没判的轴一律写 0：生产路径本来就不会给它留值，写 0 是为了让
+         * "checked=false ⇒ counts=0"在报告里恒成立——读的人不必再想那个数是从哪来的。 */
+        "\"offset_limit_counts\":%" PRIu64 ","
+        "\"offset_limit_checked\":%s,"
+        "\"polarity_source\":\"%s\",\"polarity_read\":%s,\"polarity\":%u,"
         "\"safeop_actual_position\":%" PRId32
         ",\"initial_actual_position\":%" PRId32
         ",\"actual_position\":%" PRId32 ",\"target_position\":%" PRId32
@@ -780,6 +859,13 @@ static bool write_axis(FILE *stream,
         axis->software_position_limit_max,
         axis->following_error_read ? "true" : "false",
         axis->following_error_actual,
+        axis->following_error_window_read ? "true" : "false",
+        axis->following_error_window,
+        axis->following_error_timeout_read ? "true" : "false",
+        (unsigned int)axis->following_error_timeout,
+        axis->offset_limit_checked ? axis->offset_limit_counts : UINT64_C(0),
+        axis->offset_limit_checked ? "true" : "false",
+        fact_source_name(axis->polarity_source),
         axis->polarity_read ? "true" : "false",
         (unsigned int)axis->polarity,
         axis->safeop_actual_position, axis->initial_actual_position,
@@ -878,7 +964,6 @@ static bool write_motion(FILE *stream, const emaster_motion_profile_t *motion)
             ",\"acceleration_millidegrees_per_second2\":%" PRIu32
             ",\"deceleration_millidegrees_per_second2\":%" PRIu32
             ",\"max_following_error_millidegrees\":%" PRIu32
-            ",\"max_step_millidegrees\":%" PRIu32
             ",\"max_velocity_error_millidegrees_per_second\":%" PRIu32
             ",\"expected_position_scale\":{\"encoder_increments\":%" PRIu32
             ",\"encoder_motor_revolutions\":%" PRIu32
@@ -889,7 +974,6 @@ static bool write_motion(FILE *stream, const emaster_motion_profile_t *motion)
             axis->acceleration_millidegrees_per_second2,
             axis->deceleration_millidegrees_per_second2,
             axis->max_following_error_millidegrees,
-            axis->max_step_millidegrees,
             axis->max_velocity_error_millidegrees_per_second,
             axis->expected_encoder_increments,
             axis->expected_encoder_motor_revolutions,
@@ -1346,11 +1430,11 @@ bool emaster_run_report_write(FILE *stream,
      * 那一次逐站 AL 读数。前三个停机 AL 坐标（shutdown_al / _entry / _pre_stop）都拍在
      * "叫它们回 INIT 之前"，所以版本 5 的报告答不了"主站退出之后驱动器停在哪一态"；
      * 2026-09-28 用户连着两轮在台架上看到"电机没有退出 OP"，那两份报告既证实不了也
-     * 证伪不了，就是因为少了这一列（layering-plan P12.46）。
+     * 证伪不了，就是因为少了这一列。
      *
      * **为什么跳过 6**：版本 6 已经被占用了——上面说的那批游离提交（957e9cd 等）产出的
-     * 报告就是 6，形状是"带 tracking_error 遥测"，当前 main 复现不出来，docs/requirements/
-     * capability-baseline.md §4.6 也是这么记的。要是这次也发 6，读者拿到一份 6 就得先猜
+     * 报告就是 6，形状是"带 tracking_error 遥测"，当前 main 复现不出来。要是这次也发 6，
+     * 读者拿到一份 6 就得先猜
      * 它是哪一种——这正是紧邻上文刚说过要避免的事。所以这里迈过 6 直接发 7。
      *
      * 版本 8：每轴 runtime 下新增 target_position_readback{read,value,age_ns}——
@@ -1360,8 +1444,7 @@ bool emaster_run_report_write(FILE *stream,
      * 0 mA，而它其余每一项读数（6061=8、增益、限位、DC、SM2/SM3、603F、ESC 计数器）
      * 都与走得好的七根逐字段相同。**"目标到了驱动器但它不执行"与"目标压根没送到
      * 驱动器"在版本 7 的报告里长得一模一样**，因为那个 target_position 是主站写进
-     * 过程映像的值，主站永远知道自己写了什么。这一列是切开这两种情形唯一的读数
-     * （layering-plan P12.41）。
+     * 过程映像的值，主站永远知道自己写了什么。这一列是切开这两种情形唯一的读数。
      */
     /* 9：新增 shutdown_disable 块——停机时逐台核对"真的失能了吗"的结论。 */
     /*
@@ -1386,8 +1469,37 @@ bool emaster_run_report_write(FILE *stream,
      * 旧报告里"链断过"与"收包超时"长得一样，分不开——台架上环尾瞬断一直查不下去就
      * 卡在这。顺带修 forwarded_rx_error_counter：0x0308 起是**四个单字节**，过去按
      * 四个 16 位读，后两个值一直是 EPUECNT/PECNT 拼出来的假数。
+     *
+     * 14：外部目标的限幅换了一条判据，报告跟着换：
+     *   - 删除运动方案逐轴的 max_step_millidegrees，以及部署级的
+     *     external_target_torque_limit_per_mille。两个都是"主站替客户端定多大算合理"
+     *     的旋钮，都已不再生效，留着就是一份读起来像保护、实际不存在的配置。
+     *   - 结果级新增 target_rejected_count / target_rejection_axis /
+     *     target_rejection_offset_counts：被拒的目标条数（不是拍数）与最后一次现场。
+     *   - 逐轴新增 offset_limit_counts / offset_limit_checked：这一轴的偏移上限
+     *     （由它自己的 608F/6091 读回值折算，所以 25:1 与 28:1 不同），以及它到底
+     *     有没有被判。
+     *   - 逐轴新增 following_error_window_read / following_error_window 与
+     *     following_error_timeout_read / following_error_timeout：设置期读回的
+     *     6065 / 6066。主站不再自己判跟随误差，这两个读数就是"驱动器在不在守"的
+     *     全部依据——旧报告里根本没这一层。
+     * 为什么升版而不是"就这么加"：旧报告里"目标被拒"这件事根本不存在——它过去会以
+     * MOTION_INVALID 结束整轮，读者看到的是会话失败。同一个版本号下两种含义并存，
+     * 正是上面反复说到要避免的事。
+     *
+     * 14 同一版里还多一组：设点通道（第三个套接字，只写，见 emaster/setpoint/）。
+     * 结果级新增 setpoint_enabled / records_accepted / records_rejected /
+     * sequence_gaps / last_sequence / last_client_time_ns / last_record_age_ns /
+     * last_reject_reason / last_reject_axis。记录格式与拒收原因见
+     * docs/protocol/command-protocol-v1.md。
+     *
+     * 不把客户端送来的 dq / tau / kp / kd 写进报告，是有意的：主站今天不用这四个量
+     * （驱动器在 CSP 下自己闭合位置环），印出来只会像"这四个值生效了"。它们解码、
+     * 校验、存进缓冲区，等出口口径定了再接——那时报告里加的是"用了什么"，不是
+     * "收到了什么"。同一理由，通道的计数记的是"发生了什么"，不是"应该发生什么"：
+     * 主站不假设客户端频率，所以没有"应收条数"这种列。
      */
-REQUIRE_WRITE(fputs("{\"schema_version\":13,\"generated_at_utc\":", stream) != EOF);
+REQUIRE_WRITE(fputs("{\"schema_version\":17,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1451,7 +1563,32 @@ REQUIRE_WRITE(fputs("{\"schema_version\":13,\"generated_at_utc\":", stream) != E
         "\"sync0_disabled\":%s,"
         "\"restore_init_succeeded\":%s,"
         "\"shutdown_observer_join_ns\":%" PRIu64
-        ",\"shutdown_prologue_gap_ns\":%" PRIu64 ",",
+        ",\"shutdown_prologue_gap_ns\":%" PRIu64 ","
+        /*
+         * 外部目标被拒收的记录。count 是**被拒的段数，不是拍数**——外部目标缓冲区
+         * 是覆盖式最新值，主站每拍读同一条目标，按拍计数会把一个卡住的坏值记成
+         * 几百万次。axis 用与其他逐轴字段同一口径（0 起）；offset 是被拒那一刻
+         * |目标 - 实际位置| 超出的那个量（counts）。两个现场字段只在 count > 0 时
+         * 有意义，且记的是最后一次。
+         */
+        "\"target_rejected_count\":%" PRIu64 ","
+        "\"target_rejection_axis\":%zu,"
+        "\"target_rejection_offset_counts\":%" PRIu64 ","
+        /*
+         * 设点通道（只写套接字）这一轮的计数。通道没开时 enabled 为假，其余为零。
+         *
+         * 这几个都是"发生了什么"，不是"应该发生什么"：主站不假设客户端频率，也就不
+         * 报"应该收到多少条"。丢没丢由 sequence_gaps 回答，客户端收尾时是否还活着由
+         * last_record_age_ns 回答（-1 表示整轮没有一条被采纳，通道没开也一样）。
+         * sequence 与 client_time_ns 是客户端自己给的数，原样记下不做解释——主站判
+         * 超时用的是缓冲区的主站时钟，两者不要混看。
+         */
+        "\"setpoint_enabled\":%s,\"setpoint_records_accepted\":%" PRIu64 ","
+        "\"setpoint_records_rejected\":%" PRIu64 ",\"setpoint_sequence_gaps\":%" PRIu64 ","
+        "\"setpoint_last_sequence\":%" PRIu64 ","
+        "\"setpoint_last_client_time_ns\":%" PRIu64 ","
+        "\"setpoint_last_record_age_ns\":%" PRId64 ","
+        "\"setpoint_last_reject_axis\":%zu,",
         (unsigned int)report->status, (unsigned int)report->state, report->io_map_size,
         (unsigned int)report->expected_wkc, report->actual_wkc,
         report->cycle_count, report->process_data_exchange_count,
@@ -1484,7 +1621,27 @@ REQUIRE_WRITE(fputs("{\"schema_version\":13,\"generated_at_utc\":", stream) != E
         report->sync0_disabled ? "true" : "false",
         report->restore_init_succeeded ? "true" : "false",
         report->shutdown_observer_join_ns,
-        report->shutdown_prologue_gap_ns) >= 0);
+        report->shutdown_prologue_gap_ns,
+        report->target_rejected_count,
+        report->target_rejection_axis,
+        report->target_rejection_offset_counts,
+        report->setpoint_enabled ? "true" : "false",
+        report->setpoint_records_accepted,
+        report->setpoint_records_rejected,
+        report->setpoint_sequence_gaps,
+        report->setpoint_last_sequence,
+        report->setpoint_last_client_time_ns,
+        (int64_t)report->setpoint_last_record_age_ns,
+        report->setpoint_last_reject_axis) >= 0);
+
+    /*
+     * 设点通道的拒收原因写成文本，与主站往 stderr 打的是同一句话。写成数字的话，
+     * 读的人还得去翻枚举——而这个字段的用途正是回答"为什么被拒"。
+     */
+    REQUIRE_WRITE(fputs("\"setpoint_last_reject_reason\":", stream) != EOF);
+    REQUIRE_WRITE(emaster_json_string(
+        stream, emaster_setpoint_reject_text(report->setpoint_last_reject_reason)));
+    REQUIRE_WRITE(fputs(",", stream) != EOF);
     /*
      * 本次事故的分类结论——"这一轮到底出了什么事"，与上面的 status_code（"哪一步
      * 失败了"）是两层。status_code 一个值可能装四种真的事故（WKC_MISMATCH 就是），

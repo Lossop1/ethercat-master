@@ -226,6 +226,16 @@ static emaster_error_class_t class_of_status(const emaster_control_session_repor
     case EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED:
         return EMASTER_ERROR_CLASS_SHUTDOWN_UNCONFIRMED;
 
+    /*
+     * 拒收不是失败，这条映射为的是让 -Wswitch 保持完整——它不该被走到。
+     * 会话里拒收走的是"丢掉这一条、继续跑"那条路，从不经过 note_runtime_failure，
+     * 而分类器的入口是失败锁存。真被走到，说明有人把拒收送进了失败路径，
+     * 那本身就是缺陷；归到 MOTION 至少让它落在运动中这一类里，不会凭空多出一个
+     * "未知"类别。拒收的次数与现场另有 target_rejected_count 一列，那才是读的地方。
+     */
+    case EMASTER_CONTROL_SESSION_TARGET_REJECTED:
+        return EMASTER_ERROR_CLASS_MOTION;
+
     case EMASTER_CONTROL_SESSION_AUDIT_FAILED:
         return EMASTER_ERROR_CLASS_AUDIT;
     }

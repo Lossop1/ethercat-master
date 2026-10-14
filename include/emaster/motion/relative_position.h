@@ -7,15 +7,41 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* 换算参数必须来自当前物理从站，不能使用设备目录中的默认值代替。 */
+/*
+ * 一个事实值的来源。两种来源必须分得开：设备对象字典读回来的是设备的事实，设备档里
+ * 写的是人的声明。报告按来源分开写 —— "读到了"与"声明过"不是一件事。
+ * NONE 表示这个事实没有值，调用方一律当作不可用。
+ */
+typedef enum
+{
+    EMASTER_FACT_SOURCE_NONE = 0,
+    EMASTER_FACT_SOURCE_DEVICE = 1,
+    EMASTER_FACT_SOURCE_CONFIGURED = 2
+} emaster_fact_source_t;
+
+/*
+ * 换算参数。优先取自当前物理从站（608F/6091）—— 那是这一台的实测事实。设备不实现
+ * 这两个对象时（MT 的对象字典里就没有它们），设备档里声明的缺省值接手，来源记在
+ * source 里。两者都没有时 source 为 NONE：说不出来的换算不拿来动轴。
+ */
 typedef struct
 {
-    bool read_succeeded;
+    emaster_fact_source_t source;
     uint32_t encoder_increments;
     uint32_t encoder_motor_revolutions;
     uint32_t gear_motor_revolutions;
     uint32_t gear_shaft_revolutions;
 } emaster_position_scale_t;
+
+/* 换算可用与否只看有没有来源；数值本身合法与否由各自的换算函数判（分子分母不为零）。 */
+bool emaster_position_scale_is_usable(const emaster_position_scale_t *scale);
+
+/*
+ * 来源的显示名（简体中文），给控制台那几行用。报告里用的是 ASCII 标识
+ * （device / configured / none），两者不能混：报告是给工具读的，控制台是给人的。
+ * 有这一行，"换算读取=未通过"与后面两个非零的读数就不会同时出现在同一个操作员眼前。
+ */
+const char *emaster_fact_source_label(emaster_fact_source_t source);
 
 typedef enum
 {

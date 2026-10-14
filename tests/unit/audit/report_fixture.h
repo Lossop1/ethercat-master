@@ -234,11 +234,91 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->axis_results[2].error_counters_read = false;
     fixture->axis_results[2].lost_link_counter[0] = 7U;
 
+    /*
+     * 驱动器自己的跟随误差窗与超时（14 起，设置期读回 6065 / 6066）。
+     *
+     * 轴 1 两项都读到；轴 2 只读到窗口、超时没读到（这一对必须能各自独立为假，
+     * 一起赋值就会在这里露馅）；轴 3 两项都没读到，值留着非零诱饵——判据是 read。
+     */
+    fixture->axis_results[0].following_error_window_read = true;
+    fixture->axis_results[0].following_error_window = UINT32_C(131072);
+    fixture->axis_results[0].following_error_timeout_read = true;
+    fixture->axis_results[0].following_error_timeout = UINT16_C(200);
+    fixture->axis_results[1].following_error_window_read = true;
+    fixture->axis_results[1].following_error_window = UINT32_C(4096);
+    fixture->axis_results[2].following_error_window = UINT32_C(777777);
+    fixture->axis_results[2].following_error_timeout = UINT16_C(31);
+
+    /*
+     * 换算与方向的来源（17 起）。两种拥有换算的方式必须读得出区别：
+     *
+     *   轴 1 用设备档声明的换算（设备没有 608F/6091 这两个对象，读数全是 0，
+     *        read_succeeded 为假），方向也用设备档声明的缺省；
+     *   轴 2 的换算与方向都是设备读回的；
+     *   轴 3 两个都没有（来源为空），值留着 0。
+     *
+     * 只判数值判不出这件事：轴 1 的数看着和轴 2 一样是真值，区别只在来源那一个键。
+     */
+    fixture->axis_results[0].position_scale.source = EMASTER_FACT_SOURCE_CONFIGURED;
+    fixture->axis_results[0].position_scale.encoder_increments = UINT32_C(131072);
+    fixture->axis_results[0].position_scale.encoder_motor_revolutions = UINT32_C(1);
+    fixture->axis_results[0].position_scale.gear_motor_revolutions = UINT32_C(19612);
+    fixture->axis_results[0].position_scale.gear_shaft_revolutions = UINT32_C(1000);
+    fixture->axis_results[0].polarity_source = EMASTER_FACT_SOURCE_CONFIGURED;
+    fixture->axis_results[1].position_scale.source = EMASTER_FACT_SOURCE_DEVICE;
+    fixture->axis_results[1].position_scale.encoder_increments = UINT32_C(16384);
+    fixture->axis_results[1].position_scale.encoder_motor_revolutions = UINT32_C(1);
+    fixture->axis_results[1].position_scale.gear_motor_revolutions = UINT32_C(25);
+    fixture->axis_results[1].position_scale.gear_shaft_revolutions = UINT32_C(1);
+    fixture->axis_results[1].polarity_read = true;
+    fixture->axis_results[1].polarity_source = EMASTER_FACT_SOURCE_DEVICE;
+    fixture->axis_results[2].position_scale.source = EMASTER_FACT_SOURCE_NONE;
+
+    /*
+     * 目标偏移上限（14 起）。三根轴给成三种样子，好把"逐轴折算"与"照抄一个值"分开：
+     *
+     *   轴 1 判过，线在 114688（28:1 的轴，90°）
+     *   轴 2 判过，线在 102400（25:1 的轴，换算不同，线就不同）
+     *   轴 3 没判（换算没读回来），但留着 0 以外的诱饵值
+     */
+    fixture->axis_results[0].offset_limit_counts = UINT64_C(114688);
+    fixture->axis_results[0].offset_limit_checked = true;
+    fixture->axis_results[1].offset_limit_counts = UINT64_C(102400);
+    fixture->axis_results[1].offset_limit_checked = true;
+    fixture->axis_results[2].offset_limit_counts = UINT64_C(999999);
+
     fixture->report.axis_count = FIXTURE_AXIS_COUNT;
     fixture->report.axes = fixture->axis_results;
     fixture->report.status = EMASTER_CONTROL_SESSION_DRIVE_FAULT;
     fixture->report.stop_requested = true;
     fixture->report.stop_source = EMASTER_STOP_SOURCE_COMMAND;
+    /*
+     * 被拒目标（14 起）：计数数的是"被拒的段"而不是拍，轴号与偏移量是**最后**那次的
+     * 现场。轴号按其他逐轴字段的口径从 0 起，这里给 2（即第 3 轴）而不是 0——
+     * 0 与"从来没拒过"长得一样，正是这一列要分开的东西。
+     */
+    fixture->report.target_rejected_count = UINT64_C(3);
+    fixture->report.target_rejection_axis = 2U;
+    fixture->report.target_rejection_offset_counts = UINT64_C(150000);
+    /*
+     * 设点通道（14 起）。给成"开过、收过、也拒过"的样子，好把三层分开：
+     *
+     *   enabled 真而计数全零 —— 通道开了但客户端从没连上，是另一回事；
+     *   accepted 与 gaps 都给非零且**不等**——丢包数不是收包数减去一个常数；
+     *   age 给成正数 —— 收尾时客户端还活着（-1 才是"整轮没收到过"）。
+     *
+     * 拒收原因取 MODE_MISMATCH 而不是 NONE：NONE 的文本就是"未被拒"，与
+     * "这一列没写"长得一样，正是要分开的东西。
+     */
+    fixture->report.setpoint_enabled = true;
+    fixture->report.setpoint_records_accepted = UINT64_C(12345);
+    fixture->report.setpoint_records_rejected = UINT64_C(7);
+    fixture->report.setpoint_sequence_gaps = UINT64_C(3);
+    fixture->report.setpoint_last_sequence = UINT64_C(12349);
+    fixture->report.setpoint_last_client_time_ns = UINT64_C(998877665544332211);
+    fixture->report.setpoint_last_record_age_ns = INT64_C(4200000);
+    fixture->report.setpoint_last_reject_reason = EMASTER_SETPOINT_REJECT_MODE_MISMATCH;
+    fixture->report.setpoint_last_reject_axis = 4U;
     /*
      * 不用 snprintf：report_path 是 const char*，编译器不知道它多长，会对每一次调用
      * 报"可能截断"。夹具里传的都是短字面量，照容量卡一刀就够；末尾的 NUL 由上面的

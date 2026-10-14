@@ -55,6 +55,9 @@ int main(int argc, char **argv)
         printf("profile.%zu.identity.revision\t0x%08X\n", pi, p->identity.revision);
         printf("profile.%zu.reference_pdo_set_id\t%s\n", pi, p->reference_pdo_set_id);
         printf("profile.%zu.encoder_counts\t%u\n", pi, p->encoder_counts_per_motor_revolution_default);
+        printf("profile.%zu.gear_motor_revolutions\t%u\n", pi, p->gear_motor_revolutions_default);
+        printf("profile.%zu.gear_shaft_revolutions\t%u\n", pi, p->gear_shaft_revolutions_default);
+        printf("profile.%zu.polarity\t%d\n", pi, (int)p->polarity_default);
         printf("profile.%zu.supports_pdo_assignment\t%s\n", pi, p->supports_pdo_assignment ? "true" : "false");
         printf("profile.%zu.supports_pdo_configuration\t%s\n", pi, p->supports_pdo_configuration ? "true" : "false");
         printf("profile.%zu.supports_distributed_clocks\t%s\n", pi, p->supports_distributed_clocks ? "true" : "false");

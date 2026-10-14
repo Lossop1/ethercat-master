@@ -35,10 +35,12 @@
  *       src/audit/run_report.c src/audit/report_sections.c src/audit/json_writer.c \
  *       src/cyclic/histogram.c \
  *       src/diagnostics/error_class.c src/diagnostics/cia402_error.c \
- *       src/diagnostics/al_status.c src/audit/report_error_class.c
+ *       src/diagnostics/al_status.c src/audit/report_error_class.c \
+ *       src/setpoint/wire.c
  *   ./tmp/test_report_fault_fields /tmp/out.json
  *
- * 最后三个源文件是诊断码表，report_sections.c 要调它：漏掉就是链接失败。
+ * 诊断码表那几个源文件是 report_sections.c 要调的，最后那个给拒收原因文本：
+ * 漏掉就是链接失败。
  * 这份清单是 checks/report_sources_closure.py 算出来的闭包，与 checks/report_axis_fault_check.py、
  * checks/report_archive_check.py 里的 SOURCES 同源，改动要一起改。
  */
@@ -389,6 +391,86 @@ int main(int argc, char **argv)
               "轴 3 计数没更新却留着 7：判据是 read，不是值是否为 0");
     }
 
+    /* ── 跟随误差窗与目标偏移上限 ──────────────────────────────────────── */
+    /*
+     * 主站不再自己判跟随误差，所以 6065 / 6066 这两个读回值就是"驱动器在不在守"
+     * 的全部依据；偏移上限则是"目标被拒"这条判据的唯一来源。两处都逐轴，且都必须
+     * 用 read 位把"没判"与"值是 0"分开。
+     */
+    printf("跟随误差窗与偏移上限\n");
+    if (!axis_section(text, 1U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 1 的对象分界（跟随误差窗）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"following_error_window_read\":true,\"following_error_window\":131072,"
+                     "\"following_error_timeout_read\":true,\"following_error_timeout\":200,"
+                     "\"offset_limit_counts\":114688,\"offset_limit_checked\":true") != NULL,
+              "轴 1 窗与超时都读到，偏移上限 114688 且判过");
+    }
+    if (!axis_section(text, 2U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 2 的对象分界（跟随误差窗）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"following_error_window_read\":true,\"following_error_window\":4096,"
+                     "\"following_error_timeout_read\":false") != NULL,
+              "轴 2 只读到窗口、超时没读到：两项的 read 必须各自独立，"
+              "绑在一起会在这里断");
+        check(strstr(section,
+                     "\"offset_limit_counts\":102400,\"offset_limit_checked\":true") != NULL,
+              "轴 2 的偏移上限是 102400 而不是 114688——25:1 与 28:1 折算不同，"
+              "照抄首轴的值就会在这里断");
+    }
+    if (!axis_section(text, 3U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 3 的对象分界（跟随误差窗）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"following_error_window_read\":false,\"following_error_window\":777777,"
+                     "\"following_error_timeout_read\":false,\"following_error_timeout\":31,") != NULL,
+              "轴 3 两项都没读到却留着诱饵值：判据是 read，不是值看起来像不像真的");
+        check(strstr(section,
+                     "\"offset_limit_counts\":0,\"offset_limit_checked\":false") != NULL,
+              "轴 3 换算用不了：上限为 0 但 checked 必须为假——"
+              "'不判'与'上限为零'读起来不能一样");
+    }
+
+    /* ── 换算与方向的来源（17）────────────────────────────────────────── */
+    printf("换算来源\n");
+    if (!axis_section(text, 1U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 1 的对象分界（换算来源）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"position_scale\":{\"source\":\"configured\",\"read_succeeded\":false,"
+                     "\"encoder_increments\":131072") != NULL,
+              "轴 1 的换算来自设备档声明：read_succeeded 为假（设备没答）而数值是真的"
+              "——这两件事必须分得开，否则'设备答了没有'读不出来");
+        check(strstr(section, "\"polarity_source\":\"configured\"") != NULL,
+              "轴 1 的方向也来自设备档声明（设备没有 607E）");
+    }
+    if (!axis_section(text, 2U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 2 的对象分界（换算来源）");
+    }
+    else
+    {
+        check(strstr(section,
+                     "\"position_scale\":{\"source\":\"device\",\"read_succeeded\":true,") != NULL,
+              "轴 2 的换算来自设备读回");
+        check(strstr(section, "\"polarity_source\":\"device\"") != NULL,
+              "轴 2 的方向来自设备读回");
+    }
+
     /* ── 停机来源与归档保留份数 ────────────────────────────────────────── */
     printf("结果级字段\n");
     /* 是 12 而不是 6/8：6 早被那批游离提交占用（带 tracking_error 的那种形状），
@@ -397,9 +479,18 @@ int main(int argc, char **argv)
      * 结论，而它现在只是输入。升到 11 的理由：逐轴多了首次不符当下的 1C32/1C33
      * 计数器（first_mismatch_sm2/sm3），旧报告里这一层不存在。升到 12 的理由：
      * shutdown_disable 的键改名——旧报告里叫 verified 的那一列读起来像"已失能"。
-     * 升到 13 的理由：逐轴多了丢失链计数（ESC 0x0310）。 */
-    check(strstr(text, "\"schema_version\":13") != NULL,
-          "schema_version 是 13（逐轴多了丢失链计数就要升版本）");
+     * 升到 13 的理由：逐轴多了丢失链计数（ESC 0x0310）。升到 14 的理由：逐轴多了
+     * 偏移上限（offset_limit_counts / offset_limit_checked）与驱动器自己的
+     * 6065/6066 读回值，结果级多了被拒目标的计数与现场以及设点通道的计数，
+     * 同时删掉了运动方案的 max_step_millidegrees。升到 15 的理由：逐轴的 pdo 里多了
+     * 按设备实际布局建立映像时的差异清单（adopted_device_layout 与
+     * device_mapping_differences）。升到 16 的理由：逐轴的 operation 里多了同步类型的
+     * 实际取值与"是否被设备顶替"（sm_sync_type_substituted 与 *_used）——报告印方案值
+     * 而设备停在另一档，就是一处安静的谎。升到 17 的理由：逐轴的位置换算多了来源
+     * （position_scale.source）与方向来源（polarity_source）——设备读回的与设备档声明
+     * 的在这份报告里必须分得开，只判数值判不出"这台设备到底答没答"。 */
+    check(strstr(text, "\"schema_version\":17") != NULL,
+          "schema_version 是 17（换算与方向要写明来源：设备读回还是设备档声明）");
     check(strstr(text,
                  "\"error_class\":\"DRIVE_FAULT\",\"error_class_text\":\"驱动器自报故障\","
                  "\"error_class_evidence_no_frame\":false,"
@@ -415,6 +506,30 @@ int main(int argc, char **argv)
           "stop_source 是 2 = COMMAND（命令口发的停机）");
     check(strstr(text, "\"report_archive_keep\":200") != NULL,
           "deployment 里带上了本次生效的归档保留份数（P12.29）");
+    /*
+     * 被拒目标（14 起）。三个字段一起读才是完整的："拒过几条"、"最后一次是哪根轴"、
+     * "最后一次超出去多少"。计数 3 而轴号 2：轴号从 0 起，2 与"从来没拒过"的 0
+     * 长得不一样，正是这一列要分开的东西。
+     */
+    check(strstr(text,
+                 "\"target_rejected_count\":3,\"target_rejection_axis\":2,"
+                 "\"target_rejection_offset_counts\":150000,") != NULL,
+          "被拒目标：计数 / 最后轴号（0 起）/ 最后的偏移量三者都在");
+    /*
+     * 设点通道（14 起）。整串比对把键名、键序与实参绑定一起钉住——格式串与实参错位
+     * 是这份文件里反复出现的形状。四个 64 位计数都给成互不相同的值，错位了就对不上；
+     * 拒收原因写成文本（"未被拒"是 NONE 的文本，与"这一列没写"长得一样，所以夹具
+     * 取的是 MODE_MISMATCH）。
+     */
+    check(strstr(text,
+                 "\"setpoint_enabled\":true,\"setpoint_records_accepted\":12345,"
+                 "\"setpoint_records_rejected\":7,\"setpoint_sequence_gaps\":3,"
+                 "\"setpoint_last_sequence\":12349,"
+                 "\"setpoint_last_client_time_ns\":998877665544332211,"
+                 "\"setpoint_last_record_age_ns\":4200000,"
+                 "\"setpoint_last_reject_axis\":4,"
+                 "\"setpoint_last_reject_reason\":\"某轴的运行模式与本部署不符\",") != NULL,
+          "设点通道：开关 / 收 / 拒 / 缺口 / 序号 / 客户端时标 / 年龄 / 拒收轴号与原因都在");
 
     /* ── 停机失能核对与它用的判据 ──────────────────────────────────────── */
     /*

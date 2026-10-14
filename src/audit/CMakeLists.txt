@@ -19,7 +19,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             json_writer.c)
     add_library(emaster::run_report ALIAS emaster_run_report)
 
-    target_link_libraries(emaster_run_report PUBLIC emaster::diagnostics)
+    # setpoint_wire 只为一句拒收原因的文本：报告里那一列必须与主站往 stderr 打的
+    # 是同一句话。它只依赖 libc，不把套接字拖进审计层。
+    target_link_libraries(emaster_run_report PUBLIC emaster::diagnostics emaster::setpoint_wire)
 
     target_compile_features(emaster_run_report PUBLIC c_std_11)
     target_include_directories(

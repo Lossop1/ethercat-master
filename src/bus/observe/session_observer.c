@@ -151,11 +151,13 @@ void emaster_session_observer_read_position_scale(
     emaster_soem_sdo_reader_context_t *reader,
     emaster_position_scale_t *scale)
 {
+    bool read_succeeded;
+
     if (reader == NULL || scale == NULL)
     {
         return;
     }
-    scale->read_succeeded =
+    read_succeeded =
         emaster_soem_read_u32(reader, UINT16_C(0x608F), UINT8_C(1),
                               &scale->encoder_increments) &&
         emaster_soem_read_u32(reader, UINT16_C(0x608F), UINT8_C(2),
@@ -164,6 +166,21 @@ void emaster_session_observer_read_position_scale(
                               &scale->gear_motor_revolutions) &&
         emaster_soem_read_u32(reader, UINT16_C(0x6091), UINT8_C(2),
                               &scale->gear_shaft_revolutions);
+    if (!read_succeeded)
+    {
+        /*
+         * 四条里读回来两三条没有意义：换算是一个整体。整份清成"没有"——报告里
+         * 半份换算看起来像一份（分子有值、分母为零），那是最难看出来的一种假。
+         * 这台设备的换算若由设备档声明，调用方会在这之后接手。
+         */
+        scale->encoder_increments = 0U;
+        scale->encoder_motor_revolutions = 0U;
+        scale->gear_motor_revolutions = 0U;
+        scale->gear_shaft_revolutions = 0U;
+        scale->source = EMASTER_FACT_SOURCE_NONE;
+        return;
+    }
+    scale->source = EMASTER_FACT_SOURCE_DEVICE;
 }
 
 bool emaster_session_observer_read_configured_sdo(

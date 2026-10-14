@@ -110,7 +110,6 @@ int main(int argc, char **argv)
             printf("motion.%zu.axes.%zu.acceleration\t%u\n", mi, ai, a->acceleration_millidegrees_per_second2);
             printf("motion.%zu.axes.%zu.deceleration\t%u\n", mi, ai, a->deceleration_millidegrees_per_second2);
             printf("motion.%zu.axes.%zu.following_error\t%u\n", mi, ai, a->max_following_error_millidegrees);
-            printf("motion.%zu.axes.%zu.max_step\t%u\n", mi, ai, a->max_step_millidegrees);
             printf("motion.%zu.axes.%zu.velocity_error\t%u\n", mi, ai, a->max_velocity_error_millidegrees_per_second);
             printf("motion.%zu.axes.%zu.encoder_increments\t%u\n", mi, ai, a->expected_encoder_increments);
             printf("motion.%zu.axes.%zu.encoder_motor_revolutions\t%u\n", mi, ai, a->expected_encoder_motor_revolutions);

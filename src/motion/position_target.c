@@ -8,7 +8,8 @@ static bool model_is_valid(const emaster_position_target_axis_model_t *model)
         (model->polarity != INT8_C(1) && model->polarity != INT8_C(-1)) ||
         (model->coordinate != EMASTER_MOTION_COORDINATE_MOTOR_ROTOR &&
          model->coordinate != EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT) ||
-        !model->scale.read_succeeded || model->scale.encoder_increments == 0U ||
+        !emaster_position_scale_is_usable(&model->scale) ||
+        model->scale.encoder_increments == 0U ||
         model->scale.encoder_motor_revolutions == 0U)
     {
         return false;
@@ -38,7 +39,7 @@ emaster_position_target_status_t emaster_position_target_from_angle(
     {
         return EMASTER_POSITION_TARGET_INVALID_ARGUMENT;
     }
-    if (!model->scale.read_succeeded)
+    if (!emaster_position_scale_is_usable(&model->scale))
     {
         return EMASTER_POSITION_TARGET_INVALID_SCALE;
     }

@@ -26,7 +26,8 @@ static bool velocity_to_counts(int32_t millidegrees_per_second,
     uint64_t denominator;
     bool negative;
 
-    if (profile == NULL || scale == NULL || result == NULL || !scale->read_succeeded ||
+    if (profile == NULL || scale == NULL || result == NULL ||
+        !emaster_position_scale_is_usable(scale) ||
         scale->encoder_increments == 0U || scale->encoder_motor_revolutions == 0U ||
         (profile->coordinate == EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT &&
             (scale->gear_motor_revolutions == 0U || scale->gear_shaft_revolutions == 0U)))
@@ -60,7 +61,8 @@ static bool rate_to_counts(uint32_t millidegrees_per_second2,
 {
     uint64_t numerator;
     uint64_t denominator;
-    if (profile == NULL || scale == NULL || result == NULL || !scale->read_succeeded ||
+    if (profile == NULL || scale == NULL || result == NULL ||
+        !emaster_position_scale_is_usable(scale) ||
         scale->encoder_increments == 0U || scale->encoder_motor_revolutions == 0U ||
         (profile->coordinate == EMASTER_MOTION_COORDINATE_OUTPUT_SHAFT &&
          (scale->gear_motor_revolutions == 0U || scale->gear_shaft_revolutions == 0U)))

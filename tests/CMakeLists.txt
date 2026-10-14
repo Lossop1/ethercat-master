@@ -85,6 +85,11 @@ add_test(NAME public_api_swap
 # 掩码 0x006F 下，真使能时报 0x1250 的驱动器会被解码成 switch-on-disabled，
 # 于是停机判据判它"已安全"。这是台架实测过的反常识事实，本轮不改状态机，只固化基线
 # —— 谁哪天动掩码或映射，这个测试先红，逼他先读 docs/test-plan.md §2.1。
+add_executable(test_position_scale_source unit/motion/test_position_scale_source.c)
+target_link_libraries(test_position_scale_source PRIVATE emaster::motion emaster::config)
+emaster_enable_strict_warnings(test_position_scale_source)
+add_test(NAME position_scale_source COMMAND test_position_scale_source)
+
 add_executable(test_cia402_status_baseline unit/cia402/test_status_baseline.c)
 target_link_libraries(test_cia402_status_baseline PRIVATE emaster::cia402)
 emaster_enable_strict_warnings(test_cia402_status_baseline)
@@ -97,6 +102,49 @@ add_executable(test_slow_age unit/observation/test_slow_age.c)
 target_link_libraries(test_slow_age PRIVATE emaster::observation_slow)
 emaster_enable_strict_warnings(test_slow_age)
 add_test(NAME slow_age COMMAND test_slow_age)
+
+# 外部目标路径上唯一保留的判据：|目标 - 实际位置| 与逐轴上限。
+# 源文件直接编进来，不链 emaster::motion —— 这个判据的前提就是它脱离会话也能验证，
+# 一旦它开始需要配置库或总线类型才能编译，那个前提就已经没了。
+add_executable(test_target_guard
+    unit/motion/test_target_guard.c
+    ${CMAKE_SOURCE_DIR}/src/motion/target_guard.c)
+target_include_directories(test_target_guard PRIVATE ${CMAKE_SOURCE_DIR}/include)
+emaster_enable_strict_warnings(test_target_guard)
+add_test(NAME target_guard COMMAND test_target_guard)
+
+# 设点记录的线格式：主站与外部控制器之间唯一的书面契约。
+#
+# 只依赖 wire.c（纯 libc），所以开发机上也能建、能跑。这一点要紧：这一层算错一个
+# 字节偏移不会有任何报错，只会让主站照着一串错位但"看起来合理"的位置计数驱动电机，
+# 而那种错只在台架上看得出来、还看不准。拒收判据（魔数/版本/长度自洽）同样在这里钉。
+#
+# tools/setpoint_send.py 是同一份格式的 Python 实现，改偏移表时两处一起改；
+# checks/setpoint_channel_check.py 拿同一组用例对两边。
+add_executable(test_setpoint_wire unit/setpoint/test_setpoint_wire.c)
+target_link_libraries(test_setpoint_wire PRIVATE emaster::setpoint_wire)
+emaster_enable_strict_warnings(test_setpoint_wire)
+add_test(NAME setpoint_wire COMMAND test_setpoint_wire)
+
+# PDO 条目判定：设备实际映射与厂商 ESI 声明只差一个假字节（MT 台架实测的形态）。
+#
+# 这条要紧在于判错了不报错，只是安静地放行：主站会以为"选对了映射表"等于"表里内容也对"，
+# 而实际映射到过程映像里的字节来自哪张表没人核对。判据不依赖 SOEM，开发机上能跑。
+add_executable(test_pdo_layout_match unit/protocol/test_pdo_layout_match.c)
+target_link_libraries(test_pdo_layout_match PRIVATE emaster::session emaster::catalog
+                                                      emaster::config)
+emaster_enable_strict_warnings(test_pdo_layout_match)
+add_test(NAME pdo_layout_match COMMAND test_pdo_layout_match)
+
+# 同一台设备上的后一半：判定说"按设备实际建映像"之后，映像得真的建得起来、编得出去、
+# 解得回来。上面那条只管判定，这条管判定之后的编解码 —— 两边对"填充"的说法不一致时，
+# 判定放行了，编解码照样会把一台能用的设备拒在 OP 门外。
+add_executable(test_adopted_layout_codec unit/cia402/test_adopted_layout_codec.c)
+target_link_libraries(test_adopted_layout_codec PRIVATE emaster::cia402 emaster::catalog
+                                                       emaster::session)
+target_include_directories(test_adopted_layout_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
+emaster_enable_strict_warnings(test_adopted_layout_codec)
+add_test(NAME adopted_layout_codec COMMAND test_adopted_layout_codec)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # 报告写出这条路两个用例，共用 unit/audit/report_fixture.h 里的同一份夹具：
