@@ -289,8 +289,8 @@ sudo python3 tools/socket_bridge.py --deployment <部署ID> --bind 0.0.0.0 --por
 ```
 
 ```powershell
-# 另一台机器
-cd D:\taili\ethercat_master
+# 另一台机器（克隆目录）
+cd <克隆目录>
 $env:PYTHONPATH='tools'
 python -m emaster_gui --tcp <host>:5001
 ```
