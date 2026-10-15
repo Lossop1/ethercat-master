@@ -11,10 +11,15 @@
  * 与反馈字段。其余模式一律不认，会话计划阶段就拒绝——认了却绑不上目标字段，
  * 只会得到一台进了 OP 但不动、且报告全绿的轴。
  *
- * 这三个数是 CiA 402 定的，不是这台设备定的。
+ * 模式 5 **不是 CiA 402 定的**：它是厂商自己给 MIT 复合控制律留的取值（位置环 + 速度环
+ * + 前馈力矩，本族的 ESI 里写作模块 "Mit - axis"）。它之所以能进这张表，是因为它的周期
+ * 目标字段在主站这边绑得上——目标量由运行方案声明为位置，映像里写 0x6040 + 0x607a，
+ * 和 CSP 走同一条路。数值 5 本身不构成证据：别的厂商在这个取值上放什么，主站不问；
+ * 设备档没声明 5 的话，会话计划在更前面一步就把它挡掉了。
  */
 enum
 {
+    EMASTER_CIA402_MODE_MIT = 5,
     EMASTER_CIA402_MODE_HOMING = 6,
     EMASTER_CIA402_MODE_CSP = 8,
     EMASTER_CIA402_MODE_CSV = 9,
@@ -24,7 +29,8 @@ enum
 /* 执行层是否接受这个运行模式。 */
 static inline bool emaster_cia402_mode_is_supported(int8_t mode)
 {
-    return mode == (int8_t)EMASTER_CIA402_MODE_HOMING ||
+    return mode == (int8_t)EMASTER_CIA402_MODE_MIT ||
+           mode == (int8_t)EMASTER_CIA402_MODE_HOMING ||
            mode == (int8_t)EMASTER_CIA402_MODE_CSP ||
            mode == (int8_t)EMASTER_CIA402_MODE_CSV ||
            mode == (int8_t)EMASTER_CIA402_MODE_CST;

@@ -46,7 +46,7 @@ static void read_sdo(ecx_contextt *context, uint16_t slave,
     {
         expected_size = 2;
     }
-    else if (request->type == EMASTER_SDO_U32)
+    else if (request->type == EMASTER_SDO_U32 || request->type == EMASTER_SDO_I32)
     {
         expected_size = 4;
     }
@@ -86,6 +86,12 @@ static void read_sdo(ecx_contextt *context, uint16_t slave,
         uint32_t raw;
         memcpy(&raw, buffer, sizeof(raw));
         read->value.u32 = etohl(raw);
+    }
+    else if (request->type == EMASTER_SDO_I32)
+    {
+        uint32_t raw;
+        memcpy(&raw, buffer, sizeof(raw));
+        read->value.i32 = (int32_t)etohl(raw);
     }
     else
     {

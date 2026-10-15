@@ -147,6 +147,8 @@ static const char *sdo_type_name(emaster_sdo_value_type_t type)
             return "u16";
         case EMASTER_SDO_U32:
             return "u32";
+        case EMASTER_SDO_I32:
+            return "i32";
         case EMASTER_SDO_STRING:
             return "string";
     }
@@ -283,6 +285,10 @@ static void write_sdo_read(FILE *output, const emaster_sdo_read_t *read)
         else if (read->type == EMASTER_SDO_U32)
         {
             fprintf(output, ",\"value\":%u", (unsigned int)read->value.u32);
+        }
+        else if (read->type == EMASTER_SDO_I32)
+        {
+            fprintf(output, ",\"value\":%d", (int)read->value.i32);
         }
         else
         {

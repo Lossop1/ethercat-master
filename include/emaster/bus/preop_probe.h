@@ -24,6 +24,7 @@ typedef enum
     EMASTER_SDO_I8,
     EMASTER_SDO_U16,
     EMASTER_SDO_U32,
+    EMASTER_SDO_I32,
     EMASTER_SDO_STRING
 } emaster_sdo_value_type_t;
 
@@ -48,6 +49,7 @@ typedef struct
         int8_t i8;
         uint16_t u16;
         uint32_t u32;
+        int32_t i32;
         char string[EMASTER_PREOP_STRING_CAPACITY];
     } value;
 } emaster_sdo_read_t;

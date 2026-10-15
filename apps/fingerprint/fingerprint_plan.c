@@ -52,6 +52,14 @@ static const emaster_sdo_request_t common_requests[] = {
     {UINT16_C(0x2008), UINT8_C(0x07), "current_loop_kp", EMASTER_SDO_U16},
     {UINT16_C(0x2008), UINT8_C(0x08), "current_loop_ki", EMASTER_SDO_U16},
     {UINT16_C(0x2008), UINT8_C(0x09), "current_loop_kd", EMASTER_SDO_U16},
+    /*
+     * MIT 复合控制律的两个增益（0x2013「Mit Parameters」）。它们和 2008h 那组一样
+     * 不属于 CiA 402，是这台家族的厂商对象；本工具在 PRE-OP 只读，读过之后驱动器
+     * 里还是原值。类型按 ESI 记的 DINT —— 2008h 那组是 Uint16，显示成无符号没有
+     * 损失，这两个是有符号的，读成 u32 会把负值印成一个巨大的正数。
+     */
+    {UINT16_C(0x2013), UINT8_C(0x01), "mit_kp", EMASTER_SDO_I32},
+    {UINT16_C(0x2013), UINT8_C(0x02), "mit_kd", EMASTER_SDO_I32},
 };
 
 static bool append_request(emaster_sdo_request_t *requests, size_t capacity, size_t *count,

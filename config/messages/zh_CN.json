@@ -11,7 +11,7 @@
     "command_deployments": "deployments",
     "command_capture": "capture",
     "command_prepare_dc": "prepare-dc",
-    "usage": "用法：\n  %s %s\n  %s %s\n  sudo %s %s [--config-dir <目录>] [--deployment <部署ID>] OUTPUT_FILE\n\n选项：\n  --config-dir <目录>     运行时配置目录，默认 config-runtime\n  --deployment <部署ID>   显式指定部署配置ID；不给则按当前主机名匹配\n  --help                  打印本说明后退出\n  --version               打印版本号后退出\n\n探测会发送 EtherCAT 发现报文并请求 PRE-OP。它只读取 SDO，不映射 PDO、不配置 DC，也不请求 SAFE-OP 或 OP；关闭前会尝试恢复 INIT。\n",
+    "usage": "用法：\n  %s %s\n  %s %s\n  sudo %s %s [--config-dir <目录>] OUTPUT_FILE [--deployment <部署ID>]\n\n选项：\n  --config-dir <目录>     运行时配置目录，默认 config-runtime\n  --deployment <部署ID>   显式指定部署配置ID；不给则按当前主机名匹配\n  --help                  打印本说明后退出\n  --version               打印版本号后退出\n\n探测会发送 EtherCAT 发现报文并请求 PRE-OP。它只读取 SDO，不映射 PDO、不配置 DC，也不请求 SAFE-OP 或 OP；关闭前会尝试恢复 INIT。\n",
     "interface_line": "%s\t%s\n",
     "preop_confirmation_token": "PRE-OP",
     "preop_confirm_required": "PRE-OP 采集必须在交互终端中确认。\n",
