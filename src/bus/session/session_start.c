@@ -31,6 +31,35 @@ static bool any_slave_state_error(const ecx_contextt *context) {
 #define EMASTER_HANDOVER_WATCHDOG_ATTEMPTS 3U
 
 /*
+ * 首拍目标写什么：按运行方案为这个模式声明的量给"静止/保持值"，不按模式号认。
+ *
+ *   位置 → 当前实际位置（停在原地；写 0 会让一使能就朝原点猛走）
+ *   速度 → 0（0 counts/s 就是停）
+ *   力矩 → 0（不出力）
+ *   回零 → 当前实际位置（本模式没有周期目标，过程数据里压根不写这一路）
+ *
+ * mode_value 是 decode_input 解出来的**本模式那个量**（位置模式 6064、速度模式
+ * 606C、力矩模式 6077），不是"位置"。过去这里不分模式，一律把 mode_value 当保持
+ * 目标写回去，在速度模式下就成了"按你进 OP 时的那个速度接着跑"。
+ *
+ * 2026-10-15 良质 9 轴 CSV 台架实测：那一帧写出去的正是各轴进 OP 时的漂移速度
+ * （+5/−3/−2/−5/+2/+2 counts/s，读数本就是 0 的三台写的是 0），随后收到非零的
+ * 那几台全跑了、收到 0 的三台一台没动。速度环自己收不住是驱动器侧的事，但"接着
+ * 漂"这一帧是主站发出去的——主站不该发一个没人下过的速度。
+ */
+static int32_t hold_target_value(const emaster_session_axis_plan_t *plan_axis,
+                                 int32_t mode_value)
+{
+    if (plan_axis->operation_mode != NULL &&
+        plan_axis->operation_mode->quantity != EMASTER_MODE_QUANTITY_POSITION &&
+        plan_axis->operation_mode->quantity != EMASTER_MODE_QUANTITY_NONE)
+    {
+        return 0;
+    }
+    return mode_value;
+}
+
+/*
  * 从站确认进入 OP 后，使用最后一次 OP 过程数据建立保持目标和相对运动起点
  * SAFE-OP 位置只保留为观察值，不参与目标计算
  */
@@ -46,25 +75,40 @@ static emaster_control_session_status_t prepare_op_position(
         emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
         int8_t mode_display;
         uint16_t status_word;
+        int32_t mode_value;
         int32_t actual_position;
 
         if (!emaster_cia_process_image_decode_input(
                 &session->images[axis_index], slave->inputs, slave->Ibytes,
-                &mode_display, &status_word, &actual_position))
+                &mode_display, &status_word, &mode_value))
         {
             return EMASTER_CONTROL_SESSION_FEEDBACK_INVALID;
+        }
+        /*
+         * initial_actual_position 与 actual_positions 收的是**位置**，而 mode_value 在
+         * 速度/力矩模式下是速度/力矩。塞进去的话，报告与状态口会把一个速度当位置报给
+         * 客户，位置通道的判据也拿它当位置比。所以这里另取 6064；取不到才退回保持值
+         * （位置与回零模式下保持值就是位置）。
+         */
+        if (!emaster_cia_process_image_feedback(&session->images[axis_index],
+                                                 EMASTER_CIA_FEEDBACK_POSITION,
+                                                 &actual_position))
+        {
+            actual_position =
+                hold_target_value(&session->plan->axes[axis_index], mode_value);
         }
         axis->input_decoded = true;
         axis->mode_display = mode_display;
         axis->status_word = status_word;
         axis->initial_actual_position = actual_position;
         (void)emaster_soem_axis_set_feedback(&session->plan->axes[axis_index], axis,
-                                              actual_position);
+                                              mode_value);
         axis->target_position = session->plan->motion_profile != NULL &&
                                         session->plan->motion_profile->trajectory ==
                                             EMASTER_MOTION_TRAJECTORY_CONSTANT_VELOCITY
                                     ? 0
-                                    : actual_position;
+                                    : hold_target_value(&session->plan->axes[axis_index],
+                                                        mode_value);
         session->status_words[axis_index] = status_word;
         if (session->plan->motion_profile != NULL ||
             session->position_target_source != NULL)
@@ -237,6 +281,7 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         int8_t mode_display;
         uint16_t status_word;
         int32_t actual_position;
+        int32_t safeop_position;
 
         session->axes[axis_index].input_decoded = emaster_cia_process_image_decode_input(
             &session->images[axis_index], slave->inputs, slave->Ibytes, &mode_display, &status_word,
@@ -269,21 +314,30 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
             session->axes[axis_index].mode_display = mode_display;
         }
         session->axes[axis_index].status_word = status_word;
-        session->axes[axis_index].safeop_actual_position = actual_position;
+        /*
+         * safeop_actual_position 是**位置**观察值。速度与力矩模式下 decode_input 给的是
+         * 606C/6077，塞进这个键等于把一个速度当位置报给客户，所以这里另取 6064；
+         * 取不到才退回保持值（位置与回零模式下保持值就是位置）。
+         */
+        if (!emaster_cia_process_image_feedback(&session->images[axis_index],
+                                                 EMASTER_CIA_FEEDBACK_POSITION,
+                                                 &safeop_position))
+        {
+            safeop_position = hold_target_value(&session->plan->axes[axis_index],
+                                                actual_position);
+        }
+        session->axes[axis_index].safeop_actual_position = safeop_position;
         (void)emaster_soem_axis_set_feedback(&session->plan->axes[axis_index],
                                               &session->axes[axis_index], actual_position);
         /*
-         * 第一拍的目标值：位置模式取当前实际位置（停在原地），速度模式取 0
-         * （不转）。取哪个由运行方案为这个模式声明的量决定。
+         * 第一拍的目标值：位置模式取当前实际位置（停在原地），速度与力矩模式取 0
+         * （停、不出力）。取哪个由运行方案为这个模式声明的量决定，见 hold_target_value。
          */
         session->axes[axis_index].target_position =
-            session->plan->axes[axis_index].operation_mode != NULL &&
-                    session->plan->axes[axis_index].operation_mode->quantity ==
-                        EMASTER_MODE_QUANTITY_VELOCITY
-                ? 0 : actual_position;
+            hold_target_value(&session->plan->axes[axis_index], actual_position);
         if (session->plan->motion_profile != NULL ||
             session->position_target_source != NULL) {
-            session->actual_positions[axis_index] = actual_position;
+            session->actual_positions[axis_index] = safeop_position;
             session->target_positions[axis_index] = session->axes[axis_index].target_position;
         }
         if (!emaster_cia_process_image_update_output(

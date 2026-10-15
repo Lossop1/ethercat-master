@@ -538,9 +538,18 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     image->tx_error_code_ordinal = field_ordinal_for(
         &image->layout.tx, EMASTER_CIA402_ERROR_CODE_INDEX, UINT8_C(0));
     /*
-     * 有周期的模式各自要求目标与反馈字段都在本套 PDO 里；回零不要求任何目标字段，
-     * 它要的反馈（实际位置）不在也不是错——一台只回零、不报位置的驱动器照样能把
-     * 参考点找到，主站不该因为少一路遥测就把它判死。
+     * 有周期的模式要求"主站下发的那个量"在本套 PDO 里；反馈是遥测，缺了不算错。
+     * 回零连目标字段都不要求——一台只回零、不报位置的驱动器照样能把参考点找到。
+     *
+     * **位置模式是唯一的例外**：它的停机含义是"停在当前位置"，命令值直接由当前位置
+     * 算出来（见 session_start.c 的 hold_target_value）。位置读不回来，主站就只能拿 0
+     * 当保持目标，一使能轴就朝原点走——那比拒开更危险。
+     *
+     * 速度模式为什么不能要求反馈：厂商 ESI 里专给速度模式的那道帧（模块 #x319800，
+     * Rx 0x1602 / Tx 0x1A02）反馈只有状态字与实际位置，**没有 0x606C 实际速度**。
+     * 2026-10-15 台架实测：0xF030 选这道模块后真机回报的正是 6041+6064。要求它有
+     * 606C，等于判厂商自己声明的那道帧不可用。（手册 5.7.1.1 / 5.8.1 的表把 1A02
+     * 写成 6041+606C，与 ESI 和真机都不符；以真机为准。）
      *
      * 按声明的量挑字段，不按模式号：同一个模式号在不同厂商的说明书里指的不是同一件事。
      */
@@ -554,15 +563,13 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
         }
         break;
     case EMASTER_MODE_QUANTITY_VELOCITY:
-        if (image->rx_target_velocity_ordinal == SIZE_MAX ||
-            image->tx_actual_velocity_ordinal == SIZE_MAX)
+        if (image->rx_target_velocity_ordinal == SIZE_MAX)
         {
             return false;
         }
         break;
     case EMASTER_MODE_QUANTITY_TORQUE:
-        if (image->rx_target_torque_ordinal == SIZE_MAX ||
-            image->tx_actual_torque_ordinal == SIZE_MAX)
+        if (image->rx_target_torque_ordinal == SIZE_MAX)
         {
             return false;
         }
