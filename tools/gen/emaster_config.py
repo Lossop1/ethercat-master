@@ -66,14 +66,25 @@ MODE_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...], str]] = {
         ("status_word", "actual_position", "mode_display"),
         "none",
     ),
+    # MIT 复合控制律：驱动器按 T = Kp·(P目标−P实际) + Kd·(V前馈−V实际) + T前馈 算力矩，
+    # 主站每拍送的是这五项。目标通道收的那个数是**位置**——Kp/Kd 与两个前馈是控制律的
+    # 参数，不是外部设点，所以它们不在这里列，由运行方案宣布为固定值（两个增益必给：
+    # 出厂值未知时主站每拍往映射里写的 0 会把驱动器自己的增益顶掉，轴就是松的）。
+    "mit": (
+        ("control_word", "target_position", "mit_kp", "mit_kd", "mode_of_operation"),
+        ("status_word", "actual_position", "mode_display"),
+        "position",
+    ),
 }
 
 # 一个模块支持多种模式时先挑哪个。CSP 是位置主轴的核心模式，其余按使用频率排。
 # 回零（homing）不在这张表里：它是特殊用途的一次性模式，不该被自动挑中。
-MODE_PREFERENCE = ("csp", "csv", "cst")
+# MIT 排最后：它要额外给两个增益，不是"什么都不填就能跑"的模式。
+MODE_PREFERENCE = ("csp", "csv", "cst", "mit")
 
 # ESI 里观察不到模式集合时的兜底：CiA 402 标准三件套的模式号。
 # 兜底里不含 homing：它是不是支持只有设备自己知道，不能替客户猜。
+# 也不含 mit：它不是 CiA 402 的标准模式，只有厂商在 ESI 里声明了才成立。
 STANDARD_MODE_VALUES = {"csp": 8, "csv": 9, "cst": 10}
 
 # 台架实测的 DC 同步参数（1 ms 周期的取值）。周期变了按比例缩放，见 _sync_block。
@@ -187,12 +198,34 @@ def _resolve_esi(argument: str) -> Path:
 
 
 def _pdo_set_draft(
-    facts: dict[str, Any], derived: dict[str, Any], notes: list[tuple[str, str]]
+    facts: dict[str, Any],
+    derived: dict[str, Any],
+    supported_modes: dict[str, int],
+    notes: list[tuple[str, str]],
 ) -> list[dict[str, Any]]:
-    """按 ESI 里的模块（或设备级声明）起草 PDO 方案列表。"""
+    """按 ESI 里的模块（或设备级声明）起草 PDO 方案列表。
+
+    supported_modes 是这份新策略要写的模式集合，由调用方按"ESI 观察到的、没有就按
+    标准三种兜底"定好 —— 起草几条方案、给什么提示都看它。
+    """
     modules = facts.get("modules") or []
     if not modules:
-        # 非模块化设备只有出厂那一套映射，策略没有可挑的余地。
+        # 非模块化设备只有出厂那一套映射，策略没有可挑的余地。但"一套映射"不等于
+        # "一个模式"：模式由 0x6060 定，同一套映射换一个模式值就是另一条方案。
+        # 所以这里也要说清楚怎么加——否则客户改 --mode 之后会撞在"没有这套 PDO
+        # 方案"上，而那句话不会告诉他该改哪儿。
+        modes = supported_modes
+        runnable = [mode for mode in MODE_PREFERENCE if mode in modes]
+        if len(runnable) > 1:
+            notes.append(
+                (
+                    "模式",
+                    "非模块化设备只有出厂那一套映射，但它能跑 "
+                    + "、".join(f"{mode}={modes[mode]}" for mode in runnable)
+                    + "。要跑 csp 以外的模式，在策略档的 pdo_sets 里照抄一条，"
+                    "只改 id 与 mode_value，再重跑本命令。",
+                )
+            )
         if len(derived["pdo_sets"]) != 1:
             raise SystemExit("设备级推导给出的 PDO 方案不是一套，无法起草策略")
         return [
@@ -216,21 +249,34 @@ def _pdo_set_draft(
                 f"模块 {module['module_ident']}（{module.get('type')}）没写出任何"
                 f"本工具认识的模式，无法起草 PDO 方案"
             )
-        # 一个模块先给一套方案。要同一套映射跑另一个模式，照抄一份改 mode_value 即可。
-        draft.append(
-            {
-                "id": f"{module['module_ident'][2:]}-{usable[0]}",
-                "module_ident": module["module_ident"],
-                "module_slot": 1,
-                "mode_value": modes[usable[0]],
-            }
-        )
+        declared = _declared_mode_value(module)
+        entry: dict[str, Any] = {
+            "id": f"{module['module_ident'][2:]}-{usable[0]}",
+            "module_ident": module["module_ident"],
+            "module_slot": 1,
+        }
+        # 模块自带的 CoE 启动命令已经把模式钉死了，那是厂商的声明 —— 不抄进策略档。
+        # 只有多模式模块（一条启动命令都没有）才由人在这里选跑哪种。
+        if declared is None:
+            entry["mode_value"] = modes[usable[0]]
+        draft.append(entry)
         if len(usable) > 1:
+            singled = [
+                f"{mode} 用 {_dedicated_module_ident(modules, mode)}"
+                for mode in usable[1:]
+                if _dedicated_module_ident(modules, mode) is not None
+            ]
+            hint = (
+                "厂商为这些模式单独声明了模块（" + "、".join(singled) + "），优先用那些；"
+                if singled
+                else ""
+            )
             notes.append(
                 (
                     "模式",
                     f"模块 {module['module_ident']} 还支持 {'、'.join(usable[1:])}。"
-                    f"要就在策略档照抄一条，只改 mode_value。",
+                    f"{hint}没有专门模块的，在策略档照抄一条、只改 mode_value，"
+                    "模式仍由运行方案选。",
                 )
             )
     return draft
@@ -260,7 +306,7 @@ def add_device(args: argparse.Namespace) -> int:
                 )
             )
             observed_modes = dict(STANDARD_MODE_VALUES)
-        modes = _pdo_set_draft(facts, derived, notes)
+        modes = _pdo_set_draft(facts, derived, observed_modes, notes)
         policy = {
             "schema_version": 1,
             "profile_id": profile_id,
@@ -334,6 +380,25 @@ def _mode_rank(mode_id: str) -> int:
     )
 
 
+def _declared_mode_value(module: dict[str, Any]) -> int | None:
+    """模块自带的 CoE 启动命令里那个模式值；模块没声明就返回 None。
+
+    单模式模块靠这条命令把模式钉死，那是厂商的声明，不该再抄进策略档。
+    """
+    for command in module.get("startup_commands") or []:
+        if command.get("index") == "0x6060":
+            return int(command["value"])
+    return None
+
+
+def _dedicated_module_ident(modules: list[dict[str, Any]], mode: str) -> str | None:
+    """只声明了这一个模式的模块 —— 厂商为它单独留的那一份映射。"""
+    for module in modules:
+        if list(module_mode_ids(module)) == [mode]:
+            return str(module["module_ident"])
+    return None
+
+
 def _mode_fields(pdo_set: dict[str, Any], direction: str) -> set[str]:
     names: set[str] = set()
     for mapping in pdo_set.get(direction, {}).get("mappings", []):
@@ -375,6 +440,38 @@ def _sync_block(device: dict[str, Any], cycle_ns: int) -> dict[str, Any]:
     }
 
 
+def _mit_gain_writes(device: dict[str, Any]) -> list[dict[str, Any]]:
+    """MIT 的两个增益，从设备档的策略段读出来，写成方案里的固定值声明。
+
+    为什么必须由策略给、不能由工具编一个默认值：这两个增益在 RxPDO 里，主站每拍
+    写进去的就是驱动器会用的值；工具编一个数，客户拿到的就是一份"看着能跑、刚度
+    是猜的"的配置。为什么不能不给：不给就是每拍写 0 —— 没有刚度也没有阻尼，轴是
+    松的（比拒开更危险）。所以缺了就当场拒绝，并说清该往哪写。
+    """
+    gains = device.get("mit_gains")
+    values: dict[str, int] = {}
+    for key, label in (("kp", "Kp"), ("kd", "Kd")):
+        value = gains.get(key) if isinstance(gains, dict) else None
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise SystemExit(
+                f"设备 {device['profile_id']} 声明支持 MIT 模式，但设备档里没有可用的 "
+                f"mit_gains.{key}（{label}）。\n"
+                "这两个增益由主站逐拍写进过程数据，值是驱动器实际用的值，必须由人给：\n"
+                "  · 在 config/device_policies/<这份档对应的策略>.json 里加一段\n"
+                '    "mit_gains": {"kp": <非负整数>, "kd": <非负整数>}，\n'
+                "    再重跑 add-device 合成设备档；\n"
+                "  · 取值照台架实测（先在 PRE-OP 只读这两个对象看驱动器里是多少），\n"
+                "    不要照 CAN 协议那两个 mit_max_* 上限值 —— 那是对 12 位定点数的量程，\n"
+                "    不是这台设备 EtherCAT 侧该用的增益。"
+            )
+        values[key] = value
+    # 0x2013 是厂商的 MIT 参数组（ESI 里的 "Mit Parameters"）：1 号 Kp、2 号 Kd。
+    return [
+        {"index": "0x2013", "subindex": 1, "type": "i32", "value": values["kp"]},
+        {"index": "0x2013", "subindex": 2, "type": "i32", "value": values["kd"]},
+    ]
+
+
 def _modes_block(
     device: dict[str, Any], pdo_set: dict[str, Any], wanted: str
 ) -> list[dict[str, Any]]:
@@ -391,16 +488,17 @@ def _modes_block(
         missing = [name for name in rx_fields + tx_fields if name not in rx_names | tx_names]
         if missing:
             continue
-        modes.append(
-            {
-                "id": mode_id,
-                "value": value,
-                "quantity": quantity,
-                "required_rx_fields": list(rx_fields),
-                "required_tx_fields": list(tx_fields),
-                "mode_display_policy": "required",
-            }
-        )
+        mode: dict[str, Any] = {
+            "id": mode_id,
+            "value": value,
+            "quantity": quantity,
+            "required_rx_fields": list(rx_fields),
+            "required_tx_fields": list(tx_fields),
+            "mode_display_policy": "required",
+        }
+        if mode_id == "mit":
+            mode["safeop_to_op_sdo_writes"] = _mit_gain_writes(device)
+        modes.append(mode)
     if not any(mode["id"] == wanted for mode in modes):
         raise SystemExit(
             f"PDO 方案 {pdo_set['id']} 表达不了模式 {wanted}："
@@ -418,14 +516,82 @@ def _find_device(config: Path, profile_id: str) -> dict[str, Any]:
     raise SystemExit(f"{config / 'devices'} 里没有 profile_id 为 {profile_id} 的设备档")
 
 
-def _pick_pdo_set(device: dict[str, Any], wanted: str | None) -> dict[str, Any]:
-    pdo_set_id = wanted or device["reference_pdo_set_id"]
-    for pdo_set in device["pdo_sets"]:
-        if pdo_set["id"] == pdo_set_id:
-            return pdo_set
+def _pdo_set_mode_value(pdo_set: dict[str, Any]) -> int | None:
+    """这套方案进 OP 前把 0x6060 写成几。没声明就是不固定模式。"""
+    initialization = pdo_set.get("mode_initialization")
+    if isinstance(initialization, dict):
+        return initialization.get("value")
+    return None
+
+
+def _pdo_set_expresses(device: dict[str, Any], pdo_set: dict[str, Any], mode: str) -> bool:
+    """这套方案的字段能不能表达这个模式。判据与 _modes_block 用的是同一张表。"""
+    layout = MODE_FIELDS.get(mode)
+    if layout is None or mode not in device["protocol"]["supported_modes"]:
+        return False
+    rx_fields, tx_fields, _quantity = layout
+    names = _mode_fields(pdo_set, "rx") | _mode_fields(pdo_set, "tx")
+    return all(name in names for name in rx_fields + tx_fields)
+
+
+def _pick_pdo_set(
+    device: dict[str, Any], wanted_id: str | None, wanted_mode: str
+) -> dict[str, Any]:
+    """挑出这份运行方案要用的 PDO 方案。
+
+    一台设备可以给同一套映射写多条方案，彼此只差 mode_value —— 同一套映射换一个
+    模式值就是另一个模式。所以"跑 CSV 该用哪条"不能只看参考方案：先看它表达不表达
+    得了这个模式，再看哪条的 mode_value 与模式号对得上。挑不出来时退回参考方案，
+    由 _modes_block 报"这套方案表达不了这个模式"，那句话里已经说了缺什么。
+    """
+    if wanted_id is not None:
+        for pdo_set in device["pdo_sets"]:
+            if pdo_set["id"] == wanted_id:
+                return pdo_set
+        raise SystemExit(
+            f"设备 {device['profile_id']} 没有 PDO 方案 {wanted_id}；"
+            f"可选：{', '.join(item['id'] for item in device['pdo_sets'])}"
+        )
+
+    reference = next(
+        (item for item in device["pdo_sets"] if item["id"] == device["reference_pdo_set_id"]),
+        None,
+    )
+    if reference is None:
+        raise SystemExit(
+            f"设备 {device['profile_id']} 的参考 PDO 方案 "
+            f"{device['reference_pdo_set_id']} 不在 pdo_sets 里"
+        )
+    candidates = [
+        item for item in device["pdo_sets"] if _pdo_set_expresses(device, item, wanted_mode)
+    ]
+    # 固定模式值对得上的那条最准：字段能表达只是必要条件，模式值才是"进 OP 之后
+    # 驱动器收到的是哪个模式"。参考方案排在其后。
+    wanted_value = device["protocol"]["supported_modes"].get(wanted_mode)
+    for item in candidates:
+        if _pdo_set_mode_value(item) == wanted_value:
+            return item
+    if reference in candidates:
+        return reference
+    return candidates[0] if candidates else reference
+
+
+def _check_pdo_set_mode(device: dict[str, Any], pdo_set: dict[str, Any], mode: str) -> None:
+    """方案固定的模式值必须就是这次要跑的模式。
+
+    落在这里而不是留到 build：两条命令之间夹着一次重跑 add-device，而 build 的
+    报错只说"模式值与所选 PDO 模块初始化值不一致"，不告诉人改哪儿。
+    """
+    declared = _pdo_set_mode_value(pdo_set)
+    modes = device["protocol"]["supported_modes"]
+    if declared is None or mode not in modes or declared == modes[mode]:
+        return
     raise SystemExit(
-        f"设备 {device['profile_id']} 没有 PDO 方案 {pdo_set_id}；"
-        f"可选：{', '.join(item['id'] for item in device['pdo_sets'])}"
+        f"PDO 方案 {pdo_set['id']} 声明进 OP 前把模式写成 {declared}，"
+        f"而 --mode {mode} 是 {modes[mode]}。\n"
+        f"要在同一套映射上跑 {mode}：在设备策略档的 pdo_sets 里照抄一条 "
+        f"{pdo_set['id']}，改 id 与 mode_value 为 {modes[mode]}，重跑 add-device，"
+        f"再带上 --pdo-set <新 id> 重跑本命令。"
     )
 
 
@@ -513,7 +679,8 @@ def _check_scan_identity(device: dict[str, Any], scanned: list[dict[str, str]]) 
 def init_site(args: argparse.Namespace) -> int:
     config = Path(args.config)
     device = _find_device(config, args.device)
-    pdo_set = _pick_pdo_set(device, args.pdo_set)
+    pdo_set = _pick_pdo_set(device, args.pdo_set, args.mode)
+    _check_pdo_set_mode(device, pdo_set, args.mode)
     modes = _modes_block(device, pdo_set, args.mode)
 
     host = args.hostname or socket.gethostname()
@@ -624,21 +791,31 @@ def init_site(args: argparse.Namespace) -> int:
             ),
         ],
     )
-    _print_notes(
-        [
-            axis_note,
+    notes = [
+        axis_note,
+        (
+            "诊断项",
+            "运行方案里没有 safeop_to_op_sdo_writes 和 final_sdo_reads，"
+            "那两张表要按型号在台架挑。",
+        ),
+        (
+            "实时",
+            "只给了调度优先级，没绑核。要绑核补 realtime.cpu_core，"
+            "计时类实验还要把 realtime.required 改成 true。",
+        ),
+    ]
+    if any(mode["id"] == args.mode and mode["quantity"] == "torque" for mode in modes):
+        # 力矩模式没有位置与速度保护，方案里那一档力矩上限就是唯一的限幅。
+        # 生成器不替客户编一个数：额定力矩是型号的事，编一个像模像样的值比留空更危险。
+        notes.append(
             (
-                "诊断项",
-                "运行方案里没有 safeop_to_op_sdo_writes 和 final_sdo_reads，"
-                "那两张表要按型号在台架挑。",
-            ),
-            (
-                "实时",
-                "只给了调度优先级，没绑核。要绑核补 realtime.cpu_core，"
-                "计时类实验还要把 realtime.required 改成 true。",
-            ),
-        ]
-    )
+                "力矩上限",
+                f"{args.mode} 不做位置与速度保护，方案里要写明力矩上限：在 "
+                f"{operation_path.name} 的 modes 里给 {args.mode} 加一条 "
+                "safeop_to_op_sdo_writes，对象 0x6072，取驱动器额定力矩里的一档。",
+            )
+        )
+    _print_notes(notes)
     _print_next(
         "python3 tools/gen/emaster_config.py build",
         "生成主站读的四族扁平文件。",

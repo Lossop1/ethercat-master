@@ -42,10 +42,45 @@ PROTOCOL_MAILBOX = "CoE"
 ASSIGNMENT_STYLE_MODULE_SLOT = "module_slot"
 
 
+def _declared_mode_initialization(
+    hardware: dict[str, Any], pdo_id: str
+) -> dict[str, Any] | None:
+    """模块自带的模式启动命令，翻译成运行期那一步的写法；模块没声明就返回 None。
+
+    厂商在 ESI 里把"这个模块跑哪种模式"写成一条 CoE 启动命令 —— 见 #x319800 的
+    <InitCmd>：SO 过渡上把 0x6060:0 写成 09。这是厂商自己的声明，不该由人再抄一遍
+    到策略档里。单模式模块带着这条命令，多模式模块（如 csv,csp,cst 并集）一条都没有，
+    后者的模式由运行方案选。
+
+    过渡名 ESI 写的是 SO，即"进 SAFE-OP 那一步"；运行期在进 OP 那一步写 —— CiA 402
+    只允许在 SAFE-OP -> OP 改模式，两处表达的是同一件事。
+    """
+    for command in hardware.get("startup_commands") or []:
+        if command["index"] != MODE_OBJECT_INDEX:
+            continue
+        if command["transition"] not in ("SO", MODE_TRANSITION):
+            raise SystemExit(
+                f"PDO 方案 {pdo_id} 的模式启动命令写在 {command['transition']} 过渡上；"
+                f"运行期只实现在 {MODE_TRANSITION} 那一步写"
+            )
+        return {
+            "transition": MODE_TRANSITION,
+            "index": MODE_OBJECT_INDEX,
+            "subindex": command["subindex"],
+            "value": command["value"],
+        }
+    return None
+
+
 def _pdo_sets(
     facts: dict[str, Any], policy: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """按策略挑出要写进设备档的 PDO 方案，硬件部分一律取自 facts。"""
+    """按策略挑出要写进设备档的 PDO 方案，硬件部分一律取自 facts。
+
+    模式初始化优先取 ESI 里模块自己声明的那条启动命令；模块没声明（多模式模块、
+    非模块化设备）时，才用策略档里人写的 mode_value。两处都给且对不上就是有一方
+    错了，直接失败 —— 不能挑一个信。
+    """
     by_ident = {
         pdo["module_ident"]: pdo
         for pdo in facts["pdo_sets"]
@@ -74,24 +109,37 @@ def _pdo_sets(
                 )
             hardware = by_ident[ident]
             module_slot = entry["module_slot"]
-        pdo_sets.append(
-            {
-                "id": entry["id"],
-                "assignment_style": entry.get(
-                    "assignment_style", ASSIGNMENT_STYLE_MODULE_SLOT
-                ),
-                "module_ident": ident,
-                "module_slot": module_slot,
-                "mode_initialization": {
-                    "transition": MODE_TRANSITION,
-                    "index": MODE_OBJECT_INDEX,
-                    "subindex": MODE_OBJECT_SUBINDEX,
-                    "value": entry["mode_value"],
-                },
-                "rx": hardware["rx"],
-                "tx": hardware["tx"],
+
+        mode_initialization = _declared_mode_initialization(hardware, entry["id"])
+        if mode_initialization is not None:
+            written = entry.get("mode_value")
+            if written is not None and int(written) != mode_initialization["value"]:
+                raise SystemExit(
+                    f"PDO 方案 {entry['id']}：策略写 mode_value={written}，"
+                    f"ESI 里模块自带的启动命令写的是 {mode_initialization['value']}；两者必须一致"
+                )
+        elif entry.get("mode_value") is not None:
+            mode_initialization = {
+                "transition": MODE_TRANSITION,
+                "index": MODE_OBJECT_INDEX,
+                "subindex": MODE_OBJECT_SUBINDEX,
+                "value": entry["mode_value"],
             }
-        )
+
+        record: dict[str, Any] = {
+            "id": entry["id"],
+            "assignment_style": entry.get(
+                "assignment_style", ASSIGNMENT_STYLE_MODULE_SLOT
+            ),
+            "module_ident": ident,
+            "module_slot": module_slot,
+            "rx": hardware["rx"],
+            "tx": hardware["tx"],
+        }
+        # 没有模式初始化就不写这个键：缺省的含义是"靠周期帧里的模式字段定"，是句实话。
+        if mode_initialization is not None:
+            record["mode_initialization"] = mode_initialization
+        pdo_sets.append(record)
     return pdo_sets
 
 
@@ -142,6 +190,10 @@ def build(facts: dict[str, Any], policy: dict[str, Any], esi_path: str) -> dict[
         merged["conversion"] = policy["conversion"]
     if policy.get("slow_telemetry"):
         merged["slow_telemetry"] = policy["slow_telemetry"]
+    # MIT 的两个增益也是工程策略：它们必须由人给（理由见 emaster_config 的 MIT 一段），
+    # 但给的是"这台设备用多大的刚度与阻尼"，不是"这个对象在哪个索引"。
+    if policy.get("mit_gains"):
+        merged["mit_gains"] = policy["mit_gains"]
     merged["source"] = {"esi": esi_path}
     return merged
 

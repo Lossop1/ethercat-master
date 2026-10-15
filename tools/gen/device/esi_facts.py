@@ -195,6 +195,33 @@ def _pdo_fact(pdo: ET.Element) -> dict[str, Any]:
     }
 
 
+def _module_startup_commands(module: ET.Element) -> list[dict[str, Any]]:
+    """模块自带的 CoE 启动命令：在某次状态过渡上把某个对象写成某个值。
+
+    ESI 里就是 <Mailbox><CoE><InitCmd>。厂商用它把"这个模块跑哪种模式"钉死：
+    单模式模块带着一条 6060 的启动命令，多模式模块一条都没有。这是模块自己的
+    声明，不是我们的选择，所以按原样取出来交给下游。
+    """
+    commands: list[dict[str, Any]] = []
+    for command in module.findall("Mailbox/CoE/InitCmd"):
+        index = _optional_text(command, "Index")
+        data = _optional_text(command, "Data")
+        if index is None or data is None:
+            continue
+        subindex = _optional_text(command, "SubIndex")
+        commands.append(
+            {
+                "transition": _optional_text(command, "Transition"),
+                "index": _hex_text(_integer_text(index, "InitCmd/Index"), 4),
+                "subindex": int(subindex, 0) if subindex is not None else 0,
+                # Data 是十六进制字节串。启动命令里我们只用到单字节的模式值。
+                "data": data,
+                "value": int(data, 16),
+            }
+        )
+    return commands
+
+
 def _module_facts(root: ET.Element) -> list[dict[str, Any]]:
     """提取 ESI 中全部模块，保留声明顺序和每个模块的完整 PDO 选项。"""
     modules: list[dict[str, Any]] = []
@@ -214,6 +241,7 @@ def _module_facts(root: ET.Element) -> list[dict[str, Any]]:
                 ],
                 "rx": [_pdo_fact(pdo) for pdo in module.findall("RxPdo")],
                 "tx": [_pdo_fact(pdo) for pdo in module.findall("TxPdo")],
+                "startup_commands": _module_startup_commands(module),
             }
         )
     return modules

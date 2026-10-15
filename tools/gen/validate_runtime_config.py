@@ -30,6 +30,32 @@ def pdo_field_names(pdo_set: dict[str, Any], direction: str) -> set[str]:
     return names
 
 
+def rx_field_addresses(pdo_set: dict[str, Any]) -> dict[str, tuple[int, int]]:
+    """Rx 侧字段名 → (索引, 子索引)，供"这个字段的值从哪来"这一类核对用。"""
+    addresses: dict[str, tuple[int, int]] = {}
+    direction_config = pdo_set.get("rx")
+    if not isinstance(direction_config, dict):
+        return addresses
+    mappings = direction_config.get("mappings")
+    if not isinstance(mappings, list):
+        return addresses
+    for mapping in mappings:
+        if not isinstance(mapping, dict) or not isinstance(mapping.get("entries"), list):
+            continue
+        for entry in mapping["entries"]:
+            if not isinstance(entry, dict) or not non_empty_string(entry.get("name")):
+                continue
+            index = entry.get("index")
+            subindex = entry.get("subindex", 0)
+            if not isinstance(index, str) or not isinstance(subindex, int):
+                continue
+            try:
+                addresses[entry["name"]] = (hex_value(index), subindex)
+            except ValueError:
+                continue
+    return addresses
+
+
 def validate_operation_profile(
     check: Validation,
     operation: dict[str, Any],
@@ -369,6 +395,38 @@ def validate_modes(
                         f"运行方案 {operation_id} 的模式 {mode_label} SDO 地址重复",
                     )
                     addresses.add(address)
+
+        # 主站每拍都会给整套 RxPDO 写一个值。控制字、模式、目标通道那一路由运行期
+        # 按周期给；**本模式要求的其余 Rx 字段只能靠方案声明的固定值**。声明的固定值
+        # 就是驱动器会用的值 —— 漏一条，主站在那些字节上写的就是 0。对 MIT 而言那
+        # 意味着 Kp=Kd=0：没有刚度也没有阻尼，轴是松的，比拒开更危险。
+        #
+        # 判据只用方案自己写的东西：required_rx_fields 说这个模式要哪些字段，
+        # quantity 说哪一路是外部目标，其余的就是方案必须给值的。这样 CSP/CSV/CST
+        # 不受影响（它们的必需字段全都落在那三路里），而引入新对象时不会漏。
+        if pdo_set is not None and isinstance(mode.get("required_rx_fields"), list):
+            target_field = {
+                "position": "target_position",
+                "velocity": "target_velocity",
+                "torque": "target_torque",
+            }.get(mode.get("quantity"))
+            periodic = {"control_word", "mode_of_operation"}
+            if target_field is not None:
+                periodic.add(target_field)
+            addresses_by_name = rx_field_addresses(pdo_set)
+            declared_addresses = addresses if isinstance(sdo_writes, list) else set()
+            for field in mode["required_rx_fields"]:
+                if not non_empty_string(field) or field in periodic:
+                    continue
+                address = addresses_by_name.get(field)
+                if address is None:
+                    continue
+                check.require(
+                    address in declared_addresses,
+                    f"运行方案 {operation_id} 的模式 {mode_label} 要求 Rx 字段 {field}，"
+                    "但它不在 safeop_to_op_sdo_writes 里 —— 主站每拍会往这个对象写 0。"
+                    "补一条固定值声明，值取台架实测或厂商资料给的数。",
+                )
         final_reads = mode.get("final_sdo_reads", [])
         check.require(
             isinstance(final_reads, list),

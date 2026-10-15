@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -53,18 +54,40 @@ STANDARD_FIELD_NAMES: dict[str, str] = {
     "0x60ff": "target_velocity",
 }
 
-# ESI 里 module 的 type 字符串 → CiA 402 模式号。同样是标准取值。
+# ESI 里 module 的 type 字符串 → 模式号。同模块类型串联的是同一族设备，取值由厂商定。
 # homing 是模式 6：ESI 里的写法是 "homing - axis"。它没有周期目标，程序映像只写
 # 控制字与模式本身——这一点由运行期按模式判，不是在这里。
-STANDARD_MODE_VALUES: dict[str, int] = {"csp": 8, "csv": 9, "cst": 10, "homing": 6}
+# mit 是模式 5：厂商的 MIT 复合控制律（位置环 + 速度环 + 前馈力矩），不是 CiA 402
+# 定的模式号，是这台家族自己在 ESI 里声明的（见模块 "Mit - axis"）。
+STANDARD_MODE_VALUES: dict[str, int] = {"csp": 8, "csv": 9, "cst": 10, "homing": 6, "mit": 5}
 
 
-def _field_name(index: str) -> str:
-    key = index.lower()
+def _vendor_field_name(entry: dict[str, Any]) -> str:
+    """厂商自定义索引的字段名，取 ESI 自己给这个条目起的名字。
+
+    标准表只覆盖 CiA 301/402 规定的索引。厂商区（如 0x2000 起的 MIT 参数）没有
+    标准名可用，而"按索引猜"在这里会撞车：0x2013:1 与 0x2013:2 是同一个索引的两个
+    子索引，按索引起名两者都会叫 unknown_2013，同一份映射里出现两个同名字段。
+    ESI 的 <Entry><Name> 是厂商为这个条目写下的名字（0x2013:1 是 "MitKp"），把它
+    转成小写下划线形式，风格与标准表一致，运行方案也能直接引用。
+    """
+    raw = entry.get("name")
+    if isinstance(raw, str) and raw.strip():
+        # MitKp -> Mit_Kp -> mit_kp；"Mit kp" 走同一条路。
+        spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw.strip())
+        slug = re.sub(r"[^a-z0-9]+", "_", spaced.lower()).strip("_")
+        if slug:
+            return slug
+    index = entry["index"].lower()
+    # 名字取不到时才退回索引加子索引 —— 至少不会与别的子索引重名。
+    return f"unknown_{index[2:]}_{int(entry.get('subindex', 0))}"
+
+
+def _field_name(entry: dict[str, Any]) -> str:
+    key = entry["index"].lower()
     if key in STANDARD_FIELD_NAMES:
         return STANDARD_FIELD_NAMES[key]
-    # 不认识的索引不猜，原样保留索引当名字 —— 后面的人工审阅会看到它。
-    return "unknown_" + key[2:]
+    return _vendor_field_name(entry)
 
 
 def _entries(mapping: dict[str, Any]) -> list[dict[str, Any]]:
@@ -79,7 +102,7 @@ def _entries(mapping: dict[str, Any]) -> list[dict[str, Any]]:
                 "subindex": int(entry.get("subindex", 0)),
                 "bits": int(entry["bits"]),
                 "data_type": entry["data_type"],
-                "name": _field_name(entry["index"]),
+                "name": _field_name(entry),
             }
         )
     return out
@@ -221,6 +244,9 @@ def derive(facts: dict[str, Any]) -> dict[str, Any]:
                 "module_ident": module["module_ident"],
                 "rx": _direction(module, "rx"),
                 "tx": _direction(module, "tx"),
+                # 模块自带的 CoE 启动命令：厂商在这里声明"这个模块跑哪种模式"。
+                # 单模式模块带一条，多模式模块一条都没有 —— 后者模式由运行方案选。
+                "startup_commands": module.get("startup_commands") or [],
             }
             for module in modules
         ]
