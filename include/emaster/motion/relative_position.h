@@ -20,9 +20,9 @@ typedef enum
 } emaster_fact_source_t;
 
 /*
- * 换算参数。优先取自当前物理从站（608F/6091）—— 那是这一台的实测事实。设备不实现
- * 这两个对象时（MT 的对象字典里就没有它们），设备档里声明的缺省值接手，来源记在
- * source 里。两者都没有时 source 为 NONE：说不出来的换算不拿来动轴。
+ * 换算参数。两个来路：当前物理从站的 608F/6091 读回，与设备档里声明的 conversion。
+ * 谁生效由 emaster_position_scale_resolve 定，来源记在 source 里。两者都没有时
+ * source 为 NONE：说不出来的换算不拿来动轴。
  */
 typedef struct
 {
@@ -37,8 +37,9 @@ typedef struct
 bool emaster_position_scale_is_usable(const emaster_position_scale_t *scale);
 
 /*
- * 设备档里声明的换算（conversion）落成运行时用的换算参数。设备用 608F/6091 回答了
- * 就不走这条；设备不实现那两个对象时（MT 的对象字典里就没有它们），声明值接手。
+ * 设备档里声明的换算（conversion）落成运行时用的换算参数。这是**只做转换的纯函数**：
+ * 声明齐全就成功，不齐全就失败。声明与设备自报谁生效由 emaster_position_scale_resolve
+ * 定，不在这里。
  *
  * 三项齐全才算声明过：编码器每转多少计数、减速比的电机侧与负载侧。缺一项就不是换算，
  * 是一半的换算 —— 而按半份算出来的计数看着像真的，只会把轴按错的系数动起来。缺项时
@@ -52,6 +53,24 @@ bool emaster_position_scale_from_declaration(uint32_t encoder_counts_per_motor_r
                                              uint32_t gear_motor_revolutions,
                                              uint32_t gear_shaft_revolutions,
                                              emaster_position_scale_t *scale);
+
+/*
+ * 定这一轴生效的换算：设备档声明齐全就用声明，声明缺项就退回设备自报。
+ *
+ * **为什么声明优先，而设备自报不是优先的**：驱动器会答，答的却可能是错的——台架从站 1
+ * 自报 6091=28000，实测真值 28（差 1000 倍）。608F/6091 是驱动器的**说法**，不是对这台
+ * 机器的测量；设备档里的 conversion 是拿到这台机器的人对着它写下的判据。两者冲突时按
+ * 判据。这不是说自报不可信到该丢掉：调用方把自报值单独留着（报告与控制台都要写出来），
+ * 这里只决定"轴按哪个比例动"。
+ *
+ * device_read 可以是来源为 NONE 的换算（设备没答），此时只有声明能救；声明也缺项就
+ * 得到一份 NONE，后面那道门会拦。换一台设备、或厂商把固件修好，都不需要改代码。
+ */
+void emaster_position_scale_resolve(const emaster_position_scale_t *device_read,
+                                    uint32_t declared_encoder_counts_per_motor_revolution,
+                                    uint32_t declared_gear_motor_revolutions,
+                                    uint32_t declared_gear_shaft_revolutions,
+                                    emaster_position_scale_t *effective);
 
 /*
  * 来源的显示名（简体中文），给控制台那几行用。报告里用的是 ASCII 标识

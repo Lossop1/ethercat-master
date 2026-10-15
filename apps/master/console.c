@@ -174,6 +174,30 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                 (unsigned long)axis->position_scale.encoder_motor_revolutions,
                 (unsigned long)axis->position_scale.gear_motor_revolutions,
                 (unsigned long)axis->position_scale.gear_shaft_revolutions);
+        /*
+         * 从站自报的那一笔，只在它和生效值不一致时印。
+         *
+         * 上面一行说的是"轴按哪个比例动"；驱动器会把减速比报错（台架从站 1 报 6091=28000，
+         * 真值 28），此时生效值来自设备档声明，光看上面一行看不出设备报的是什么。操作员
+         * 拿工具去读驱动器会读到 28000，心里没底——这一行就是给他对账的。
+         * 一致时不印：那是一句重复的话，印出来只是噪声。
+         */
+        if (axis->device_position_scale.source == EMASTER_FACT_SOURCE_DEVICE &&
+            (axis->device_position_scale.encoder_increments !=
+                 axis->position_scale.encoder_increments ||
+             axis->device_position_scale.encoder_motor_revolutions !=
+                 axis->position_scale.encoder_motor_revolutions ||
+             axis->device_position_scale.gear_motor_revolutions !=
+                 axis->position_scale.gear_motor_revolutions ||
+             axis->device_position_scale.gear_shaft_revolutions !=
+                 axis->position_scale.gear_shaft_revolutions)) {
+            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SCALE_DEVICE_LINE),
+                    (unsigned int)axis->position,
+                    (unsigned long)axis->device_position_scale.encoder_increments,
+                    (unsigned long)axis->device_position_scale.encoder_motor_revolutions,
+                    (unsigned long)axis->device_position_scale.gear_motor_revolutions,
+                    (unsigned long)axis->device_position_scale.gear_shaft_revolutions);
+        }
         if (report->motion_completed) {
             fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_LINE),
                     (unsigned int)axis->position, result_text(axis->position_scale_match),

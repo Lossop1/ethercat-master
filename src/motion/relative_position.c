@@ -47,6 +47,24 @@ bool emaster_position_scale_from_declaration(uint32_t encoder_counts_per_motor_r
     return true;
 }
 
+void emaster_position_scale_resolve(const emaster_position_scale_t *device_read,
+                                    uint32_t declared_encoder_counts_per_motor_revolution,
+                                    uint32_t declared_gear_motor_revolutions,
+                                    uint32_t declared_gear_shaft_revolutions,
+                                    emaster_position_scale_t *effective)
+{
+    if (device_read == NULL || effective == NULL)
+    {
+        return;
+    }
+    *effective = *device_read;
+    /* 声明齐全就顶掉自报；缺项时函数返回 false 且不碰 effective，自报留在那里。
+       device_read 的来路是"没有"时，这一步是唯一的机会。 */
+    (void)emaster_position_scale_from_declaration(
+        declared_encoder_counts_per_motor_revolution, declared_gear_motor_revolutions,
+        declared_gear_shaft_revolutions, effective);
+}
+
 const char *emaster_fact_source_label(emaster_fact_source_t source)
 {
     switch (source)

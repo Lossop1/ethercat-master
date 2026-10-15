@@ -228,21 +228,48 @@ static const char *fact_source_name(emaster_fact_source_t source)
 }
 
 static bool write_position_scale(FILE *stream,
-                                 const emaster_position_scale_t *scale)
+                                 const emaster_control_session_axis_result_t *axis)
 {
-    /* source 与 read_succeeded 不是同义词：前者是这些数的来路，后者只回答"设备用
-       608F/6091 答了没有"。保留后者给读报告的现成工具，新增前者是因为设备档声明的
-       换算与设备回答的换算在这份报告里必须分得开。 */
-    return fprintf(
-               stream,
-               "{\"source\":\"%s\",\"read_succeeded\":%s,\"encoder_increments\":%" PRIu32
-               ",\"encoder_motor_revolutions\":%" PRIu32
-               ",\"gear_motor_revolutions\":%" PRIu32
-               ",\"gear_shaft_revolutions\":%" PRIu32 "}",
-               fact_source_name(scale->source),
-               scale->source == EMASTER_FACT_SOURCE_DEVICE ? "true" : "false",
-               scale->encoder_increments, scale->encoder_motor_revolutions,
-               scale->gear_motor_revolutions, scale->gear_shaft_revolutions) >= 0;
+    const emaster_position_scale_t *scale = &axis->position_scale;
+    const emaster_position_scale_t *device = &axis->device_position_scale;
+    bool device_read = device->source == EMASTER_FACT_SOURCE_DEVICE;
+    bool agrees = device_read && device->encoder_increments == scale->encoder_increments &&
+                  device->encoder_motor_revolutions == scale->encoder_motor_revolutions &&
+                  device->gear_motor_revolutions == scale->gear_motor_revolutions &&
+                  device->gear_shaft_revolutions == scale->gear_shaft_revolutions;
+
+    /*
+     * 生效值与从站自报值并排写出来，两个都要。
+     *
+     * source 是生效值的来路；read_succeeded 只回答"设备用 608F/6091 答了没有"——两者不是
+     * 同义词，声明生效时设备照样可能答过。设备自报的四条数放在 device 里**原样保留**：
+     * 驱动器会把减速比报错（台架从站 1 自报 6091=28000，实测真值 28），此时轴按设备档声明
+     * 动，但"设备报了什么"仍是要给人看的事实 —— 报告里只有生效值，看报告的人就分不出
+     * "设备在说谎"和"人把档写错了"，而这两件事的处置完全不同。
+     *
+     * device_agrees 的 null 是"设备没答，无从比对"，与 false（答了、但和生效值不一样）
+     * 必须分得开：把没答也写成 false，读起来就成了"设备答了且不一致"。
+     */
+    if (fprintf(stream,
+                "{\"source\":\"%s\",\"read_succeeded\":%s,"
+                "\"encoder_increments\":%" PRIu32 ",\"encoder_motor_revolutions\":%" PRIu32
+                ",\"gear_motor_revolutions\":%" PRIu32 ",\"gear_shaft_revolutions\":%" PRIu32
+                ",\"device\":{\"read_succeeded\":%s,\"encoder_increments\":%" PRIu32
+                ",\"encoder_motor_revolutions\":%" PRIu32
+                ",\"gear_motor_revolutions\":%" PRIu32
+                ",\"gear_shaft_revolutions\":%" PRIu32 "},\"device_agrees\":",
+                fact_source_name(scale->source), device_read ? "true" : "false",
+                scale->encoder_increments, scale->encoder_motor_revolutions,
+                scale->gear_motor_revolutions, scale->gear_shaft_revolutions,
+                device_read ? "true" : "false", device->encoder_increments,
+                device->encoder_motor_revolutions, device->gear_motor_revolutions,
+                device->gear_shaft_revolutions) < 0) {
+        return false;
+    }
+    if (!device_read) {
+        return fputs("null}", stream) != EOF;
+    }
+    return fprintf(stream, "%s}", agrees ? "true" : "false") >= 0;
 }
 
 /*
@@ -545,7 +572,7 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->dc.requested_assign_activate,
         (unsigned int)axis->dc.observed_assign_activate) >= 0);
     REQUIRE_WRITE(fputs("\"position_scale\":", stream) != EOF);
-    REQUIRE_WRITE(write_position_scale(stream, &axis->position_scale));
+    REQUIRE_WRITE(write_position_scale(stream, axis));
     REQUIRE_WRITE(fputs(",\"timing\":", stream) != EOF);
     REQUIRE_WRITE(write_timing(stream, &axis->timing));
     REQUIRE_WRITE(fputs(",\"sm2_diagnostic\":", stream) != EOF);
@@ -1504,8 +1531,14 @@ bool emaster_run_report_write(FILE *stream,
      * 对不上"读出来是同一句 TOPOLOGY_MISMATCH：2026-10-14 台架，报告写着轴数=12，
      * 而环上只有 10 台，凭那一份报告断不出来。升版是因为两份同版本报告并排时，一份
      * 有这一列、一份没有，读者会以为两份的拓扑状况可比。
+     *
+     * 19：逐轴换算段改成"生效值 + 从站自报值"两笔并排。生效值可能来自设备档声明——
+     * 驱动器会把减速比报错（台架从站 1 自报 6091=28000，实测真值 28），此时轴按声明动，
+     * 但自报的四条数原样留在 device 里。device_agrees 是 true/false/null 三态，null 表示
+     * "设备没答、无从比对"。升版是因为版本 18 里只有一个 position_scale，读者无从知道
+     * 设备当时报的是什么，同版本下"设备在说谎"与"人写对了档"两份报告会长得一样。
      */
-REQUIRE_WRITE(fputs("{\"schema_version\":18,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":19,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));

@@ -1,5 +1,5 @@
 /*
- * 换算的来源：设备用 608F/6091 回答了，还是设备档声明的。
+ * 换算的来源：设备用 608F/6091 回答了，还是设备档声明的，谁生效。
  *
  * 有些驱动器的对象字典里没有 608F/6091/607E，换算只能由设备档声明；手册也只写 0x607A
  * 的单位是编码器增量、一圈多少个计数。声明值未必等于硬件真值（厂商上位机给的比值与实机
@@ -10,6 +10,10 @@
  *   1. 来源决定"能不能用"：三种取值里只有两种能用，"没有"一律不能用；
  *   2. 设备档声明的换算与设备读回的换算走同一条折算路径 —— 声明值不是次等公民，
  *      只是记录下来的来源不同；
+ *   6. **声明齐全时压过设备自报**：608F/6091 是驱动器的说法，设备档里的 conversion 是
+ *      人对着这台机器写下的判据，两者冲突时按判据（台架从站 1 自报 6091=28000，真值 28）。
+ *      声明缺项才退回自报，两边都没有就是"没有"。压过不等于抹掉：自报那一份原地不动，
+ *      报告与控制台都要写它，否则看报告的人分不出"设备在说谎"与"档写错了"；
  *   3. 半份换算（减速比的分母为零）一律折不出来。按半份算出来的角度不会报错，
  *      只会按错误的系数动轴；
  *   4. 运动方案对账（expected_position_scale）也认设备档声明的换算，否则这台设备
@@ -179,6 +183,44 @@ static void check_from_declaration(void)
                emaster_position_scale_from_declaration(131072U, 19612U, 1000U, NULL), false);
 }
 
+/* 声明与设备自报谁生效：声明齐全就用声明，缺项退回自报，都没有就是"没有"。 */
+static void check_resolve(void)
+{
+    emaster_position_scale_t device = ratio_scale(EMASTER_FACT_SOURCE_DEVICE);
+    emaster_position_scale_t silent = ratio_scale(EMASTER_FACT_SOURCE_NONE);
+    emaster_position_scale_t effective;
+
+    /* 声明齐全就压过自报。台架从站 1 的形状：自报 6091=28000，声明 28。 */
+    device.gear_motor_revolutions = 28000U;
+    emaster_position_scale_resolve(&device, 16384U, 28U, 1U, &effective);
+    check_bool("声明齐全时来源是声明",
+               effective.source == EMASTER_FACT_SOURCE_CONFIGURED, true);
+    check_i64("声明齐全时编码器计数取声明", (int64_t)effective.encoder_increments, 16384);
+    check_i64("声明齐全时减速比取声明", (int64_t)effective.gear_motor_revolutions, 28);
+    /* 自报那一份原地不动：报告与控制台要写它，压过不等于抹掉。 */
+    check_i64("自报值原地不动", (int64_t)device.gear_motor_revolutions, 28000);
+    check_bool("自报来源没被改", device.source == EMASTER_FACT_SOURCE_DEVICE, true);
+
+    /* 声明缺项（这里缺编码器计数）就退回自报：来源还是设备。 */
+    emaster_position_scale_resolve(&device, 0U, 28U, 1U, &effective);
+    check_bool("声明缺项时退回自报", effective.source == EMASTER_FACT_SOURCE_DEVICE, true);
+    check_i64("退回的是自报的 28000", (int64_t)effective.gear_motor_revolutions, 28000);
+
+    /* 设备没答、但声明齐全：声明接手（这是 MT 的形状，过去也是这条）。 */
+    emaster_position_scale_resolve(&silent, 131072U, 1U, 1U, &effective);
+    check_bool("设备没答时由声明接手",
+               effective.source == EMASTER_FACT_SOURCE_CONFIGURED, true);
+    check_i64("接手的是声明的编码器计数", (int64_t)effective.encoder_increments, 131072);
+
+    /* 设备没答、声明也缺项：只能是"没有"，说不出来的换算不拿来动轴。 */
+    emaster_position_scale_resolve(&silent, 0U, 0U, 0U, &effective);
+    check_bool("两边都没有就是没有", emaster_position_scale_is_usable(&effective), false);
+
+    /* 空指针不崩。 */
+    emaster_position_scale_resolve(NULL, 16384U, 28U, 1U, &effective);
+    emaster_position_scale_resolve(&device, 16384U, 28U, 1U, NULL);
+}
+
 static void check_expectation_accepts_declared(void)
 {
     emaster_position_scale_t scale = ratio_scale(EMASTER_FACT_SOURCE_CONFIGURED);
@@ -205,6 +247,7 @@ int main(void)
     check_missing_source_refuses();
     check_half_scale_refuses();
     check_from_declaration();
+    check_resolve();
     check_expectation_accepts_declared();
 
     if (failures != 0)

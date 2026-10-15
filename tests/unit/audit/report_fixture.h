@@ -250,29 +250,37 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->axis_results[2].following_error_timeout = UINT16_C(31);
 
     /*
-     * 换算与方向的来源（17 起）。两种拥有换算的方式必须读得出区别：
+     * 换算与方向的来源（17 起，19 起多出从站自报那一笔）。三种情形必须读得出区别：
      *
-     *   轴 1 用设备档声明的换算（设备没有 608F/6091 这两个对象，读数全是 0，
-     *        read_succeeded 为假），方向也用设备档声明的缺省；
-     *   轴 2 的换算与方向都是设备读回的；
-     *   轴 3 两个都没有（来源为空），值留着 0。
+     *   轴 1 生效值来自设备档声明，而从站**也答了、答的不一样**——报告里两笔并排，
+     *        device_agrees 为假。这是台架从站 1 的形状（自报 6091=28000，真值 28）；
+     *   轴 2 生效值来自设备读回（没有声明可压），两笔相同，device_agrees 为真；
+     *   轴 3 两个都没有（来源为空），无从比对，device_agrees 为 null。
      *
-     * 只判数值判不出这件事：轴 1 的数看着和轴 2 一样是真值，区别只在来源那一个键。
+     * 只判数值判不出这件事：轴 1 的数看着和轴 2 一样是真值，区别在来源那一个键；
+     * 而"设备在说谎"与"人写对了档"在 18 及以前的报告里长得一样。
      */
     fixture->axis_results[0].position_scale.source = EMASTER_FACT_SOURCE_CONFIGURED;
     fixture->axis_results[0].position_scale.encoder_increments = UINT32_C(131072);
     fixture->axis_results[0].position_scale.encoder_motor_revolutions = UINT32_C(1);
     fixture->axis_results[0].position_scale.gear_motor_revolutions = UINT32_C(19612);
     fixture->axis_results[0].position_scale.gear_shaft_revolutions = UINT32_C(1000);
+    fixture->axis_results[0].device_position_scale.source = EMASTER_FACT_SOURCE_DEVICE;
+    fixture->axis_results[0].device_position_scale.encoder_increments = UINT32_C(131072);
+    fixture->axis_results[0].device_position_scale.encoder_motor_revolutions = UINT32_C(1);
+    fixture->axis_results[0].device_position_scale.gear_motor_revolutions = UINT32_C(28000);
+    fixture->axis_results[0].device_position_scale.gear_shaft_revolutions = UINT32_C(1000);
     fixture->axis_results[0].polarity_source = EMASTER_FACT_SOURCE_CONFIGURED;
     fixture->axis_results[1].position_scale.source = EMASTER_FACT_SOURCE_DEVICE;
     fixture->axis_results[1].position_scale.encoder_increments = UINT32_C(16384);
     fixture->axis_results[1].position_scale.encoder_motor_revolutions = UINT32_C(1);
     fixture->axis_results[1].position_scale.gear_motor_revolutions = UINT32_C(25);
     fixture->axis_results[1].position_scale.gear_shaft_revolutions = UINT32_C(1);
+    fixture->axis_results[1].device_position_scale = fixture->axis_results[1].position_scale;
     fixture->axis_results[1].polarity_read = true;
     fixture->axis_results[1].polarity_source = EMASTER_FACT_SOURCE_DEVICE;
     fixture->axis_results[2].position_scale.source = EMASTER_FACT_SOURCE_NONE;
+    /* 轴 3 的 device_position_scale 留成零值：来源是"没有"，设备没答。 */
 
     /*
      * 目标偏移上限（14 起）。三根轴给成三种样子，好把"逐轴折算"与"照抄一个值"分开：

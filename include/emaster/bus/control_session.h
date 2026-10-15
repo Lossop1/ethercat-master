@@ -414,6 +414,16 @@ typedef struct
     uint16_t drive_error_code_decoded;
     uint8_t drive_error_code_origin; /* emaster_drive_error_origin_t */
     emaster_position_scale_t position_scale;
+    /*
+     * 从站自己答的换算（608F/6091）。与上面那个生效值分开存：生效值可能来自设备档声明，
+     * 而"设备报了什么"本身就是一条要给人看的事实。
+     *
+     * 为什么必须有这一笔：驱动器会把减速比报错（台架从站 1 报 6091=28000，实测真值 28）。
+     * 声明压过自报是为了让轴按对的比例动，不是为了把自报抹掉——只看生效值，看报告的人
+     * 就分不出"这次是设备在说谎"还是"人把档写错了"，而这两件事的处置完全不同。
+     * source 在 DEVICE/NONE 之间取值，同时承担"设备答了没有"。
+     */
+    emaster_position_scale_t device_position_scale;
     /* P4.4: 错误计数器（0x0300-0x0313），周期内 FPRD 读取。
      * RXERR 0x0300 起 8 字节（4 端口 + 4 保留），FRXERR 0x0308 起**4 个单字节**。 */
     bool error_counters_read;

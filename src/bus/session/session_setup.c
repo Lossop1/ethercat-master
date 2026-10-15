@@ -334,26 +334,29 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             session->axes[axis_index].mode_command_sdo_read = true;
             session->axes[axis_index].mode_command_sdo = mode_value;
         }
-        emaster_session_observer_read_position_scale(&sdo,
-                                                     &session->axes[axis_index].position_scale);
         /*
-         * 设备不实现 608F/6091 时（对象字典里根本没有这两条），设备档里声明的换算接手。
+         * 换算有两个来路，都要取：从站自报的 608F/6091，和设备档里声明的 conversion。
          *
-         * 这是"推不出来的字段由人和台架给"那条规矩的又一处：换算的分子（编码器每转
-         * 多少计数）与分母（减速比）是驱动器内部的事实，手册给不出或者不给，就只能由
-         * 拿到这台机器的人写进设备档。接手之后来源记为"设备档声明"，报告里与读回来的
-         * 分开写 —— 换一台设备时，哪一种来源都不该需要改代码。
+         * 自报值先读回来存好，**无论最后用不用**——"设备报了什么"是一条要给人看的事实，
+         * 报告与控制台都要写出来。声明压过自报只决定"轴按哪个比例动"，不决定"报告写哪个数"。
          */
-        if (session->axes[axis_index].position_scale.source == EMASTER_FACT_SOURCE_NONE &&
-            axis->device_profile != NULL)
-        {
-            /* 缺项时函数返回 false 且不碰 scale：来源仍是"没有"，后面那道门会拦。 */
-            (void)emaster_position_scale_from_declaration(
-                axis->device_profile->encoder_counts_per_motor_revolution_default,
-                axis->device_profile->gear_motor_revolutions_default,
-                axis->device_profile->gear_shaft_revolutions_default,
-                &session->axes[axis_index].position_scale);
-        }
+        emaster_session_observer_read_position_scale(
+            &sdo, &session->axes[axis_index].device_position_scale);
+        /* 谁生效由纯函数定：声明齐全用声明，缺项退回自报，都没有留成"没有"。
+           这条优先序的理由见 emaster_position_scale_resolve 的说明。设备档没有时
+           三个声明值传 0，函数自会落回自报。 */
+        emaster_position_scale_resolve(
+            &session->axes[axis_index].device_position_scale,
+            axis->device_profile != NULL
+                ? axis->device_profile->encoder_counts_per_motor_revolution_default
+                : 0U,
+            axis->device_profile != NULL
+                ? axis->device_profile->gear_motor_revolutions_default
+                : 0U,
+            axis->device_profile != NULL
+                ? axis->device_profile->gear_shaft_revolutions_default
+                : 0U,
+            &session->axes[axis_index].position_scale);
         /*
          * 驱动器自己的跟随误差窗与超时（6065 / 6066）。只读回，不写。
          *

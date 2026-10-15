@@ -1213,10 +1213,14 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
             emaster_session_observer_read_sync(&sdo, UINT16_C(0x1C33),
                                                &axis_result->sm3_diagnostic);
             /* 设置期就没拿到换算的，停机后再试一次（那时才发现 608F/6091 的设备）。
-               来源是"设备档声明"的不重读：这台设备没有那两个对象，再读一次只会把
-               声明值清掉，报告里就少了一轴换算。 */
+               来源已被设备档声明占住的不重读：声明已经给了生效值，重读只补自报这一笔，
+               补不上也不影响轴怎么动。 */
             if (axis_result->position_scale.source == EMASTER_FACT_SOURCE_NONE) {
-                emaster_session_observer_read_position_scale(&sdo, &axis_result->position_scale);
+                /* 先落进 device_position_scale：这一笔是从站自报，报告要写。
+                   此时没有声明，自报也就是唯一的生效值。 */
+                emaster_session_observer_read_position_scale(
+                    &sdo, &axis_result->device_position_scale);
+                axis_result->position_scale = axis_result->device_position_scale;
             }
             axis_result->final_diagnostic_read_count =
                 session->plan->axes[axis_index].operation_mode->final_sdo_read_count;

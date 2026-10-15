@@ -461,10 +461,16 @@ int main(int argc, char **argv)
     else
     {
         check(strstr(section,
-                     "\"position_scale\":{\"source\":\"configured\",\"read_succeeded\":false,"
-                     "\"encoder_increments\":131072") != NULL,
-              "轴 1 的换算来自设备档声明：read_succeeded 为假（设备没答）而数值是真的"
-              "——这两件事必须分得开，否则'设备答了没有'读不出来");
+                     "\"position_scale\":{\"source\":\"configured\",\"read_succeeded\":true,"
+                     "\"encoder_increments\":131072,\"encoder_motor_revolutions\":1,"
+                     "\"gear_motor_revolutions\":19612,\"gear_shaft_revolutions\":1000,") != NULL,
+              "轴 1 的生效换算来自设备档声明：四条数是声明值");
+        check(strstr(section,
+                     "\"device\":{\"read_succeeded\":true,\"encoder_increments\":131072,"
+                     "\"encoder_motor_revolutions\":1,\"gear_motor_revolutions\":28000,"
+                     "\"gear_shaft_revolutions\":1000},\"device_agrees\":false") != NULL,
+              "轴 1 从站自报的 6091=28000 与声明的 19612 不一致：自报那一笔照样写出来，"
+              "并且明说是'不一致'——只写生效值，看报告的人分不出设备在说谎还是档写错了");
         check(strstr(section, "\"polarity_source\":\"configured\"") != NULL,
               "轴 1 的方向也来自设备档声明（设备没有 607E）");
     }
@@ -477,8 +483,25 @@ int main(int argc, char **argv)
         check(strstr(section,
                      "\"position_scale\":{\"source\":\"device\",\"read_succeeded\":true,") != NULL,
               "轴 2 的换算来自设备读回");
+        check(strstr(section,
+                     "\"gear_motor_revolutions\":25,\"gear_shaft_revolutions\":1,"
+                     "\"device\":{\"read_succeeded\":true,") != NULL,
+              "轴 2 没有声明可压：自报两笔相同");
+        check(strstr(section, "\"device_agrees\":true") != NULL,
+              "轴 2 自报与生效值一致");
         check(strstr(section, "\"polarity_source\":\"device\"") != NULL,
               "轴 2 的方向来自设备读回");
+    }
+    if (!axis_section(text, 3U, section, sizeof(section)))
+    {
+        check(false, "找得到轴 3 的对象分界（换算来源）");
+    }
+    else
+    {
+        check(strstr(section, "\"device\":{\"read_succeeded\":false,") != NULL &&
+                  strstr(section, "\"device_agrees\":null") != NULL,
+              "轴 3 设备没答：device_agrees 是 null（无从比对），不是 false"
+              "——把'没答'写成'不一致'又是一处读起来像结论的空位");
     }
 
     /* ── 停机来源与归档保留份数 ────────────────────────────────────────── */
@@ -501,9 +524,11 @@ int main(int argc, char **argv)
      * 的在这份报告里必须分得开，只判数值判不出"这台设备到底答没答"。升到 18 的理由：
      * 故障现场里只写配置轴数，于是"环上少站"与"身份或 PDO 不符"读出来是同一句
      * TOPOLOGY_MISMATCH——2026-10-14 台架就是这样（报告写轴数=12，环上只有 10 台，
-     * 凭那一份报告断不出来）。 */
-    check(strstr(text, "\"schema_version\":18") != NULL,
-          "schema_version 是 18（故障现场要写明环上实扫台数，与配置轴数分开）");
+     * 凭那一份报告断不出来）。升到 19 的理由：逐轴的换算段里多出从站自报那一笔与
+     * device_agrees——18 及以前只有一个 position_scale，读者无从知道设备当时报的是
+     * 什么，"设备在说谎"与"人写对了档"两份报告长得一样。 */
+    check(strstr(text, "\"schema_version\":19") != NULL,
+          "schema_version 是 19（换算段要写下从站自报值与它跟生效值一致不一致）");
     check(strstr(text, "\"bus_slave_count\":10") != NULL,
           "故障现场带上环上实扫台数：环上 10 台、配置 3 轴，读到这一列才知道是少站");
     check(strstr(text,
