@@ -34,11 +34,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 CLIENT = os.path.join(ROOT, "tools", "bench", "test_external_motion_client.py")
 
 FRAME = re.compile(r"目标=\[([^\]]*)\]")
-DISPLACEMENT = re.compile(r"位移=(\d+) counts")
+AMPLITUDE = re.compile(r"幅值=\[([^\]]*)\]")
 
 # 变异：把"只动第 N 轴"改成"所有轴都按同一个位移走"——正好是"第 N 轴没单独拎出来"的写法。
-MUTATE_FROM = ("    deltas = [0] * axis_count\n    deltas[only - 1] = delta\n")
-MUTATE_TO = "    deltas = [delta] * axis_count\n"
+MUTATE_FROM = (
+    "    result = [0] * axis_count\n    result[only - 1] = deltas[only - 1]\n"
+)
+MUTATE_TO = "    result = list(deltas)\n"
 
 
 def run_client(client_path, args):
@@ -69,12 +71,12 @@ def spans(parsed):
 
 
 def leg(output):
-    """客户端自己报的本次位移（counts）。期望值取自它，不在检查里另写一个数——
+    """客户端自己报的本次幅值（counts）。期望值取自它，不在检查里另写一个数——
     否则换算比例一改（编码器/减速比），检查要么假红要么永远成立。"""
-    match = DISPLACEMENT.search(output)
+    match = AMPLITUDE.search(output)
     if match is None:
-        raise ValueError("输出里没有 位移=... counts 那一行")
-    return int(match.group(1))
+        raise ValueError("输出里没有 幅值=[...] 那一行")
+    return max(abs(int(value)) for value in match.group(1).split(","))
 
 
 def spans_are(parsed, expected):

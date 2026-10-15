@@ -39,7 +39,10 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # tools/gen/ 不扫：生成器写出的 run_report_path 是部署默认值，不是"读报告"的工具。
 SCAN_DIRS = ("tools",)
-SCAN_SKIP = ("tools/gen",)
+# 用 os.path.join 拼，不写字面量 "tools/gen"：下面拿它和 os.path.relpath 的结果比，
+# 而 relpath 在 Windows 上回的是反斜杠，写死正斜杠会让豁免只在本机失效——CI 上是绿的，
+# 本地却报一条 tools/gen 的假红，跟着查半天。
+SCAN_SKIP = (os.path.join("tools", "gen"),)
 SCAN_SUFFIXES = (".py", ".sh")
 READER = os.path.join(ROOT, "tools", "analysis", "report_summary.py")
 

@@ -20,7 +20,9 @@
 #   TRAVERSE    单程耗时（秒），默认 3
 #   DEGREES     单轴位移（输出轴度数），默认 30
 #   RATE        目标更新频率（Hz），默认 100
-#   WAVE        波形 triangle|sine，默认 triangle
+#   WAVE        波形 triangle|sine，默认 triangle。**只对 MODE=csp 有效**：
+#               速度与力矩模式下发的数就是那个量本身，客户端固定发方波，
+#               加速度交给驱动器自己的斜坡（0x6083/0x6084），不合成波形
 #   TAG         产物文件名后缀，默认 recip30
 #   REPORT_INTERVAL  客户端打印目标/实际的采样间隔（秒），默认 10。
 #                    调成 1 能看出"轴从哪一刻起不再跟目标"，用来判断驱动器
@@ -29,6 +31,19 @@
 #                原地保持；0 = 全部轴一起走（默认）。"有一根轴不跟"的排查用
 #                这个把那一根单独拎出来——全动时它不动，可能是它自己的问题，
 #                也可能是多轴一起时的别的问题；单独动它还不动，就只剩它自己。
+#   MODE         控制模式 csp|csv|cst，默认 csp。它必须与部署所选方案的
+#                mode_value 一致（csp=8/csv=9/cst=10），两者不一致时轴根本不会
+#                执行目标，而脚本本身看不出来——客户端只报"目标发出去了"。
+#                非 csp 时 --degrees 不再有用（那三个模式的目标不是位置），
+#                位移改由下面两个量给出。
+#   VELOCITY_DEGREES  csv 的幅值，单位是「度/秒」（默认 5）：驱动器 0x60FF 收的是
+#                    计数/秒，客户端按每度计数换算后发出；换算依据是部署里那条
+#                    conversion，与本机估算无关。超过驱动器 0x6080 时客户端会拒发。
+#   TORQUE       cst 的幅值，单位**按驱动器**（默认 10）：MT 的 0x6071 收额定力矩
+#                的千分比，良质 0x6071 收 0.1%（同一个数在良质上是十倍力矩）。脚本
+#                不换算，给数之前先确认是哪一家的单位。**CST 没有位置保护，通常也
+#                没有速度保护**：幅值要小、要有人在机器旁边；MT 手册还要求先在运行
+#                方案里设好 0x6072 限流。
 #   SETTLE_TICKS 客户端结束后的保持窗口拍数（0.5 秒/拍），默认 10 拍 = 5 秒；
 #                窗口内主站仍在跑、但已无命令流，用来分辨"掉出 OP 发生在命令流
 #                运行期"还是"发生在这段保持窗口里"。设 0 = 不给窗口。
@@ -78,6 +93,13 @@ SETTLE_TICKS=${SETTLE_TICKS:-10}
 # 设 0 可对照"观测线程本身有没有干扰"，那是 P12.8 的 A/B 用法，不是默认用法。
 OBSERVATION=${OBSERVATION:-1}
 ONLY_AXIS=${ONLY_AXIS:-0}
+MODE=${MODE:-csp}
+VELOCITY_DEGREES=${VELOCITY_DEGREES:-5}
+TORQUE=${TORQUE:-10}
+case "$MODE" in
+    csp|csv|cst) ;;
+    *) echo "错误：MODE=$MODE 不是 csp|csv|cst" >&2; exit 2 ;;
+esac
 
 SOCK=/tmp/emaster-${DEPLOYMENT}.sock
 LOG=/tmp/${TAG}_master.log
@@ -133,7 +155,14 @@ finish() {
 }
 
 echo "=== 台架连续往返 $STAMP ==="
-echo "部署=$DEPLOYMENT 时长=${DURATION}s 单程=${TRAVERSE}s 位移=${DEGREES}度 频率=${RATE}Hz 波形=$WAVE"
+echo "部署=$DEPLOYMENT 模式=$MODE 时长=${DURATION}s 单程=${TRAVERSE}s 频率=${RATE}Hz 波形=$WAVE"
+if [ "$MODE" = "csv" ]; then
+    echo "幅值=${VELOCITY_DEGREES}度/秒（0x60FF 按部署的 conversion 换算）"
+elif [ "$MODE" = "cst" ]; then
+    echo "幅值=${TORQUE}（0x6071，单位按驱动器：MT 千分比、良质 0.1%）"
+else
+    echo "位移=${DEGREES}度"
+fi
 if [ "$ONLY_AXIS" != "0" ]; then
     echo "只动第 $ONLY_AXIS 轴，其余轴钉在起点原地保持"
 fi
@@ -213,6 +242,8 @@ python3 -u "$REPO/tools/bench/test_external_motion_client.py" "$SOCK" \
     --cycles 0 --total "$DURATION" --traverse "$TRAVERSE" \
     --degrees "$DEGREES" --rate "$RATE" --wave "$WAVE" --ready 30 \
     --report-interval "$REPORT_INTERVAL" --only "$ONLY_AXIS" \
+    --mode "$MODE" --velocity-degrees "$VELOCITY_DEGREES" \
+    --torque "$TORQUE" \
     > "$CLIENT_LOG" 2>&1
 CLIENT_RC=$?
 echo "客户端退出码=$CLIENT_RC（0=跑满时长且命令流连续，1=出现过 200ms 空档，2=主站中断了命令流，4=目标全被拒、轴没动）"
