@@ -59,6 +59,7 @@
 | [`docs/test-plan.md`](docs/test-plan.md) | 测试条件、判据、已采集的证据、未决项 |
 | [`docs/time-and-space.txt`](docs/time-and-space.txt) | 对象、空间、时间与读写的运行期资料 |
 | [`docs/product/twincat-function-gap.md`](docs/product/twincat-function-gap.md) | 功能对标：本主站在哪一层、与 TwinCAT 逐层比什么、明确不做什么 |
+| [`docs/product/verified-combinations.md`](docs/product/verified-combinations.md) | 有台架证据的驱动与模式组合；未列出的按未验证处理 |
 | `esi/README.md` | 设备描述放哪、从哪来 |
 | `config/README.md` | 配置各族逐个字段的语义 |
 | `tools/gen/device/README.md` | 设备上手工具的边界 |
@@ -318,6 +319,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 | 命令口连不上 | 主站刚启动的几十秒内套接字可能还没建好。客户端退避重试，不要快节奏重连 |
 | 报告里温度／电压／电流恒为 `—` | 设备档的 `slow_telemetry` 有没有声明这些对象；MT 没有 0x6078，电流显示 `na` 是正常的 |
 | 报告里字段是 `-` | 取错了层。见[测试方案](docs/test-plan.md)的"报告字段层级"一节 |
+| 普通账号打不开报告目录 | 旧版本把目录建成 `0750`。执行一次 `sudo chmod -R a+rX runtime`；新版本建 `0755` |
 | 收尾显示 `OP=通过`，但有轴不在 OP | 那句走地址 0 广播，只照见环上最后一站。判"哪几根不在 OP"要看逐轴 `shutdown_al_entry` |
 | 逐轴 AL 读到 `state=0` | `0` 不是"在 INIT"。SOEM 先清零缓冲再读，所以 0 只可能是**这一站没应答** |
 
@@ -369,6 +371,8 @@ sudo bash -c 'ulimit -r unlimited; exec \
 | `sdo_read <从站号> <索引> <子索引>` | 读任意对象字典条目。从站号从 1 起，索引与子索引接受 `0x` 前缀。由观测线程执行，最多等 5 秒；成功给 `raw=` 与 `u=`/`i=`，失败明说原因，不把 0 当读数 |
 
 发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
+
+**轴序就是总线顺序，主站不绑定驱动器序列号。** 换线、换同型号驱动器或重排从站后，先用 `topology` 核对轴数与换算，再用 `sdo_read <从站号> 0x1018 4` 读序列号人工确认。**主站不做回零**：位置基准由驱动器零点与机械决定，上电后先确认参考位置再发目标。已验证的组合见[驱动与模式组合](docs/product/verified-combinations.md)。
 
 外部目标超时由 `external_target_timeout_ms` 指定，默认 200 ms。客户端 100 Hz 的目标更新率与主站 1 kHz 的 PDO 交换率不同。断连、目标暂停、重连必须分别测试。**不能假定自动恢复运动。**
 

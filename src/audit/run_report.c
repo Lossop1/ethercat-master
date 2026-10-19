@@ -38,7 +38,11 @@ static bool ensure_parent_directories(const char *path)
             continue;
         }
         *cursor = '\0';
-        if (mkdir(copy, 0750) != 0 && errno != EEXIST)
+        /*
+         * 0755 不是随手放宽：主站以 root 运行，报告目录若只给 root，
+         * 普通账号连目录都进不去，报告等于没交。报告里没有凭据。
+         */
+        if (mkdir(copy, 0755) != 0 && errno != EEXIST)
         {
             return false;
         }
@@ -260,7 +264,7 @@ static void archive_report(const char *path, const char *stem, uint32_t keep)
     {
         return;
     }
-    if (mkdir(directory, 0750) != 0 && errno != EEXIST)
+    if (mkdir(directory, 0755) != 0 && errno != EEXIST)
     {
         return;
     }
