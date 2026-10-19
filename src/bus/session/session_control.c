@@ -954,6 +954,44 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             bool slow_ok = emaster_observation_slow_read(
                                 &session->observation_slow, &slow);
                             /*
+                             * 外部目标的年龄。缓冲区一条记录带一个时间戳，所以它是
+                             * 会话级量，不逐轴重复。没有收到过目标时印 na，不印 0
+                             * —— 0 ms 会被读成"刚刚收到"。
+                             */
+                            char target_age_text[24];
+                            bool target_age_valid = false;
+                            uint64_t target_age_ms = 0U;
+                            if (session->external_target_buffer != NULL)
+                            {
+                                uint64_t last_update_ns;
+                                pthread_mutex_lock(&session->external_target_buffer->mutex);
+                                last_update_ns = session->external_target_buffer->last_update_ns;
+                                pthread_mutex_unlock(&session->external_target_buffer->mutex);
+                                struct timespec age_ts;
+                                if (last_update_ns != 0U &&
+                                    clock_gettime(CLOCK_MONOTONIC, &age_ts) == 0)
+                                {
+                                    uint64_t age_now_ns = (uint64_t)age_ts.tv_sec *
+                                                              UINT64_C(1000000000) +
+                                                          (uint64_t)age_ts.tv_nsec;
+                                    if (age_now_ns >= last_update_ns)
+                                    {
+                                        target_age_ms =
+                                            (age_now_ns - last_update_ns) / UINT64_C(1000000);
+                                        target_age_valid = true;
+                                    }
+                                }
+                            }
+                            if (target_age_valid)
+                            {
+                                (void)snprintf(target_age_text, sizeof(target_age_text),
+                                               "%llu", (unsigned long long)target_age_ms);
+                            }
+                            else
+                            {
+                                (void)snprintf(target_age_text, sizeof(target_age_text), "na");
+                            }
+                            /*
                              * 会话级计数一并给出去（P12.52）：此前它们只在报告里，
                              * 也就是只有跑完才看得到，而"这一轮现在健康吗"是运行中
                              * 就要回答的问题。全是累加计数，读它们不改任何状态。
@@ -962,7 +1000,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 "state=%d cycle=%lu axes=%zu enabled=%d completed=%d"
                                 ",wkc=%d,wkc_expect=%u,wkc_err=%llu,no_frame=%llu"
                                 ",over_budget=%llu,deadline_missed=%d"
-                                ",rejected=%llu",
+                                ",rejected=%llu,tgt_age_ms=%s",
                                 (int)session->report->state,
                                 (unsigned long)session->report->cycle_count,
                                 session->plan->axis_count,
@@ -974,7 +1012,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 (unsigned long long)session->report->wkc_no_frame_count,
                                 (unsigned long long)session->report->over_budget_cycle_count,
                                 session->report->cycle_deadline_missed ? 1 : 0,
-                                (unsigned long long)session->report->target_rejected_count);
+                                (unsigned long long)session->report->target_rejected_count,
+                                target_age_text);
 
                             for (axis_index = 0U;
                                  axis_index < session->plan->axis_count; ++axis_index) {
@@ -1094,6 +1133,56 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                     emaster_observation_slow_axis_vendor_error_age(
                                         &slow, (uint32_t)axis_index, slow.monotonic_ns,
                                         &slow_age_ns);
+                                /*
+                                 * target_pos 这个字段在非位置模式下装的是速度或力矩
+                                 * （由模式声明的 quantity 决定）。q= 说明它是哪一种，
+                                 * 客户端不用按模式号猜。why= 把"轴为什么不动"压成
+                                 * 一个词；判据只用这一行已有的量，不额外读 SDO。
+                                 */
+                                const emaster_mode_quantity_t quantity =
+                                    session->plan->axes[axis_index].operation_mode != NULL
+                                        ? session->plan->axes[axis_index].operation_mode->quantity
+                                        : EMASTER_MODE_QUANTITY_NONE;
+                                const char *quantity_text =
+                                    quantity == EMASTER_MODE_QUANTITY_POSITION ? "pos" :
+                                    quantity == EMASTER_MODE_QUANTITY_VELOCITY ? "vel" :
+                                    quantity == EMASTER_MODE_QUANTITY_TORQUE   ? "tor" : "none";
+                                const char *why_text = "ok";
+                                if ((axis->status_word & 0x0008U) != 0U || error_code != 0U)
+                                {
+                                    why_text = "fault";
+                                }
+                                else if ((session->controller_outputs[axis_index].control_word &
+                                          EMASTER_CIA402_CONTROL_HALT_BIT) != 0U)
+                                {
+                                    why_text = "halt";
+                                }
+                                else if (axis->cia402_state !=
+                                         EMASTER_CIA402_STATE_OPERATION_ENABLED)
+                                {
+                                    why_text = "disabled";
+                                }
+                                else if (session->plan->axes[axis_index].operation_mode != NULL &&
+                                         axis->mode_display !=
+                                             session->plan->axes[axis_index]
+                                                 .operation_mode->value)
+                                {
+                                    why_text = "mode";
+                                }
+                                else if (max_limits_read && slow_axis != NULL &&
+                                         slow_axis->max_torque == 0)
+                                {
+                                    why_text = "maxT";
+                                }
+                                else if (target_age_valid &&
+                                         session->plan->deployment->external_target_timeout_ms >
+                                             0U &&
+                                         target_age_ms >
+                                             session->plan->deployment
+                                                 ->external_target_timeout_ms)
+                                {
+                                    why_text = "timeout";
+                                }
                                 char readback_text[24];
                                 char readback_age_text[24];
                                 char max_torque_text[24];
@@ -1185,7 +1274,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    "mode=%d,tgt_rb=%s,rb_age_ms=%s,maxT=%s,maxV=%s,"
                                                    "control=0x%04x,current=%s,bus_v=%s,mosfet_t=%s,"
                                                    "motor_t=%s,motor_rpm=%s,cmd_rpm=%s,"
-                                                   "ext_err=%s,servo_err=%s",
+                                                   "ext_err=%s,servo_err=%s,q=%s,why=%s",
                                                    (unsigned int)(axis_index + 1U),
                                                    axis->actual_position,
                                                    reported_velocity,
@@ -1210,7 +1299,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    current_text, bus_voltage_text, mosfet_text,
                                                    motor_temperature_text, motor_rpm_text,
                                                    command_rpm_text, extended_error_text,
-                                                   servo_error_text);
+                                                   servo_error_text, quantity_text, why_text);
                                 if (written < 0) {
                                     break;
                                 }
@@ -1479,13 +1568,24 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                          *
                          * 响应字符串不动：它说的是"已受理"，而这正是事实；生效在下一拍。
                          */
-                        case EMASTER_COMMAND_STOP_MOTION:
-                            emaster_soem_session_request_stop(
-                                session, EMASTER_STOP_SOURCE_COMMAND);
+                        case EMASTER_COMMAND_STOP_MOTION: {
+                            /*
+                             * stop 是"停运动"，不是"退会话"。此前它和 shutdown 走同一条
+                             * 停机路径，客户端发 stop 后连接直接没了。现在逐轴置 Halt
+                             * （控制字 bit8），驱动器减速并保持使能；halt 0 解除。
+                             */
+                            size_t axis_idx;
+                            for (axis_idx = 0U; axis_idx < session->plan->axis_count; ++axis_idx)
+                            {
+                                emaster_cia402_controller_set_halt(
+                                    &session->controllers[axis_idx], true);
+                            }
                             (void)snprintf(response.message, sizeof(response.message),
-                                "stop requested");
+                                "halt set for %zu axes; send 'halt 0' to resume",
+                                session->plan->axis_count);
                             response.success = true;
                             break;
+                        }
 
                         case EMASTER_COMMAND_SHUTDOWN:
                             emaster_soem_session_request_stop(

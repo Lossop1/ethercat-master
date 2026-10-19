@@ -137,7 +137,7 @@ python3 tools/gen/emaster_config.py init-site --device <设备档 ID> \
 python3 tools/gen/emaster_config.py build
 
 # 8 起主站
-sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
+sudo bash -c 'ulimit -r unlimited; exec \
   ./build/apps/master/emaster-master --config-dir config-runtime'
 ```
 
@@ -172,13 +172,13 @@ sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
 
 ```bash
 cd /path/to/ethercat-master
-sudo bash -c 'ulimit -r unlimited; exec env EMASTER_OBSERVATION=1 \
+sudo bash -c 'ulimit -r unlimited; exec \
   ./build/apps/master/emaster-master --deployment <部署ID>'
 ```
 
 `--deployment` 接收部署 JSON 里的 `deployment_id`，不是文件名。也可以直接给 `--config-dir config-runtime`，它是默认值。
 
-**`EMASTER_OBSERVATION=1` 不是可选项。** 不开的话观测口不建，报告里温度、母线电压、电流那几栏恒为 `—`。
+观测通道随会话启动，不需要环境变量。
 
 **确认主站起来了。** 不要只看进程在。
 
@@ -252,13 +252,12 @@ sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
 
 ### 观测与界面
 
-观测口是独立的只读 unix 套接字 `/tmp/emaster-<部署ID>-obs.sock`。**它要 `EMASTER_OBSERVATION=1` 才存在。**
+观测口是独立的只读 unix 套接字 `/tmp/emaster-<部署ID>-obs.sock`，随会话启动。
 
-**主站认的环境变量只有这 9 个。**
+**主站认的环境变量只有这 8 个。**
 
 | 变量 | 作用 |
 | --- | --- |
-| `EMASTER_OBSERVATION` | 建不建观测口。默认关 |
 | `EMASTER_SETPOINT` | 建不建设点口。默认关 |
 | `EMASTER_OBSERVER_VERBOSE` | 观测线程每约 1 秒打一条全部 12 项读数 |
 | `EMASTER_FRAME_TIMEOUT_US` | 覆盖帧超时。默认周期/4 = 250 µs |
@@ -303,8 +302,8 @@ python -m emaster_gui --tcp <host>:5001
 **终端面板（同机）**
 
 ```bash
-sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
-  --repo "$PWD" --deployment <部署ID> --start'
+sudo bash -c 'ulimit -r unlimited; exec \
+  python3 tools/emaster_console.py --repo "$PWD" --deployment <部署ID> --start'
 ```
 
 `--range` 是自助软范围（默认 45°），`--jog-speed` 是点动速度（默认 10 °/s），`--start` 表示套接字不在时替你拉起主站。终端面板与图形界面共用同一份控制律。
@@ -316,8 +315,8 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | 主站起不来 | `ulimit -r` 是不是 `unlimited`。部署声明了 `realtime.required=true` 时，拿不到 `SCHED_FIFO` 主站会拒绝进入 OP |
 | 进不了 OP | 用 `status` 看主站状态，再看逐轴 AL 状态。拓扑或身份不匹配会拒绝建立周期控制 |
 | 轴不动 | 见下面两张表 |
-| 命令口连不上 | 主站刚启动的几十秒内，命令套接字只有一个 accept 位。客户端不要快节奏重连 |
-| 报告里温度／电压／电流恒为 `—` | 主站启动时有没有 `EMASTER_OBSERVATION=1` |
+| 命令口连不上 | 主站刚启动的几十秒内套接字可能还没建好。客户端退避重试，不要快节奏重连 |
+| 报告里温度／电压／电流恒为 `—` | 设备档的 `slow_telemetry` 有没有声明这些对象；MT 没有 0x6078，电流显示 `na` 是正常的 |
 | 报告里字段是 `-` | 取错了层。见[测试方案](docs/test-plan.md)的"报告字段层级"一节 |
 | 收尾显示 `OP=通过`，但有轴不在 OP | 那句走地址 0 广播，只照见环上最后一站。判"哪几根不在 OP"要看逐轴 `shutdown_al_entry` |
 | 逐轴 AL 读到 `state=0` | `0` 不是"在 INIT"。SOEM 先清零缓冲再读，所以 0 只可能是**这一站没应答** |
@@ -362,9 +361,10 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | `dc` | 查询同步信息 |
 | `set_external_target <p1> <p2> ...` | 按拓扑顺序提交**全轴**绝对原始位置计数。不是角度，不接受部分轴集合 |
 | `switch <motion_profile_id>` | 切换运动方案。它不等于切换 CSP/CSV/CST 控制模式 |
-| `stop` | 当前实现与 `shutdown` 一样请求会话有序退出。它不只是暂停轨迹，也不代表断电 |
+| `stop` | 逐轴置 Halt（控制字 bit8）。驱动器减速并保持使能，会话不退出；`halt 0` 恢复跟随上一目标。不等于断电 |
+| `halt <0\|1>` | 逐轴清 / 置 Halt。与 `stop` 同一机制 |
 | `shutdown` | 请求完整停机并退出 |
-| `quick_stop`、`halt <参数>`、`fault_reset` | 解析器已有入口。入口存在不代表相关安全功能已经验收 |
+| `quick_stop`、`fault_reset` | 解析器已有入口。入口存在不代表相关安全功能已经验收 |
 | `recover_axis <轴号>` | 恢复一台处于故障隔离的轴。解析入口是后补上的，**未经台架验证** |
 | `sdo_read <从站号> <索引> <子索引>` | 读任意对象字典条目。从站号从 1 起，索引与子索引接受 `0x` 前缀。由观测线程执行，最多等 5 秒；成功给 `raw=` 与 `u=`/`i=`，失败明说原因，不把 0 当读数 |
 

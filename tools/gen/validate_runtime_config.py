@@ -427,6 +427,20 @@ def validate_modes(
                     "但它不在 safeop_to_op_sdo_writes 里 —— 主站每拍会往这个对象写 0。"
                     "补一条固定值声明，值取台架实测或厂商资料给的数。",
                 )
+            # 限幅对象的 0 不是"不限制"。0x6072=0 时 MT 驱动器使能成功、状态字正常，
+            # 但拒绝出力；方案漏声明时主站每拍都会写 0，构建与启动都不报错。
+            # 只列"零值有已知危险"的标准对象；是否给值仍由方案决定，这里不替客户编数。
+            zero_unsafe = {
+                0x6072: "0x6072（最大力矩）",
+                0x6080: "0x6080（最大电机转速）",
+            }
+            for address in addresses_by_name.values():
+                if address[0] in zero_unsafe and address not in declared_addresses:
+                    check.errors.append(
+                        f"运行方案 {operation_id} 的模式 {mode_label} 映射了 "
+                        f"{zero_unsafe[address[0]]}，但 safeop_to_op_sdo_writes 没给它值 ——"
+                        "主站每拍会写 0。补一条固定值声明。"
+                    )
         final_reads = mode.get("final_sdo_reads", [])
         check.require(
             isinstance(final_reads, list),

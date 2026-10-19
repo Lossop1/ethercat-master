@@ -518,8 +518,11 @@ emaster_command_server_t *emaster_command_server_create(const char *socket_path)
         fprintf(stderr, "警告：无法修改套接字权限 %s：%s\n", socket_path, strerror(errno));
     }
 
-    /* 监听 */
-    if (listen(server->listen_fd, 1) < 0)
+    /*
+     * 监听队列不能用 1：客户端断开后快速重连时，旧连接还占着 accept 位，
+     * 新连接在队列满时直接被内核拒成 ECONNREFUSED，看起来像主站没起来。
+     */
+    if (listen(server->listen_fd, SOMAXCONN) < 0)
     {
         close(server->listen_fd);
         unlink(socket_path);
