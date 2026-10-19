@@ -218,12 +218,13 @@ def check(work, binary, failures):
         if "轴 1" not in line:
             failures.append("② 中止原因没点名是哪根轴：%s" % line)
 
-    # ③ 设备声明了，主站驱动不了。设备档里补一条主站还没实现的模式（PVT = 5），
-    #    运行方案跟着改成它 —— 这是 MT 说明书里那种"设备支持、主站还没做"的形态。
+    # ③ 设备声明了，主站驱动不了。设备档里补一条主站还没实现的模式（PP = 1），
+    #    运行方案跟着改成它 —— 设备说明书里声明了、主站执行层还没做的形态。
+    #    不要用 5：MIT 已进执行层，拿它当"驱动不了"的样本会让这条检查恒绿。
     #    这条键原本不存在，_edit 替换不到，得新补一行。
     _edit(catalog, {"profile.0.supported_modes.count": str(len(declared) + 1)})
-    _append(catalog, "profile.0.supported_modes.%d" % len(declared), "5")
-    _edit(runtime, {mode_value_key: "5"})
+    _append(catalog, "profile.0.supported_modes.%d" % len(declared), "1")
+    _edit(runtime, {mode_value_key: "1"})
     code, output = _master(binary, work, deployment)
     line = _mode_line(output)
     if line is None:
