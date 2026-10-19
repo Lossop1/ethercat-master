@@ -305,6 +305,20 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         if ((layout_status != EMASTER_SESSION_LAYOUT_MATCH &&
              layout_status != EMASTER_SESSION_LAYOUT_DEVICE_ADOPTED) ||
             !emaster_cia_process_image_init(axis, &session->images[axis_index])) {
+            /*
+             * 映射既改不动、又凑不出能用的映像，这一轴到此为止。失败也要带证据：
+             * 逐条记下"设备实际是什么"，否则报告里只剩一个 PDO 失败，操作员分不清
+             * 是设备装了别的固件，还是表里某一条不对。
+             *
+             * 2026-10-15 台架就是这么暴露的：同一环上两台同型号，从站 1 的 0x1601 是
+             * 8 条 MIT 映射（22 字节），从站 2 只有 3 条（8 字节）——差在固件，
+             * 而当时报告里一个差异都没写。
+             */
+            session->axes[axis_index].pdo_device_mapping_difference_count = (uint32_t)
+                emaster_slave_pdo_layout_differences(
+                    axis->pdo_set, &session->images[axis_index].layout,
+                    session->axes[axis_index].pdo_device_mapping_differences,
+                    EMASTER_CONTROL_SESSION_PDO_DIFFERENCE_SLOTS);
             status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;
             return status;
         }
