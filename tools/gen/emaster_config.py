@@ -440,8 +440,14 @@ def _sync_block(device: dict[str, Any], cycle_ns: int) -> dict[str, Any]:
     }
 
 
-def _mit_gain_writes(device: dict[str, Any]) -> list[dict[str, Any]]:
+def _mit_gain_writes(
+    device: dict[str, Any], pdo_set: dict[str, Any]
+) -> list[dict[str, Any]]:
     """MIT 的两个增益，从设备档的策略段读出来，写成方案里的固定值声明。
+
+    对象索引取自这套 PDO 映射本身，不能写死：良质叫 0x2013:1/2，MT 叫
+    0x2000/0x2001。两家的 ESI 都已经把这两个条目映射进 RxPDO，字段名分别是
+    mit_kp/mit_kd（MT 的 ESI 写 PVT_KP/PVT_KD，推导时折成同一组名字）。
 
     为什么必须由策略给、不能由工具编一个默认值：这两个增益在 RxPDO 里，主站每拍
     写进去的就是驱动器会用的值；工具编一个数，客户拿到的就是一份"看着能跑、刚度
@@ -465,11 +471,31 @@ def _mit_gain_writes(device: dict[str, Any]) -> list[dict[str, Any]]:
                 "    不是这台设备 EtherCAT 侧该用的增益。"
             )
         values[key] = value
-    # 0x2013 是厂商的 MIT 参数组（ESI 里的 "Mit Parameters"）：1 号 Kp、2 号 Kd。
-    return [
-        {"index": "0x2013", "subindex": 1, "type": "i32", "value": values["kp"]},
-        {"index": "0x2013", "subindex": 2, "type": "i32", "value": values["kd"]},
-    ]
+    gains: dict[str, dict[str, Any]] = {}
+    for mapping in pdo_set.get("rx", {}).get("mappings", []):
+        for entry in mapping.get("entries", []):
+            name = entry.get("name")
+            if name in ("mit_kp", "mit_kd"):
+                gains[name] = entry
+    writes: list[dict[str, Any]] = []
+    for key, name, label in (("kp", "mit_kp", "Kp"), ("kd", "mit_kd", "Kd")):
+        entry = gains.get(name)
+        if entry is None or int(entry.get("bits", 0)) != 32:
+            raise SystemExit(
+                f"设备 {device['profile_id']} 的这套 PDO 映射里找不到 32 位的 {name}"
+                f"（{label}）。MIT 的两个增益必须在 RxPDO 里逐拍发给驱动器；"
+                "先确认 ESI 的 RxPDO 映射包含它们（MT 是 0x2000/0x2001，"
+                "良质是 0x2013:1/2）。"
+            )
+        writes.append(
+            {
+                "index": entry["index"],
+                "subindex": int(entry.get("subindex", 0)),
+                "type": "i32",
+                "value": values[key],
+            }
+        )
+    return writes
 
 
 def _modes_block(
@@ -497,7 +523,7 @@ def _modes_block(
             "mode_display_policy": "required",
         }
         if mode_id == "mit":
-            mode["safeop_to_op_sdo_writes"] = _mit_gain_writes(device)
+            mode["safeop_to_op_sdo_writes"] = _mit_gain_writes(device, pdo_set)
         modes.append(mode)
     if not any(mode["id"] == wanted for mode in modes):
         raise SystemExit(

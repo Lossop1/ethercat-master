@@ -61,6 +61,12 @@ STANDARD_FIELD_NAMES: dict[str, str] = {
 # 定的模式号，是这台家族自己在 ESI 里声明的（见模块 "Mit - axis"）。
 STANDARD_MODE_VALUES: dict[str, int] = {"csp": 8, "csv": 9, "cst": 10, "homing": 6, "mit": 5}
 
+# 同一个 MIT 增益，不同厂商在 ESI 里叫法不同：良质写 "MitKp"/"MitKd"（0x2013:1/2），
+# MT 写 "PVT_KP"/"PVT_KD"（0x2000/0x2001）。运行方案按 mit_kp/mit_kd 这两个名字
+# 找它们，所以把 PVT 的叫法折到同一组名字上。对象索引不在这里定：由生成器从
+# 实际 PDO 映射里取，MT 与良质的索引本就不同。
+FIELD_NAME_ALIASES: dict[str, str] = {"pvt_kp": "mit_kp", "pvt_kd": "mit_kd"}
+
 
 def _vendor_field_name(entry: dict[str, Any]) -> str:
     """厂商自定义索引的字段名，取 ESI 自己给这个条目起的名字。
@@ -77,7 +83,7 @@ def _vendor_field_name(entry: dict[str, Any]) -> str:
         spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw.strip())
         slug = re.sub(r"[^a-z0-9]+", "_", spaced.lower()).strip("_")
         if slug:
-            return slug
+            return FIELD_NAME_ALIASES.get(slug, slug)
     index = entry["index"].lower()
     # 名字取不到时才退回索引加子索引 —— 至少不会与别的子索引重名。
     return f"unknown_{index[2:]}_{int(entry.get('subindex', 0))}"
