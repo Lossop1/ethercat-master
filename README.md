@@ -449,13 +449,19 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 
 代码内部的风险不在本表，见[实现说明](docs/architecture.md)第 14 节。
 
+## 维护者
+
+问题与请求走 [GitHub Issues](https://github.com/Lossop1/ethercat-master/issues)。
+
 ## 贡献
 
 见 `CONTRIBUTING.md`。
 
 ## 许可
 
-见 `LICENSE`。
+GPL-3.0，全文见 [`LICENSE`](LICENSE)。
+
+树内 `external/SOEM/` 是第三方源码，另按 GPLv3 与商业双重授权，见 `external/SOEM/LICENSE.md`。整包分发时 GPLv3 适用。要把本产品用在闭源产品里，须先向 RT-Labs 取得 SOEM 商业授权。
 
 ---
 
