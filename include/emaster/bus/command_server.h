@@ -29,6 +29,14 @@ typedef enum {
     EMASTER_COMMAND_HALT,                /* 设置全轴 Halt 位（控制字 bit8），payload: "1"=置位 "0"=清零 */
     EMASTER_COMMAND_FAULT_RESET,         /* 触发全轴 Fault Reset（控制字 0x0080） */
     EMASTER_COMMAND_RECOVER_AXIS,        /* P2.5: 恢复单个故障轴，payload: 轴索引 */
+    /*
+     * 任意对象字典读取：payload 为 "<slave> <index> <sub>"。
+     *
+     * 由观测线程执行，不在周期线程里碰邮箱；响应在结果回来之后的下一个周期发出。
+     * 这条命令是"设备档没声明、但现场要问一问"的出口——没有它，客户端只能改配置
+     * 重新生成，而客户手里通常没有配置树。
+     */
+    EMASTER_COMMAND_SDO_READ,
 } emaster_command_type_t;
 
 /* 命令结构：封装命令类型和参数 */

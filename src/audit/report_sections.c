@@ -823,6 +823,12 @@ static bool write_axis(FILE *stream,
         /* 这几个慢速量读没读到、多久以前读到的：没有它，下面的 0 与"没读到"长得一样。 */
         ",\"slow_telemetry_read\":%s,\"slow_telemetry_age_ns\":%" PRIu64
         /*
+         * 四列各自的可用性。轴级标志只说明"这一轴至少有一条读到过"；设备没声明
+         * 0x6078（MT）或这一条这一轮超时时，值仍是 0，渲染端必须看这里。
+         */
+        ",\"actual_current_read\":%s,\"dc_link_voltage_read\":%s"
+        ",\"mosfet_temperature_read\":%s,\"motor_temperature_read\":%s"
+        /*
          * P12.17: 运行期的 603F，与上面几个慢速量同源同约定。单独一套 read/age，
          * 因为它是字段级的：温度读到而错误码这轮超时是常事，共用轴级标志会把
          * "从没读到"印成 0x0000。运行期报过错、停机时 603F 又被清掉的情况下，
@@ -908,6 +914,10 @@ static bool write_axis(FILE *stream,
         (int)axis->motor_temperature,
         axis->slow_telemetry_read ? "true" : "false",
         axis->slow_telemetry_age_ns,
+        axis->actual_current_read ? "true" : "false",
+        axis->dc_link_voltage_read ? "true" : "false",
+        axis->mosfet_temperature_read ? "true" : "false",
+        axis->motor_temperature_read ? "true" : "false",
         axis->runtime_error_code_read ? "true" : "false",
         (unsigned int)axis->runtime_error_code,
         axis->runtime_error_code_age_ns,

@@ -2,6 +2,7 @@
 
 #include "emaster/config/runtime_config.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
@@ -200,6 +201,108 @@ static void check_recovery_progress(
         fprintf(stderr, "[P2.5] 轴%zu 恢复超时\n", axis_index);
         axis->axis_status = EMASTER_AXIS_STATUS_FAULTED;
     }
+}
+
+/*
+ * 解析一个无符号整数，base=0 接受 0x 前缀。
+ *
+ * 用 strtoul 而不是 atoi：atoi 对 "0x2009" 返回 0，对 "12abc" 返回 12，两种都会
+ * 让一条打错的命令悄悄读到别的对象。
+ */
+static bool parse_unsigned_token(const char *text, unsigned long *out_value)
+{
+    char *end = NULL;
+    unsigned long value;
+
+    if (text == NULL || text[0] == '\0')
+    {
+        return false;
+    }
+    errno = 0;
+    value = strtoul(text, &end, 0);
+    if (errno != 0 || end == text || *end != '\0')
+    {
+        return false;
+    }
+    *out_value = value;
+    return true;
+}
+
+/*
+ * 把观测线程读回的原始字节写成一条响应。
+ *
+ * 原始字节按 SDO 线上顺序（CANopen 小端）如实列出；1/2/4 字节再给一个有符号、一个
+ * 无符号的解释，省得客户端自己拼。更大的对象只给 raw——它的语义只有设备文档知道，
+ * 主站不猜。
+ */
+static void format_sdo_read_response(const emaster_soem_session_t *session,
+                                     emaster_command_response_t *response)
+{
+    char raw[3U * sizeof(session->sdo_read_data) + 1U];
+    size_t offset = 0U;
+    int size = session->sdo_read_size;
+    int index;
+
+    if (size < 0)
+    {
+        size = 0;
+    }
+    if (size > (int)sizeof(session->sdo_read_data))
+    {
+        size = (int)sizeof(session->sdo_read_data);
+    }
+    for (index = 0; index < size; ++index)
+    {
+        offset += (size_t)snprintf(raw + offset, sizeof(raw) - offset, "%02X",
+                                   (unsigned)session->sdo_read_data[index]);
+    }
+    if (offset == 0U)
+    {
+        raw[0] = '\0';
+    }
+
+    if (session->sdo_read_wkc <= 0)
+    {
+        response->success = false;
+        (void)snprintf(response->message, sizeof(response->message),
+                       "sdo read failed: slave=%u,index=0x%04X,sub=0x%02X,wkc=%d"
+                       " (对象不存在/不可读，或邮箱超时)",
+                       (unsigned)session->sdo_read_slave,
+                       (unsigned)session->sdo_read_index,
+                       (unsigned)session->sdo_read_subindex, session->sdo_read_wkc);
+        return;
+    }
+
+    response->success = true;
+    if (size == 1 || size == 2 || size == 4)
+    {
+        uint64_t unsigned_value = 0U;
+        int64_t signed_value;
+        const uint64_t sign_bit = UINT64_C(1) << (8 * size - 1);
+        const uint64_t mask = (UINT64_C(1) << (8 * size)) - UINT64_C(1);
+        int shift;
+
+        for (shift = 0; shift < size; ++shift)
+        {
+            unsigned_value |= (uint64_t)session->sdo_read_data[shift] << (8 * shift);
+        }
+        signed_value = (unsigned_value & sign_bit) != 0U
+                           ? -(int64_t)((~unsigned_value & mask) + UINT64_C(1))
+                           : (int64_t)unsigned_value;
+        (void)snprintf(response->message, sizeof(response->message),
+                       "slave=%u,index=0x%04X,sub=0x%02X,size=%d,raw=%s,u=%" PRIu64
+                       ",i=%" PRId64,
+                       (unsigned)session->sdo_read_slave,
+                       (unsigned)session->sdo_read_index,
+                       (unsigned)session->sdo_read_subindex, size, raw, unsigned_value,
+                       signed_value);
+        return;
+    }
+    (void)snprintf(response->message, sizeof(response->message),
+                   "slave=%u,index=0x%04X,sub=0x%02X,size=%d,raw=%s",
+                   (unsigned)session->sdo_read_slave,
+                   (unsigned)session->sdo_read_index,
+                   (unsigned)session->sdo_read_subindex, size, raw);
 }
 
 emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t *session) {
@@ -783,7 +886,55 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
             /* 处理实时命令（非阻塞） */
             if (session->command_server != NULL) {
                 emaster_command_t command;
-                if (emaster_command_server_receive(session->command_server, &command)) {
+
+                /*
+                 * 未决的 sdo_read：结果由观测线程填、这里只取。两条路径都在周期
+                 * 线程上完成响应，客户端拿到的是一个与命令一一对应的答复。
+                 *
+                 * 超时只报一次，但**不**清掉代次：观测线程可能正在那次邮箱往返里，
+                 * 提前清掉会让它的结果错配到下一次请求。未决期间上面不取新命令，
+                 * 队列顶住；观测线程一轮 50 ms、单次读超时 30 ms，正常情况下
+                 * 5 s 这个上限碰不到。
+                 */
+                if (session->sdo_read_pending) {
+                    const uint32_t completed = atomic_load_explicit(
+                        &session->sdo_read_completed_generation, memory_order_acquire);
+
+                    if (completed == session->sdo_read_pending_generation) {
+                        if (!session->sdo_read_timed_out) {
+                            emaster_command_response_t response;
+
+                            format_sdo_read_response(session, &response);
+                            (void)emaster_command_server_respond(session->command_server,
+                                                                 &response);
+                        }
+                        session->sdo_read_pending = false;
+                    }
+                    else if (!session->sdo_read_timed_out &&
+                             now_ns >= session->sdo_read_deadline_ns) {
+                        emaster_command_response_t response;
+
+                        response.success = false;
+                        (void)snprintf(response.message, sizeof(response.message),
+                                       "sdo read timeout: slave=%u,index=0x%04X,sub=0x%02X",
+                                       (unsigned)session->sdo_read_slave,
+                                       (unsigned)session->sdo_read_index,
+                                       (unsigned)session->sdo_read_subindex);
+                        (void)emaster_command_server_respond(session->command_server,
+                                                             &response);
+                        session->sdo_read_timed_out = true;
+                    }
+                    /*
+                     * 观测线程已不在：完成代次不会再来。释放交接，否则命令口从此
+                     * 只收不发。这里只可能发生在停机路径上。
+                     */
+                    if (session->sdo_read_pending &&
+                        (!session->observer_thread_created || !session->observer_running)) {
+                        session->sdo_read_pending = false;
+                    }
+                }
+                if (!session->sdo_read_pending &&
+                    emaster_command_server_receive(session->command_server, &command)) {
                     emaster_command_response_t response;
                     response.success = false;
 
@@ -864,10 +1015,6 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                     slow_has_axis
                                         ? (unsigned int)slow.axes[axis_index].error_code
                                         : 0U;
-                                const int32_t reported_velocity =
-                                    (velocity_from_slow && slow_has_axis)
-                                        ? slow.axes[axis_index].motor_speed
-                                        : axis->actual_velocity;
                                 /*
                                  * 慢速通道能取到的全部读数（P12.50/P12.52）：0x6078 电流、
                                  * 0x6079 母线电压、0x200B 的温度与转速、0x607A 的驱动器自报值、
@@ -876,8 +1023,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                  * 它们进状态回读，是为了让"轴为什么不动"当场可判，而不是跑完
                                  * 再去翻报告或翻详细日志。取不到一律印 na，理由见 format_optional_*。
                                  *
-                                 * 判据分两类：极限值与厂商错误码问**字段级**时间戳——它们是静态量，
-                                 * 要回答的只是"读到过没有"；其余问轴级。
+                                 * 判据一律是**字段级**时间戳：轴级标志只说明"这一轴至少有一条
+                                 * 读到过"，拿它印电流会把"设备没有这个对象"印成 0。
                                  * 607A 回读额外连年龄一起报：它的值在运动中连续变，读失败留下的
                                  * 旧值是静止的，而"静止"正是要判成"目标没送到"的那个形状，
                                  * 光看值分不开，只能看年龄。
@@ -886,11 +1033,52 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 const emaster_observation_slow_axis_t *slow_axis =
                                     slow_has_axis ? &slow.axes[axis_index] : NULL;
                                 uint64_t slow_age_ns = UINT64_C(0);
-                                const bool axis_read =
+                                uint64_t field_age_ns = UINT64_C(0);
+                                /*
+                                 * 逐字段可用性。用轴级年龄会把"设备没声明 0x6078"
+                                 * 印成 current=0——那是这个回读口最容易被当成
+                                 * "读到零电流"的一句话。
+                                 */
+                                const bool current_read =
                                     slow_axis != NULL &&
-                                    emaster_observation_slow_axis_age(
-                                        &slow, (uint32_t)axis_index, slow.monotonic_ns,
-                                        &slow_age_ns);
+                                    emaster_observation_slow_field_age(
+                                        &slow, (uint32_t)axis_index,
+                                        EMASTER_SLOW_FIELD_ACTUAL_CURRENT, slow.monotonic_ns,
+                                        &field_age_ns);
+                                const bool bus_voltage_read =
+                                    slow_axis != NULL &&
+                                    emaster_observation_slow_field_age(
+                                        &slow, (uint32_t)axis_index,
+                                        EMASTER_SLOW_FIELD_BUS_VOLTAGE, slow.monotonic_ns,
+                                        &field_age_ns);
+                                const bool mosfet_read =
+                                    slow_axis != NULL &&
+                                    emaster_observation_slow_field_age(
+                                        &slow, (uint32_t)axis_index,
+                                        EMASTER_SLOW_FIELD_MOSFET_TEMPERATURE,
+                                        slow.monotonic_ns, &field_age_ns);
+                                const bool motor_temperature_read =
+                                    slow_axis != NULL &&
+                                    emaster_observation_slow_field_age(
+                                        &slow, (uint32_t)axis_index,
+                                        EMASTER_SLOW_FIELD_MOTOR_TEMPERATURE,
+                                        slow.monotonic_ns, &field_age_ns);
+                                const bool motor_speed_read =
+                                    slow_axis != NULL &&
+                                    emaster_observation_slow_field_age(
+                                        &slow, (uint32_t)axis_index,
+                                        EMASTER_SLOW_FIELD_MOTOR_SPEED, slow.monotonic_ns,
+                                        &field_age_ns);
+                                const bool speed_command_read =
+                                    slow_axis != NULL &&
+                                    emaster_observation_slow_field_age(
+                                        &slow, (uint32_t)axis_index,
+                                        EMASTER_SLOW_FIELD_SPEED_COMMAND, slow.monotonic_ns,
+                                        &field_age_ns);
+                                const int32_t reported_velocity =
+                                    (velocity_from_slow && motor_speed_read)
+                                        ? slow.axes[axis_index].motor_speed
+                                        : axis->actual_velocity;
                                 const bool readback_read =
                                     slow_axis != NULL &&
                                     emaster_observation_slow_axis_target_position_age(
@@ -947,29 +1135,30 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                         ? slow_axis->max_motor_speed
                                                         : 0);
                                 format_optional_int(current_text, sizeof(current_text),
-                                                    axis_read,
+                                                    current_read,
                                                     slow_axis != NULL ? slow_axis->actual_current
                                                                       : 0);
                                 format_optional_int(bus_voltage_text, sizeof(bus_voltage_text),
-                                                    axis_read,
+                                                    bus_voltage_read,
                                                     slow_axis != NULL
                                                         ? slow_axis->dc_link_voltage
                                                         : 0);
-                                format_optional_int(mosfet_text, sizeof(mosfet_text), axis_read,
+                                format_optional_int(mosfet_text, sizeof(mosfet_text), mosfet_read,
                                                     slow_axis != NULL
                                                         ? slow_axis->mosfet_temperature
                                                         : 0);
                                 format_optional_int(motor_temperature_text,
-                                                    sizeof(motor_temperature_text), axis_read,
+                                                    sizeof(motor_temperature_text),
+                                                    motor_temperature_read,
                                                     slow_axis != NULL
                                                         ? slow_axis->motor_temperature
                                                         : 0);
                                 format_optional_int(motor_rpm_text, sizeof(motor_rpm_text),
-                                                    axis_read,
+                                                    motor_speed_read,
                                                     slow_axis != NULL ? slow_axis->motor_speed
                                                                       : 0);
                                 format_optional_int(command_rpm_text, sizeof(command_rpm_text),
-                                                    axis_read,
+                                                    speed_command_read,
                                                     slow_axis != NULL ? slow_axis->speed_command
                                                                       : 0);
                                 format_optional_hex32(extended_error_text,
@@ -1396,6 +1585,91 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                             break;
                         }
 
+                        /*
+                         * 任意对象字典读：payload "<从站> <索引> <子索引>"。
+                         *
+                         * 这里只把请求交给观测线程，绝不自己发邮箱——周期线程上
+                         * 任何一次 SDO 往返都是周期预算里的一段无界等待。响应在
+                         * 结果回来后的某一拍由循环顶部那一段发出，因此本条命令
+                         * 用 goto 跳过本拍的统一响应。
+                         */
+                        case EMASTER_COMMAND_SDO_READ: {
+                            char payload_copy[256];
+                            char *saveptr = NULL;
+                            char *token;
+                            unsigned long values[3];
+                            size_t count = 0U;
+                            bool parse_ok = true;
+                            uint32_t generation;
+
+                            strncpy(payload_copy, command.payload,
+                                    sizeof(payload_copy) - 1U);
+                            payload_copy[sizeof(payload_copy) - 1U] = '\0';
+                            token = strtok_r(payload_copy, " \t", &saveptr);
+                            while (token != NULL && count < 3U) {
+                                if (!parse_unsigned_token(token, &values[count])) {
+                                    parse_ok = false;
+                                    break;
+                                }
+                                ++count;
+                                token = strtok_r(NULL, " \t", &saveptr);
+                            }
+                            if (!parse_ok || count != 3U || token != NULL) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                               "用法: sdo_read <从站> <索引> <子索引>"
+                                               "（例: sdo_read 1 0x2009 0）");
+                                response.success = false;
+                                break;
+                            }
+                            if (values[0] < 1UL || values[0] > 65535UL ||
+                                values[1] > 65535UL || values[2] > 255UL) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                               "参数越界: slave=%lu,index=0x%lX,sub=%lu",
+                                               values[0], values[1], values[2]);
+                                response.success = false;
+                                break;
+                            }
+                            if (session->bus_slave_count > 0 &&
+                                values[0] > (unsigned long)session->bus_slave_count) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                               "从站号越界: 环上只有 %d 台",
+                                               (int)session->bus_slave_count);
+                                response.success = false;
+                                break;
+                            }
+                            if (!session->observer_thread_created || !session->observer_running) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                               "观测线程未运行，无法执行 SDO 读");
+                                response.success = false;
+                                break;
+                            }
+
+                            generation = atomic_load_explicit(
+                                             &session->sdo_read_generation,
+                                             memory_order_relaxed) +
+                                         UINT32_C(1);
+                            if (generation == 0U) {
+                                generation = 1U;
+                            }
+                            session->sdo_read_slave = (uint16_t)values[0];
+                            session->sdo_read_index = (uint16_t)values[1];
+                            session->sdo_read_subindex = (uint8_t)values[2];
+                            session->sdo_read_wkc = 0;
+                            session->sdo_read_size = 0;
+                            memset(session->sdo_read_data, 0,
+                                   sizeof(session->sdo_read_data));
+                            session->sdo_read_pending = true;
+                            session->sdo_read_pending_generation = generation;
+                            /* 5 s：观测线程一轮 50 ms，单次读超时 30 ms，正常碰不到。 */
+                            session->sdo_read_deadline_ns =
+                                now_ns + UINT64_C(5000000000);
+                            session->sdo_read_timed_out = false;
+                            /* 字段写完之后才抬代次，release 保证观测线程看到完整请求。 */
+                            atomic_store_explicit(&session->sdo_read_generation, generation,
+                                                  memory_order_release);
+                            goto sdo_submitted;
+                        }
+
                         case EMASTER_COMMAND_SET_EXTERNAL_TARGET: {
                             /* 外部位置目标命令：解析并更新注入的目标缓冲区 */
                             emaster_external_target_buffer_t *buf = session->external_target_buffer;
@@ -1486,6 +1760,9 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
 
                 send_response:
                     (void)emaster_command_server_respond(session->command_server, &response);
+                sdo_submitted:
+                    /* sdo_read 已交给观测线程：本拍没有可发的响应。 */
+                    ;
                 }
             }
 

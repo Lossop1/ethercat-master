@@ -157,6 +157,98 @@ def _device_runtime_constraints(device: ET.Element) -> EsiRuntimeConstraints:
     )
 
 
+def _access(element: ET.Element) -> str | None:
+    """读写权限在 ESI 里有两处写法：对象直接挂 Flags，某些工具放进 Info/Flags。"""
+    return _optional_text(element, "Flags/Access") or _optional_text(
+        element, "Info/Flags/Access"
+    )
+
+
+def _data_type_facts(root: ET.Element) -> dict[str, dict[str, Any]]:
+    """读出 ESI 声明的复合数据类型（如 DT200B），供对象字典解析子索引。
+
+    厂商对象常写成"一个对象 + 一份 DataType"：0x200B Monitor Parameters 自身
+    只有一个 1152 位的类型名，真正能读的是 DT200B 里 :1 MOSFET 温度、
+    :2 电机温度这些子索引。没有这一步，对象字典里就只剩一个不可直接读的整体。
+    """
+    types: dict[str, dict[str, Any]] = {}
+    for data_type in root.findall(".//DataTypes/DataType"):
+        name = _optional_text(data_type, "Name")
+        if name is None:
+            continue
+        subitems: list[dict[str, Any]] = []
+        for subitem in data_type.findall("SubItem"):
+            subindex_text = subitem.findtext("SubIdx")
+            if subindex_text is None:
+                continue
+            subitems.append(
+                {
+                    "subindex": _integer_text(subindex_text, "DataType/SubItem/SubIdx"),
+                    "name": _optional_text(subitem, "Name"),
+                    "type": _optional_text(subitem, "Type"),
+                    "bits": _integer_text(
+                        subitem.findtext("BitSize", default="0"),
+                        "DataType/SubItem/BitSize",
+                    ),
+                    "access": _access(subitem),
+                }
+            )
+        types[name] = {
+            "bits": _integer_text(
+                data_type.findtext("BitSize", default="0"), "DataType/BitSize"
+            ),
+            "subitems": subitems,
+        }
+    return types
+
+
+def _object_dictionary(
+    device: ET.Element, data_types: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """设备对象字典的只读事实：索引、名称、类型、位宽、权限、可读子索引。
+
+    这是生成器判断"这台设备能读哪些量"的唯一依据。ESI 也是厂商资料，
+    名字和索引由厂商写下；我们只照抄，不按型号写死对象号。
+    """
+    objects: list[dict[str, Any]] = []
+    for object_config in device.findall("Profile/Dictionary/Objects/Object"):
+        index_text = object_config.findtext("Index")
+        if index_text is None:
+            continue
+        type_name = _optional_text(object_config, "Type")
+        resolved = data_types.get(type_name) if type_name is not None else None
+        subitems = list(resolved["subitems"]) if resolved is not None else []
+        if not subitems:
+            # 少数 ESI 把子索引直接写在对象里。这种写法通常不带 SubIdx，
+            # 顺序就是子索引，0 号是条目数。
+            for ordinal, subitem in enumerate(object_config.findall("./Info/SubItem")):
+                subitems.append(
+                    {
+                        "subindex": ordinal,
+                        "name": _optional_text(subitem, "Name"),
+                        "type": _optional_text(subitem, "Type"),
+                        "bits": _integer_text(
+                            subitem.findtext("BitSize", default="0"),
+                            "Object/Info/SubItem/BitSize",
+                        ),
+                        "access": _access(subitem),
+                    }
+                )
+        objects.append(
+            {
+                "index": _hex_text(_integer_text(index_text, "Object/Index"), 4),
+                "name": _optional_text(object_config, "Name"),
+                "type": type_name,
+                "bits": _integer_text(
+                    object_config.findtext("BitSize", default="0"), "Object/BitSize"
+                ),
+                "access": _access(object_config),
+                "subitems": subitems,
+            }
+        )
+    return objects
+
+
 def _entry_fact(entry: ET.Element) -> dict[str, Any]:
     """提取单个 PDO 条目的原始描述，不为缺失名称臆造稳定字段名。"""
     index_text = entry.findtext("Index", default="0")
@@ -247,8 +339,12 @@ def _module_facts(root: ET.Element) -> list[dict[str, Any]]:
     return modules
 
 
-def _device_facts(vendor: ET.Element, device: ET.Element) -> dict[str, Any]:
-    """提取一个 Device 的身份、协议能力、同步约束和直接 PDO 声明。"""
+def _device_facts(
+    vendor: ET.Element,
+    device: ET.Element,
+    data_types: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """提取一个 Device 的身份、协议能力、同步约束、对象字典和直接 PDO 声明。"""
     device_type = device.find("Type")
     if device_type is None:
         raise ValueError("ESI Device 缺少 Type")
@@ -306,6 +402,7 @@ def _device_facts(vendor: ET.Element, device: ET.Element) -> dict[str, Any]:
             "supports_distributed_clocks": constraints.supports_distributed_clocks,
         },
         "default_pdo_assignment": _default_pdo_assignment(device),
+        "object_dictionary": _object_dictionary(device, data_types or {}),
         "direct_pdos": {
             direction: [_pdo_fact(pdo) for pdo in device.findall(tag)]
             for direction, tag in (("rx", "RxPdo"), ("tx", "TxPdo"))
@@ -329,11 +426,14 @@ def extract_esi_facts(
     if source_sha256 is not None:
         source["sha256"] = source_sha256
 
+    data_types = _data_type_facts(root)
     report: dict[str, Any] = {
         "report_schema_version": 1,
         "esi_version": root.attrib.get("Version"),
         "source": source,
-        "devices": [_device_facts(vendor, device) for device in devices],
+        "devices": [
+            _device_facts(vendor, device, data_types) for device in devices
+        ],
         "modules": _module_facts(root),
     }
     if len(report["devices"]) == 1:

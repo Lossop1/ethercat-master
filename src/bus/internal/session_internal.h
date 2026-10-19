@@ -1,6 +1,8 @@
 #ifndef EMASTER_BUS_SOEM_SESSION_INTERNAL_H
 #define EMASTER_BUS_SOEM_SESSION_INTERNAL_H
 
+#include <stdatomic.h>
+
 #include "cia402/process_image.h"
 #include "cyclic/clock.h"
 #include "emaster/bus/command_server.h"
@@ -187,6 +189,30 @@ typedef struct {
      * 所以这里不需要比 running 更强的同步。有了它，停机序言才能把 join 拆成
      * "置标志 → 每周期看一眼 → 回收"三段，中间照常发帧。 */
     volatile bool observer_exited;
+    /*
+     * 任意对象 SDO 读的交接（命令口 `sdo_read`）。
+     *
+     * 命令在周期线程里被解析，但邮箱往返必须由观测线程做——周期线程上任何一次
+     * SDO 都会挤占周期预算，这正是 status 只读快照的原因。
+     *
+     * 交接用代次而不是标志位：周期线程填好请求字段后把 generation 加一（release），
+     * 观测线程看到代次变化就读请求、做完读、把 completed_generation 写成同一个数
+     * （release）。周期线程只在两者相等时取结果，所以一次读失败/迟到不会把结果
+     * 错配到下一次请求上。未完成期间周期线程不再提交新代次（见 sdo_read_pending）。
+     */
+    _Atomic uint32_t sdo_read_generation;
+    _Atomic uint32_t sdo_read_completed_generation;
+    uint16_t sdo_read_slave;
+    uint16_t sdo_read_index;
+    uint8_t sdo_read_subindex;
+    int sdo_read_wkc;
+    int sdo_read_size;
+    uint8_t sdo_read_data[32];
+    /* 以下三个只有周期线程读写。 */
+    bool sdo_read_pending;
+    uint32_t sdo_read_pending_generation;
+    uint64_t sdo_read_deadline_ns;
+    bool sdo_read_timed_out;
     /*
      * 慢速遥测快照（SDO 轮询拿到的电流/电压/温度/速度/错误码）。
      *

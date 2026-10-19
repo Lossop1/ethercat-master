@@ -328,6 +328,7 @@ static void observer_store_telemetry(emaster_observation_slow_axis_t *slot,
             if (succeeded)
             {
                 slot->actual_current = (int32_t)value;
+                slot->actual_current_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_ERROR_CODE:
@@ -347,30 +348,35 @@ static void observer_store_telemetry(emaster_observation_slow_axis_t *slot,
             if (succeeded)
             {
                 slot->dc_link_voltage = (int32_t)value;
+                slot->dc_link_voltage_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_MOSFET_TEMPERATURE:
             if (succeeded)
             {
                 slot->mosfet_temperature = (int32_t)value;
+                slot->mosfet_temperature_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_MOTOR_TEMPERATURE:
             if (succeeded)
             {
                 slot->motor_temperature = (int32_t)value;
+                slot->motor_temperature_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_ACTUAL_VELOCITY:
             if (succeeded)
             {
                 slot->motor_speed = (int32_t)value;
+                slot->motor_speed_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_TARGET_VELOCITY:
             if (succeeded)
             {
                 slot->speed_command = (int32_t)value;
+                slot->speed_command_last_read_ns = observer_now_ns();
             }
             break;
         case EMASTER_TELEMETRY_TARGET_POSITION_READBACK:
@@ -578,6 +584,38 @@ static void observer_service_first_mismatch(emaster_soem_session_t *session)
     fflush(stdout);
 }
 
+/*
+ * 服务一条来自命令口的任意对象 SDO 读（`sdo_read`）。
+ *
+ * 周期线程只写请求并抬高代次；这里读到代次变化才碰邮箱，结果写完后把
+ * completed_generation 抬到同一个数。代次相等是周期线程取结果的唯一判据，所以
+ * 一次被停机截断的读不会把旧结果错配到下一次请求。
+ *
+ * 即使 observer_running 已清也调用一次：observer_sdo_read 自己在读入口判许可，
+ * 不许可时立即返回 0，于是等待方拿到的是一个明确的失败，而不是永远不来的结果。
+ */
+static void observer_service_sdo_request(emaster_soem_session_t *session,
+                                         uint32_t *serviced_generation)
+{
+    uint32_t generation =
+        atomic_load_explicit(&session->sdo_read_generation, memory_order_acquire);
+    int size;
+    int wkc;
+
+    if (generation == *serviced_generation)
+    {
+        return;
+    }
+    size = (int)sizeof(session->sdo_read_data);
+    wkc = observer_sdo_read(session, session->sdo_read_slave, session->sdo_read_index,
+                            session->sdo_read_subindex, &size, session->sdo_read_data);
+    session->sdo_read_wkc = wkc;
+    session->sdo_read_size = size;
+    atomic_store_explicit(&session->sdo_read_completed_generation, generation,
+                          memory_order_release);
+    *serviced_generation = generation;
+}
+
 /* 50ms 睡眠同样要可中断，否则 join 还要多等一个完整睡眠周期。 */
 static void observer_sleep(emaster_soem_session_t *session, const struct timespec *interval)
 {
@@ -618,6 +656,7 @@ static void *observer_thread_func(void *arg)
     emaster_soem_session_t *session = (emaster_soem_session_t *)arg;
     struct timespec interval = {0, 50000000}; /* 50ms */
     uint64_t iteration = 0U;
+    uint32_t sdo_serviced_generation = 0U;
     emaster_observer_stop_trace_t *trace = &session->report->observer_stop;
 
     /*
@@ -669,6 +708,10 @@ static void *observer_thread_func(void *arg)
          * 正是这么丢的。补读自己带预算，所以放在停止检查之前不会让 join 变成无界等待。
          */
         observer_service_first_mismatch(session);
+
+        /* 命令口的单次 SDO 读。放在停止检查之前，理由与补读相同：停机途中也要
+         * 给等待方一个明确结果，而不是让它等一个永远不会来的完成代次。 */
+        observer_service_sdo_request(session, &sdo_serviced_generation);
 
         if (!session->observer_running)
         {

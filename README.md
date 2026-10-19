@@ -366,6 +366,7 @@ sudo bash -c 'ulimit -r unlimited; exec python3 tools/emaster_console.py \
 | `shutdown` | 请求完整停机并退出 |
 | `quick_stop`、`halt <参数>`、`fault_reset` | 解析器已有入口。入口存在不代表相关安全功能已经验收 |
 | `recover_axis <轴号>` | 恢复一台处于故障隔离的轴。解析入口是后补上的，**未经台架验证** |
+| `sdo_read <从站号> <索引> <子索引>` | 读任意对象字典条目。从站号从 1 起，索引与子索引接受 `0x` 前缀。由观测线程执行，最多等 5 秒；成功给 `raw=` 与 `u=`/`i=`，失败明说原因，不把 0 当读数 |
 
 发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
 

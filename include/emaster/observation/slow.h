@@ -91,7 +91,32 @@ typedef struct
     int32_t  motor_speed;
     int32_t  speed_command;
     uint16_t error_code;
+    /*
+     * 这六个数各自的"最后一次读到"时刻，语义与上面几个字段级戳相同。
+     *
+     * 轴级 last_read_ns 只说明"这一轴本轮至少有一条读到了"。当设备只声明了其中一部分
+     * 对象时（MT 没有 0x6078 电流），拿轴级戳当电流的可用性，会把"这台设备根本不提供
+     * 这个量"印成读数 0；当某一条这一轮超时时，又会把上一轮的旧值印成当前值。
+     * 0 = 从没读到过。
+     */
+    uint64_t actual_current_last_read_ns;
+    uint64_t dc_link_voltage_last_read_ns;
+    uint64_t mosfet_temperature_last_read_ns;
+    uint64_t motor_temperature_last_read_ns;
+    uint64_t motor_speed_last_read_ns;
+    uint64_t speed_command_last_read_ns;
 } emaster_observation_slow_axis_t;
+
+/* 慢速通道里逐字段可问年龄的量。 */
+typedef enum
+{
+    EMASTER_SLOW_FIELD_ACTUAL_CURRENT = 0,
+    EMASTER_SLOW_FIELD_BUS_VOLTAGE,
+    EMASTER_SLOW_FIELD_MOSFET_TEMPERATURE,
+    EMASTER_SLOW_FIELD_MOTOR_TEMPERATURE,
+    EMASTER_SLOW_FIELD_MOTOR_SPEED,
+    EMASTER_SLOW_FIELD_SPEED_COMMAND
+} emaster_observation_slow_field_t;
 
 /* 一次快照的载荷。发布与读取都以整块为单位，不含序号。 */
 typedef struct
@@ -187,5 +212,16 @@ bool emaster_observation_slow_axis_max_limits_age(
 bool emaster_observation_slow_axis_vendor_error_age(
     const emaster_observation_slow_state_t *state, uint32_t axis_index, uint64_t now_ns,
     uint64_t *out_age_ns);
+
+/*
+ * 同上，但问的是某一个具体读数（电流、母线电压、两个温度、转速、转速指令）。
+ *
+ * 存在的理由不是对称：这些量的 0 都是合法读数，而"设备没声明这个对象"与"这一条
+ * 读超时"都必须印成 na 而不是 0。轴级 age 答不了这个问题——轴上任何一条读到，它就为真。
+ */
+bool emaster_observation_slow_field_age(const emaster_observation_slow_state_t *state,
+                                        uint32_t axis_index,
+                                        emaster_observation_slow_field_t field,
+                                        uint64_t now_ns, uint64_t *out_age_ns);
 
 #endif /* EMASTER_OBSERVATION_SLOW_H */

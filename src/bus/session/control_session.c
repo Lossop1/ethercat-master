@@ -311,6 +311,12 @@ emaster_control_session_status_t emaster_soem_control_session(
     memset(session, 0, sizeof(*session));
     memset(report, 0, sizeof(*report));
     memset(axis_storage, 0, plan->axis_count * sizeof(*axis_storage));
+    /*
+     * 原子字段不能只靠 memset 归零（C11 要求 atomic_init）。两个代次都从 0 起，
+     * "相等"表示没有未取走的读结果——提交时 generation 会先变成 1。
+     */
+    atomic_init(&session->sdo_read_generation, UINT32_C(0));
+    atomic_init(&session->sdo_read_completed_generation, UINT32_C(0));
     /* -1 而不是 0：0 是 MULTIAXIS_OK，"还没调用过"不能伪装成"协调器通过了" */
     session->last_coordinator_status = -1;
     /* 同一个道理：-1 是"还没扫过"，不是"环上零台" */

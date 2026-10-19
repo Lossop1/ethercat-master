@@ -69,7 +69,11 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
   真值 28）。声明缺项才退回自报，两边都没有则该轴换算不可用。压过不等于抹掉：自报值照读照写，
   报告与终端都写出两份并在不一致时标出 `device_agrees=false`。资料里没有的项留缺省，不得编造。
   实际生效的换算是运动方案里每轴的值；
-- `slow_telemetry`：可选。需周期读取的供应商私有对象表。每项含 `name`（设备内唯一）、`index`
+- `slow_telemetry`：需周期读取的遥测对象表。`add-device` 新建策略档时从 ESI 对象字典
+  起草：标准索引（0x6078 电流、0x6079 母线电压、0x606C/0x60FF 速度、0x603F 错误码、
+  0x607A 目标位置回读）按标准认；厂商私有对象（如温度、电压）只接受与已知测量名完全
+  同名的条目，PDO 映射表里的同名子项不取。一个语义只留一条，标准索引优先。已有策略档
+  以档里的清单为准，缺这一项时 `add-device` 只提示。每项含 `name`（设备内唯一）、`index`
   （十六进制字符串）、`subindex`（0..255）、`type`（`u8`/`i8`/`u16`/`i16`/`u32`/`i32`，决定
   读取宽度）、`semantic`、`unit`（可为空）。`semantic` 取 `none`、`actual_current`、
   `error_code`、`bus_voltage`、`mosfet_temperature`、`motor_temperature`、`actual_velocity`、

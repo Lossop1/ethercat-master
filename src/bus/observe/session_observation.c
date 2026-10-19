@@ -262,6 +262,7 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
         uint64_t age_ns = 0U;
         uint64_t error_code_age_ns = 0U;
         uint64_t readback_age_ns = 0U;
+        uint64_t field_age_ns = 0U;
 
         if (axis_index >= (size_t)EMASTER_OBSERVATION_MAX_AXES ||
             axis_index >= (size_t)state.axis_count)
@@ -283,23 +284,59 @@ void emaster_soem_session_observation_flush_slow(emaster_soem_session_t *session
         axis->slow_telemetry_read =
             emaster_observation_slow_axis_age(&state, (uint32_t)axis_index, now_ns, &age_ns);
         axis->slow_telemetry_age_ns = age_ns;
-        if (axis->slow_telemetry_read)
+        /*
+         * 逐字段判可用性。轴级标志只回答"这一轴至少有一条读到过"；四列各有一个
+         * 时间戳，于是"设备没声明这一条"与"这一条这一轮超时"都能如实印成 na，
+         * 而不是拿轴级标志把残留的 0 说成读数。
+         */
+        axis->actual_current_read = emaster_observation_slow_field_age(
+            &state, (uint32_t)axis_index, EMASTER_SLOW_FIELD_ACTUAL_CURRENT, now_ns,
+            &field_age_ns);
+        if (axis->actual_current_read)
         {
             axis->actual_current = (int16_t)state.axes[axis_index].actual_current;
+        }
+        axis->dc_link_voltage_read = emaster_observation_slow_field_age(
+            &state, (uint32_t)axis_index, EMASTER_SLOW_FIELD_BUS_VOLTAGE, now_ns,
+            &field_age_ns);
+        if (axis->dc_link_voltage_read)
+        {
             axis->dc_link_voltage = (uint32_t)state.axes[axis_index].dc_link_voltage;
+        }
+        axis->mosfet_temperature_read = emaster_observation_slow_field_age(
+            &state, (uint32_t)axis_index, EMASTER_SLOW_FIELD_MOSFET_TEMPERATURE, now_ns,
+            &field_age_ns);
+        if (axis->mosfet_temperature_read)
+        {
             axis->mosfet_temperature = (int16_t)state.axes[axis_index].mosfet_temperature;
+        }
+        axis->motor_temperature_read = emaster_observation_slow_field_age(
+            &state, (uint32_t)axis_index, EMASTER_SLOW_FIELD_MOTOR_TEMPERATURE, now_ns,
+            &field_age_ns);
+        if (axis->motor_temperature_read)
+        {
             axis->motor_temperature = (int16_t)state.axes[axis_index].motor_temperature;
+        }
+        if (emaster_observation_slow_field_age(&state, (uint32_t)axis_index,
+                                               EMASTER_SLOW_FIELD_MOTOR_SPEED, now_ns,
+                                               &field_age_ns))
+        {
             axis->actual_velocity = state.axes[axis_index].motor_speed;
+        }
+        if (emaster_observation_slow_field_age(&state, (uint32_t)axis_index,
+                                               EMASTER_SLOW_FIELD_SPEED_COMMAND, now_ns,
+                                               &field_age_ns))
+        {
             axis->target_velocity = state.axes[axis_index].speed_command;
-            /*
-             * 603F 也回填，但**只在停机诊断没有给出更新值时**才有意义——而那个诊断
-             * 跑在本函数之后（停机序言之后），它会覆盖这里。顺序是刻意的：先落一个
-             * "运行期最后看到的值"，再让停机快照去盖。
-             */
-            if (state.axes[axis_index].error_code != 0U)
-            {
-                axis->drive_diagnostic.cia402_error_code = state.axes[axis_index].error_code;
-            }
+        }
+        /*
+         * 603F 也回填，但**只在停机诊断没有给出更新值时**才有意义——而那个诊断
+         * 跑在本函数之后（停机序言之后），它会覆盖这里。顺序是刻意的：先落一个
+         * "运行期最后看到的值"，再让停机快照去盖。
+         */
+        if (axis->slow_telemetry_read && state.axes[axis_index].error_code != 0U)
+        {
+            axis->drive_diagnostic.cia402_error_code = state.axes[axis_index].error_code;
         }
         /*
          * P12.17: 运行期的 603F 另存一份，**在 slow_telemetry_read 之外**。

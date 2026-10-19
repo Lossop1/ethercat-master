@@ -315,6 +315,18 @@ typedef struct
      */
     bool slow_telemetry_read;
     uint64_t slow_telemetry_age_ns;
+    /*
+     * 上面四个值各自的可用性，字段级。
+     *
+     * slow_telemetry_read 只说明"这一轴至少有一条慢速 SDO 读到过"。设备只声明了其中
+     * 一部分对象时（例如 MT 的 ESI 里没有 0x6078 电流），轴级标志为真而电流字段仍是
+     * 0——那是"设备不提供"，不是读数。报告把这四列与各自的标志一起写出，渲染端据此
+     * 印值或印 na。
+     */
+    bool actual_current_read;
+    bool dc_link_voltage_read;
+    bool mosfet_temperature_read;
+    bool motor_temperature_read;
     /* 增益参数 (2008h) - 从 SAFE-OP 阶段读取 */
     bool gain_parameters_read;
     uint16_t velocity_loop_kp;   /* 2008h:01h, 0.01 unit */

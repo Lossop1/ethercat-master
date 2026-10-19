@@ -203,3 +203,44 @@ bool emaster_observation_slow_axis_vendor_error_age(
     return age_from_timestamp(state->axes[axis_index].vendor_error_last_read_ns, now_ns,
                               out_age_ns);
 }
+
+bool emaster_observation_slow_field_age(const emaster_observation_slow_state_t *state,
+                                        uint32_t axis_index,
+                                        emaster_observation_slow_field_t field,
+                                        uint64_t now_ns, uint64_t *out_age_ns)
+{
+    const emaster_observation_slow_axis_t *axis;
+    uint64_t last_read_ns;
+
+    if (state == NULL || axis_index >= state->axis_count ||
+        axis_index >= (uint32_t)EMASTER_OBSERVATION_MAX_AXES)
+    {
+        return false;
+    }
+    axis = &state->axes[axis_index];
+    switch (field)
+    {
+        case EMASTER_SLOW_FIELD_ACTUAL_CURRENT:
+            last_read_ns = axis->actual_current_last_read_ns;
+            break;
+        case EMASTER_SLOW_FIELD_BUS_VOLTAGE:
+            last_read_ns = axis->dc_link_voltage_last_read_ns;
+            break;
+        case EMASTER_SLOW_FIELD_MOSFET_TEMPERATURE:
+            last_read_ns = axis->mosfet_temperature_last_read_ns;
+            break;
+        case EMASTER_SLOW_FIELD_MOTOR_TEMPERATURE:
+            last_read_ns = axis->motor_temperature_last_read_ns;
+            break;
+        case EMASTER_SLOW_FIELD_MOTOR_SPEED:
+            last_read_ns = axis->motor_speed_last_read_ns;
+            break;
+        case EMASTER_SLOW_FIELD_SPEED_COMMAND:
+            last_read_ns = axis->speed_command_last_read_ns;
+            break;
+        default:
+            /* 枚举外的值：按"没读到"处理，不猜一个字段。 */
+            return false;
+    }
+    return age_from_timestamp(last_read_ns, now_ns, out_age_ns);
+}

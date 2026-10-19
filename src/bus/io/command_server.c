@@ -349,6 +349,21 @@ static void *listen_thread(void *arg)
         {
             command.type = EMASTER_COMMAND_FAULT_RESET;
         }
+        else if (bytes_read >= 9 && strncmp(buffer, "sdo_read ", 9) == 0)
+        {
+            /* payload: "<从站号> <对象索引> <子索引>"，数字按 strtoul(base 0) 解析，
+             * 所以 0x2009 与 8201 等价。范围校验在命令处理器里做。 */
+            command.type = EMASTER_COMMAND_SDO_READ;
+            size_t payload_start = 9U;
+            size_t payload_len = (size_t)bytes_read - payload_start;
+            if (payload_len >= sizeof(command.payload))
+            {
+                payload_len = sizeof(command.payload) - 1U;
+            }
+            memcpy(command.payload, buffer + payload_start, payload_len);
+            command.payload[payload_len] = '\0';
+            command.payload[strcspn(command.payload, "\n")] = '\0';
+        }
         else
         {
             command.type = EMASTER_COMMAND_INVALID;

@@ -292,9 +292,19 @@ def add_device(args: argparse.Namespace) -> int:
 
     notes: list[tuple[str, str]] = []
     policy_path = config / "device_policies" / f"{stem}.json"
+    derived_telemetry = derived.get("slow_telemetry") or []
     if policy_path.is_file():
         policy = _read_json(policy_path)
         policy_state = "已存在，按它合成"
+        if not policy.get("slow_telemetry") and derived_telemetry:
+            notes.append(
+                (
+                    "慢速遥测",
+                    f"策略档没声明。ESI 对象字典里能读 {len(derived_telemetry)} 项"
+                    f"（{'、'.join(item['name'] for item in derived_telemetry)}）。"
+                    "删掉策略档重跑本命令即可自动写入。",
+                )
+            )
     else:
         observed_modes = derived["protocol"]["supported_modes"]
         if not observed_modes:
@@ -323,13 +333,24 @@ def add_device(args: argparse.Namespace) -> int:
                 "填错没人看得出来，它只影响主站自己的判定。",
             )
         )
-        notes.append(
-            (
-                "慢速遥测",
-                "未声明，报告里温度、母线电压、电流那几栏会是空的。"
-                "要就照 config/README.md 补 slow_telemetry。",
+        if derived_telemetry:
+            policy["slow_telemetry"] = derived_telemetry
+            notes.append(
+                (
+                    "慢速遥测",
+                    f"已按 ESI 对象字典写入 {len(derived_telemetry)} 项："
+                    f"{'、'.join(item['name'] for item in derived_telemetry)}。"
+                    "刻度与单位按厂商资料核对；报告写的是对象原始读数。",
+                )
             )
-        )
+        else:
+            notes.append(
+                (
+                    "慢速遥测",
+                    "ESI 对象字典里没有可识别的遥测对象，报告里对应栏会是 na。"
+                    "用 sdo_read 直接读对象字典确认厂商的对象号后再补 slow_telemetry。",
+                )
+            )
         if not derived["protocol"]["assign_activate_by_strategy"].get("dc"):
             notes.append(
                 (

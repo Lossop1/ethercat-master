@@ -8,9 +8,17 @@
 
 本脚本产出什么
     只产出"换一台电机就会变、而人不需要做任何决定"的字段：
-    身份、协议能力、PDO 集合的选择方式 / 字节数 / 映射条目。
-    它不产出任何工程决策 —— 选哪套 PDO、停机判据用哪个掩码、读哪些遥测、
-    换算期望值 —— 那些由人写在策略档里，本脚本一个字都不碰。
+    身份、协议能力、PDO 集合的选择方式 / 字节数 / 映射条目，
+    以及从对象字典里能直接认出的慢速遥测对象。
+    它不产出工程决策 —— 选哪套 PDO、停机判据用哪个掩码、换算期望值 ——
+    那些由人写在策略档里，本脚本一个字都不碰。
+
+慢速遥测从哪来
+    ESI 的对象字典说了这台设备有哪些对象、叫什么、多大、能不能读。
+    CiA 402 标准索引（0x6078 电流、0x6079 母线电压、0x603F 错误码等）
+    的含义由标准定；厂商私有区里只有名字能说明用途，所以只接受与下表
+    完全同名的对象（"Voltage"、"Motor Temperature"……），不做模糊匹配。
+    一个语义只取一条：标准索引优先于私有对象，再按索引与子索引排序。
 
 语义名从哪来
     src/cia402/process_image.c:141 按字符串名把运行方案要的字段和设备档
@@ -66,6 +74,186 @@ STANDARD_MODE_VALUES: dict[str, int] = {"csp": 8, "csv": 9, "cst": 10, "homing":
 # 找它们，所以把 PVT 的叫法折到同一组名字上。对象索引不在这里定：由生成器从
 # 实际 PDO 映射里取，MT 与良质的索引本就不同。
 FIELD_NAME_ALIASES: dict[str, str] = {"pvt_kp": "mit_kp", "pvt_kd": "mit_kd"}
+
+# 标准索引 → 慢速遥测语义。全部来自 CiA 301/402，换任何合规驱动器含义不变。
+# 0x607A 是驱动器自己持有的目标位置：读它用于区分"值没到驱动器"与
+# "到了驱动器但不执行"，它不是反馈。0x6072/0x6080 是配置型读数，
+# 不在周期遥测里，故不列。
+STANDARD_SLOW_TELEMETRY: dict[str, str] = {
+    "0x603f": "error_code",
+    "0x606c": "actual_velocity",
+    "0x6078": "actual_current",
+    "0x6079": "bus_voltage",
+    "0x607a": "target_position_readback",
+    "0x60ff": "target_velocity",
+}
+
+# 厂商私有对象没有标准含义，只能按 ESI 的 <Name> 认。键是规范化后的名字：
+# 小写、非字母数字折成单个空格。只做完全匹配 —— "Max Bus Voltage" 是保护阈值，
+# 不是母线电压实测值，模糊匹配会把它读成电压。
+VENDOR_SLOW_TELEMETRY: dict[str, str] = {
+    "voltage": "bus_voltage",
+    "bus voltage": "bus_voltage",
+    "bus voltage value": "bus_voltage",
+    "dc link voltage": "bus_voltage",
+    "dc link circuit voltage": "bus_voltage",
+    "drive temperature": "mosfet_temperature",
+    "mosfet temperature": "mosfet_temperature",
+    "mosfet temperature value": "mosfet_temperature",
+    "igbt junction temperature": "mosfet_temperature",
+    "motor temperature": "motor_temperature",
+    "motor temperature value": "motor_temperature",
+    "extended servo error code": "extended_error_code",
+    "servo error code": "servo_error_code",
+}
+
+# 输出顺序固定，便于比对两份设备档的差别。
+SLOW_TELEMETRY_ORDER = (
+    "actual_current",
+    "bus_voltage",
+    "mosfet_temperature",
+    "motor_temperature",
+    "actual_velocity",
+    "target_velocity",
+    "error_code",
+    "extended_error_code",
+    "servo_error_code",
+    "target_position_readback",
+)
+
+_SIGNED_TYPES = {"SINT", "INT", "DINT", "LINT"}
+_TELEMETRY_TYPES = {8: "u8", 16: "u16", 32: "u32"}
+# 能读的权限。没有 Access 的条目通常是 DataType 里给 PDO 映射起名字的
+# 子项（0x1A02 的 :6 "Motor Temperature" 就是映射描述），不是测量对象。
+_READABLE_ACCESS = {"ro", "rw", "rwr", "rww"}
+
+# 过程数据映射对象本身不是测量量。0x1A02 的子项名字与真实对象一模一样，
+# 不排除就会把映射表条目当成温度读回来。
+_PDO_MAPPING_RANGES = ((0x1600, 0x17FF), (0x1A00, 0x1BFF))
+_PDO_ASSIGNMENT_INDEXES = {0x1C12, 0x1C13}
+
+
+def _is_pdo_mapping_object(index: int) -> bool:
+    return index in _PDO_ASSIGNMENT_INDEXES or any(
+        low <= index <= high for low, high in _PDO_MAPPING_RANGES
+    )
+
+
+def _normalized_name(text: str | None) -> str:
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"[^a-z0-9]+", " ", text.strip().lower()).strip()
+
+
+def _telemetry_type(type_name: str | None, bits: int) -> str | None:
+    """ESI 类型 + 位宽 → 设备档声明的读取宽度。认不出就不进清单。"""
+    kind = (type_name or "").strip().upper()
+    base = _TELEMETRY_TYPES.get(bits)
+    if base is None:
+        return None
+    if base.startswith("u") and kind in _SIGNED_TYPES:
+        return "i" + base[1:]
+    return base
+
+
+def _slow_telemetry_name(object_name: str | None, fallback: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", (object_name or "").strip().lower()).strip("_")
+    return slug or fallback
+
+
+def _slow_telemetry_entries(facts: dict[str, Any]) -> list[dict[str, Any]]:
+    """从对象字典里挑出能周期读的对象，拼成设备档的 slow_telemetry。
+
+    只保留"语义 + 地址"唯一的两级去重结果之一：标准索引优先（它的含义
+    有标准背书），同一优先级按索引和子索引取最小的那条。名字在表内唯一，
+    重名时补上索引后缀 —— 运行期按名字把读数放进会话槽位，重名会串值。
+    """
+    chosen: dict[str, tuple[tuple[int, int, int], dict[str, Any]]] = {}
+    for object_config in facts.get("object_dictionary") or []:
+        index = str(object_config.get("index", "")).lower()
+        if _is_pdo_mapping_object(int(index, 0)):
+            continue
+        candidates: list[dict[str, Any]] = []
+        if object_config.get("subitems"):
+            for subitem in object_config["subitems"]:
+                candidates.append(
+                    {
+                        "index": index,
+                        "subindex": int(subitem.get("subindex", 0)),
+                        "name": subitem.get("name"),
+                        "type": subitem.get("type"),
+                        "bits": int(subitem.get("bits", 0)),
+                        "access": subitem.get("access"),
+                    }
+                )
+        else:
+            candidates.append(
+                {
+                    "index": index,
+                    "subindex": 0,
+                    "name": object_config.get("name"),
+                    "type": object_config.get("type"),
+                    "bits": int(object_config.get("bits", 0)),
+                    "access": object_config.get("access"),
+                }
+            )
+
+        for candidate in candidates:
+            access = str(candidate["access"] or "").strip().lower()
+            # 标准索引缺 Access 时按可读处理：对象含义由标准定，权限没写
+            # 只是这份 ESI 少写了一条。写明了不可读（wo）则一律不读。
+            if access not in _READABLE_ACCESS and not (
+                access == "" and index in STANDARD_SLOW_TELEMETRY
+            ):
+                continue
+            if index in STANDARD_SLOW_TELEMETRY:
+                semantic = STANDARD_SLOW_TELEMETRY[index]
+                standard = 0
+            else:
+                semantic = VENDOR_SLOW_TELEMETRY.get(
+                    _normalized_name(candidate["name"])
+                )
+                standard = 1
+            if semantic is None:
+                continue
+            telemetry_type = _telemetry_type(candidate["type"], candidate["bits"])
+            if telemetry_type is None:
+                # 位宽不是 8/16/32：主站按这四种宽度读，别的宽度读不了。
+                continue
+            rank = (standard, int(index, 0), candidate["subindex"])
+            previous = chosen.get(semantic)
+            if previous is not None and previous[0] <= rank:
+                continue
+            chosen[semantic] = (
+                rank,
+                {
+                    "name": _slow_telemetry_name(
+                        candidate["name"],
+                        f"object_{index[2:]}_{candidate['subindex']}",
+                    ),
+                    "index": index,
+                    "subindex": candidate["subindex"],
+                    "type": telemetry_type,
+                    "semantic": semantic,
+                    # ESI 不写刻度与单位。空字符串表示厂商没声明，
+                    # 报告按原始读数写，不编一个像"V"或"°C"的单位。
+                    "unit": "",
+                },
+            )
+
+    entries: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for semantic in SLOW_TELEMETRY_ORDER:
+        if semantic not in chosen:
+            continue
+        entry = dict(chosen[semantic][1])
+        name = entry["name"]
+        if name in seen_names:
+            name = f"{name}_{entry['index'][2:]}_{entry['subindex']}"
+            entry["name"] = name
+        seen_names.add(name)
+        entries.append(entry)
+    return entries
 
 
 def _vendor_field_name(entry: dict[str, Any]) -> str:
@@ -242,6 +430,9 @@ def derive(facts: dict[str, Any]) -> dict[str, Any]:
             ],
             "supported_modes": _modes(modules),
         },
+        # 对象字典里能直接认出的遥测对象。策略档缺这一项时 add-device
+        # 用这份起草；已有策略档仍以策略档为准。
+        "slow_telemetry": _slow_telemetry_entries(facts),
         # 模块化设备由 0xF030 选模块，一套模块一套映射；非模块化设备没有模块，
         # 退回设备级声明，且必须能唯一确定 —— 见 _device_pdo_set。
         "pdo_sets": [
