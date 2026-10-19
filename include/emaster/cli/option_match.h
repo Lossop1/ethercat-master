@@ -36,8 +36,6 @@ static inline emaster_cli_option_result_t emaster_cli_option_match(const char *a
                                                                    const char **value,
                                                                    bool *consumed_next)
 {
-    const size_t name_length = strlen(name);
-
     if (value != NULL)
     {
         *value = NULL;
@@ -50,6 +48,8 @@ static inline emaster_cli_option_result_t emaster_cli_option_match(const char *a
     {
         return EMASTER_CLI_OPTION_NONE;
     }
+
+    const size_t name_length = strlen(name);
 
     if (strcmp(argument, name) == 0)
     {
