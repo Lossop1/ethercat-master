@@ -122,6 +122,28 @@ int main(int argc, char *argv[])
         print_usage(stdout, argv[0]);
         return 0;
     }
+    /*
+     * 本工具只收一个位置参数：网卡名。以 `-` 开头的一律当选项。
+     *
+     * 先前它不查这个，`--bogus` 会被当成网卡名一路走到 ecx_init 失败，再被误报成
+     * "需要 root"——操作员照提示去 sudo，还是同一个失败，查不到真正的错。用法错误
+     * 就用用法错误的退出码。`--` 之后的那一个才算网卡名。
+     */
+    if (strcmp(argv[1], "--") == 0)
+    {
+        if (argc < 3)
+        {
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
+        argv[1] = argv[2];
+    }
+    else if (argv[1][0] == '-')
+    {
+        fprintf(stderr, "错误：不认识的选项 '%s'\n", argv[1]);
+        print_usage(stderr, argv[0]);
+        return 2;
+    }
 
     printf("interface=%s\n", argv[1]);
     /*

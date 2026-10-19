@@ -18,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "emaster/cli/option_match.h"
+
 /* 套接字路径上限。sun_path 是 108 字节，但 sockaddr_un 的容量检查留给调用方，
  * 这里只要求放得下路径字符串本身。 */
 #define EMASTER_SOCKET_PATH_CAPACITY 256U
@@ -114,15 +116,21 @@ static inline bool emaster_setpoint_socket_path(const char *deployment_id,
  * 主站的来源，未知时让调用方报错退出比猜一个更安全。
  *
  * 选项缺参数（--socket 后没有值）时同样返回 false，并且不消费它，调用方可以据此报错。
+ *
+ * 带值的长选项两种写法都认：`--socket <路径>` 与 `--socket=<路径>`。`--` 结束选项，
+ * 它本身被吃掉，其后的参数一律当操作数原样留下。
  */
 static inline bool emaster_cli_resolve_socket(int *argc,
                                               char **argv,
                                               char *buffer,
                                               size_t capacity)
 {
+    static const char socket_option[] = "--socket";
+    static const char deployment_option[] = "--deployment";
     const char *explicit_socket = NULL;
     const char *deployment = NULL;
     int write_index = 1;
+    bool options_ended = false;
 
     if (buffer == NULL || capacity == 0U)
     {
@@ -137,28 +145,55 @@ static inline bool emaster_cli_resolve_socket(int *argc,
     for (int read_index = 1; read_index < *argc; ++read_index)
     {
         const char *argument = argv[read_index];
+        const char *next = (read_index + 1 < *argc) ? argv[read_index + 1] : NULL;
+        const char *value = NULL;
+        bool consumed_next = false;
+        emaster_cli_option_result_t result;
 
-        if (strcmp(argument, "--socket") == 0 || strcmp(argument, "--deployment") == 0)
+        if (options_ended || strcmp(argument, "--") == 0)
         {
-            const bool wants_socket = strcmp(argument, "--socket") == 0;
-            const char *value = (read_index + 1 < *argc) ? argv[read_index + 1] : NULL;
+            /* `--` 之后全是操作数。`--` 自身不留下。 */
+            if (!options_ended)
+            {
+                options_ended = true;
+                continue;
+            }
+            argv[write_index++] = argv[read_index];
+            continue;
+        }
 
-            if (value == NULL || value[0] == '\0' || value[0] == '-')
-            {
-                /* 缺参数或下一个就是另一个选项：不消费，交由调用方报错。 */
-                return false;
-            }
-            if (wants_socket)
-            {
-                explicit_socket = value;
-            }
-            else
+        result = emaster_cli_option_match(argument, socket_option, next, &value, &consumed_next);
+        if (result == EMASTER_CLI_OPTION_VALUE)
+        {
+            explicit_socket = value;
+        }
+        else if (result == EMASTER_CLI_OPTION_MISSING)
+        {
+            /* 缺参数或下一个就是另一个选项：不消费，交由调用方报错。 */
+            return false;
+        }
+        else
+        {
+            result = emaster_cli_option_match(argument, deployment_option, next, &value, &consumed_next);
+            if (result == EMASTER_CLI_OPTION_VALUE)
             {
                 deployment = value;
             }
-            ++read_index;
+            else if (result == EMASTER_CLI_OPTION_MISSING)
+            {
+                return false;
+            }
+        }
+
+        if (result != EMASTER_CLI_OPTION_NONE)
+        {
+            if (consumed_next)
+            {
+                ++read_index;
+            }
             continue;
         }
+
         argv[write_index++] = argv[read_index];
     }
     *argc = write_index;

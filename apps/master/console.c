@@ -3,6 +3,17 @@
 
 #include <stdio.h>
 
+/*
+ * 收尾摘要全部走 stderr。
+ *
+ * 主站在 stdout 上一个字节的机器可读数据都没有：报告写文件，观测帧走套接字，退出码
+ * 表示成败。stdout 上原先那份摘要是人读的，按"stdout 只放数据"的口径就不该留在那里。
+ * 重定向到文件的用法（`emaster-master > out.txt`）因此不会再收到一屏人话。
+ *
+ * 成功与失败都走 stderr，不再按成败分流：分流过的那种约定让"哪条流是数据"取决于
+ * 退出码，管道拿到的内容不稳定。成败由退出码和报告里的 status 表示。
+ */
+
 static const char *session_status_text(emaster_control_session_status_t status) {
     switch (status) {
     case EMASTER_CONTROL_SESSION_SDO_WRITE_FAILED:
@@ -102,7 +113,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
         if (axis->position == 0U) {
             continue;
         }
-        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_AXIS_LINE),
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_AXIS_LINE),
                 (unsigned int)axis->position, result_text(axis->identity_match),
                 result_text(axis->pdo_match), result_text(axis->process_map_match),
                 result_text(axis->output_initialized), result_text(axis->input_decoded),
@@ -112,7 +123,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                 (int)axis->actual_position, (int)axis->target_position,
                 result_text(axis->operation_enabled_seen));
         if (report->safe_op_reached) {
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SAFEOP_MODE_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SAFEOP_MODE_LINE),
                     (unsigned int)axis->position, result_text(axis->safeop_mode_display_sdo_read),
                     (int)axis->safeop_mode_display_sdo,
                     (unsigned int)axis->safeop_drive_diagnostic.cia402_error_code,
@@ -122,7 +133,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                     result_text(axis->safeop_drive_diagnostic.read_succeeded));
         }
         if (axis->pdo_device_mapping_adopted) {
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PDO_ADOPTED_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PDO_ADOPTED_LINE),
                     (unsigned int)axis->position,
                     (unsigned int)axis->pdo_device_mapping_difference_count,
                     (unsigned int)axis->pdo_device_mapping_differences[0].mapping_index,
@@ -131,23 +142,23 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                     (unsigned long)axis->pdo_device_mapping_differences[0].device_descriptor);
         }
         if (axis->sm_sync_type_substituted) {
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SM_SYNC_TYPE_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SM_SYNC_TYPE_LINE),
                     (unsigned int)axis->position, (unsigned int)axis->sm2_sync_type_used,
                     (unsigned int)axis->sm3_sync_type_used);
         }
         if (axis->pdo_assignment_failed_index != 0U) {
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PDO_ASSIGNMENT_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_PDO_ASSIGNMENT_LINE),
                     (unsigned int)axis->position, (unsigned int)axis->pdo_assignment_failed_index,
                     (unsigned int)axis->pdo_assignment_failed_subindex,
                     result_text(axis->pdo_assignment_abort_code_available),
                     (unsigned long)axis->pdo_assignment_abort_code);
         }
         if (report->diagnostic_preop_reached) {
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FINAL_MODE_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FINAL_MODE_LINE),
                     (unsigned int)axis->position, result_text(axis->mode_command_sdo_read),
                     (int)axis->mode_command_sdo, result_text(axis->mode_display_sdo_read),
                     (int)axis->mode_display_sdo);
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_DIAGNOSTIC_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_DIAGNOSTIC_LINE),
                     (unsigned int)axis->position,
                     result_text(axis->drive_diagnostic.read_succeeded),
                     (unsigned int)axis->drive_diagnostic.cia402_error_code,
@@ -167,7 +178,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                     result_text(axis->sm3_diagnostic.read_succeeded &&
                                 !axis->sm3_diagnostic.sync_error));
         }
-        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SCALE_LINE),
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SCALE_LINE),
                 (unsigned int)axis->position,
                 emaster_fact_source_label(axis->position_scale.source),
                 (unsigned long)axis->position_scale.encoder_increments,
@@ -191,7 +202,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                  axis->position_scale.gear_motor_revolutions ||
              axis->device_position_scale.gear_shaft_revolutions !=
                  axis->position_scale.gear_shaft_revolutions)) {
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SCALE_DEVICE_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SCALE_DEVICE_LINE),
                     (unsigned int)axis->position,
                     (unsigned long)axis->device_position_scale.encoder_increments,
                     (unsigned long)axis->device_position_scale.encoder_motor_revolutions,
@@ -199,7 +210,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                     (unsigned long)axis->device_position_scale.gear_shaft_revolutions);
         }
         if (report->motion_completed) {
-            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_LINE),
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_LINE),
                     (unsigned int)axis->position, result_text(axis->position_scale_match),
                     (int)axis->motion_final_position, (int)axis->motion_completion_actual_position,
                     (long long)axis->motion_actual_delta_counts,
@@ -209,7 +220,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                     (unsigned long long)axis->max_observed_following_error_counts);
         }
     }
-    fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUMMARY_LINE),
+    fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUMMARY_LINE),
             result_text(report->safe_op_reached), result_text(report->op_reached),
             result_text(report->all_axes_enabled_reached),
             plan->motion_profile == NULL ? emaster_text(EMASTER_TEXT_CONTROL_SESSION_NOT_CONFIGURED)
@@ -225,14 +236,14 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
      * 两句都印，是因为它们答的问题不同——一次 WKC 不符在汇总行里只能看出"最后交换
      * 的 WKC 不对"，分不出是环尾丢站、短帧还是驱动器同步错，而那三种的排查方向相反。
      */
-    fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_ERROR_CLASS_LINE),
+    fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_ERROR_CLASS_LINE),
             emaster_error_class_key(report->error_class),
             emaster_error_class_text(report->error_class),
             (unsigned long long)report->wkc_no_frame_count,
             report->error_class_silent_axes, report->error_class_sync_axes);
     if (report->first_cycle_failure.present) {
         const emaster_cycle_failure_t *failure = &report->first_cycle_failure;
-        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FIRST_FAILURE_LINE),
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FIRST_FAILURE_LINE),
                 (unsigned long long)failure->exchange, session_status_text(failure->status),
                 result_text(failure->wkc_available), failure->wkc_available ? failure->wkc : -1);
     }
@@ -245,7 +256,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
         if (runtime_axis_count > EMASTER_RUNTIME_FAILURE_MAX_AXES) {
             runtime_axis_count = EMASTER_RUNTIME_FAILURE_MAX_AXES;
         }
-        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_RUNTIME_FAILURE_LINE),
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_RUNTIME_FAILURE_LINE),
                 (unsigned long long)runtime_failure->cycle_count,
                 (unsigned long long)runtime_failure->exchange,
                 session_status_text(runtime_failure->status),
@@ -253,7 +264,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                 (int)runtime_failure->bus_slave_count);
         for (runtime_axis_index = 0U; runtime_axis_index < runtime_axis_count;
              ++runtime_axis_index) {
-            fprintf(stdout,
+            fprintf(stderr,
                     emaster_text(EMASTER_TEXT_CONTROL_SESSION_RUNTIME_FAILURE_AXIS_LINE),
                     (unsigned int)(runtime_axis_index + 1U),
                     (unsigned int)runtime_failure->status_words[runtime_axis_index],
@@ -264,18 +275,18 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
         }
     }
     if (report->audit.omitted_pdo_samples > 0U) {
-        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_TRUNCATED),
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_TRUNCATED),
                 (unsigned long long)report->audit.omitted_pdo_samples);
     }
     /* 停机阶段的截断单独报：它意味着审计预留额度偏小，与周期阶段的截断不是一回事，
      * 合并成一个数就看不出是哪一段被吃光了。 */
     if (report->audit.omitted_final_samples > 0U) {
-        fprintf(stdout,
+        fprintf(stderr,
                 emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_FINAL_TRUNCATED),
                 (unsigned long long)report->audit.omitted_final_samples);
     }
     if (report->status == EMASTER_CONTROL_SESSION_OK) {
-        fputs(emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUCCESS), stdout);
+        fputs(emaster_text(EMASTER_TEXT_CONTROL_SESSION_SUCCESS), stderr);
     } else if (report->status == EMASTER_CONTROL_SESSION_STOP_UNCONFIRMED) {
         /* 未确认不是"失败"：轴确实停了，只是没碰到判据。停在 stderr 上是因为
          * 退出码仍非 0——脚本按失败处理，人看的这句得说清是哪一种。 */
@@ -296,7 +307,7 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                                   ? report->report_path
                                   : plan->deployment->run_report_path;
     if (published) {
-        fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_SAVED), report_path);
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_SAVED), report_path);
     } else {
         fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_REPORT_FAILED), report_path);
     }

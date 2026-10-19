@@ -6,10 +6,12 @@
 
 #include "emaster/bus/preop_probe.h"
 #include "emaster/cli.h"
+#include "emaster/cli/deployment_for_host.h"
 #include "emaster/catalog/slave_profile.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_cli.h"
 #include "emaster/config/runtime_config_load.h"
+#include "emaster/messages.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -33,70 +35,6 @@ static bool deployment_is_eligible(const emaster_deployment_config_t *deployment
  * 获取不到主机名或配置过长都按失败处理，不使用猜测值。
  * 若找到多个匹配，返回 NULL 并输出候选配置列表到 stderr。
  */
-static const emaster_deployment_config_t *deployment_for_current_host(void)
-{
-    char hostname[256];
-    const emaster_deployment_config_t *match = NULL;
-    const emaster_deployment_config_t *candidates[16];
-    size_t candidate_count = 0U;
-    size_t index;
-
-    if (gethostname(hostname, sizeof(hostname) - 1U) != 0)
-    {
-        return NULL;
-    }
-    hostname[sizeof(hostname) - 1U] = '\0';
-
-    /* 收集所有匹配的配置 */
-    for (index = 0U; index < emaster_deployment_config_count(); ++index)
-    {
-        const emaster_deployment_config_t *candidate =
-            emaster_deployment_config_at(index);
-        if (candidate != NULL && candidate->hostname != NULL &&
-            strcmp(hostname, candidate->hostname) == 0)
-        {
-            if (match == NULL)
-            {
-                match = candidate;
-            }
-            if (candidate_count < sizeof(candidates) / sizeof(candidates[0]))
-            {
-                candidates[candidate_count++] = candidate;
-            }
-        }
-    }
-
-    /* 唯一匹配时返回配置 */
-    if (candidate_count == 1U)
-    {
-        return match;
-    }
-
-    /* 多个匹配时输出候选列表并返回 NULL */
-    if (candidate_count > 1U)
-    {
-        fprintf(stderr, "错误：当前主机 %s 有 %zu 个匹配的部署配置：\n",
-                hostname, candidate_count);
-        for (index = 0U; index < candidate_count; ++index)
-        {
-            fprintf(stderr, "  %zu. %s",
-                    index + 1U, candidates[index]->deployment_id);
-            if (candidates[index]->topology != NULL)
-            {
-                fprintf(stderr, " (拓扑=%s, 从站数=%zu)",
-                        candidates[index]->topology->topology_id,
-                        candidates[index]->topology->slave_count);
-            }
-            fprintf(stderr, "\n");
-        }
-        fprintf(stderr, "请使用 --deployment 参数指定：\n");
-        fprintf(stderr, "  emaster-fingerprint --deployment %s\n",
-                candidates[0]->deployment_id);
-    }
-
-    return NULL;
-}
-
 /*
  * 把物理报告与选定拓扑逐项比较。这里不假设轴数；期望数量和 profile_id 均来自部署引用的
  * 拓扑配置。任一位置缺失、额外、身份不符或目录不存在，都必须阻断而不能降级为告警。
@@ -403,10 +341,11 @@ int main(int argc, char **argv)
     else
     {
         /* 无 --deployment 参数时自动匹配当前主机 */
-        deployment = deployment_for_current_host();
+        deployment = emaster_cli_deployment_for_host(
+            "emaster-fingerprint", emaster_text(EMASTER_TEXT_COMMAND_CAPTURE));
         if (deployment == NULL)
         {
-            /* deployment_for_current_host 已输出详细错误信息 */
+            /* 共享实现已输出原因与下一步 */
             return 1;
         }
     }

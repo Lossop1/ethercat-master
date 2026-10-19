@@ -2,6 +2,8 @@
 
 #include "emaster/bus/dc_prepare.h"
 #include "emaster/cli.h"
+#include "emaster/cli/deployment_for_host.h"
+#include "emaster/cli/option_match.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_cli.h"
 #include "emaster/config/runtime_config_load.h"
@@ -16,71 +18,6 @@
  * 在当前主机上查找唯一匹配的部署配置。
  * 若找到多个匹配，返回 NULL 并输出候选配置列表到 stderr。
  */
-static const emaster_deployment_config_t *deployment_for_current_host(void)
-{
-    char hostname[256];
-    const emaster_deployment_config_t *match = NULL;
-    const emaster_deployment_config_t *candidates[16];
-    size_t candidate_count = 0U;
-    size_t index;
-
-    if (gethostname(hostname, sizeof(hostname) - 1U) != 0)
-    {
-        return NULL;
-    }
-    hostname[sizeof(hostname) - 1U] = '\0';
-
-    /* 收集所有匹配的配置 */
-    for (index = 0U; index < emaster_deployment_config_count(); ++index)
-    {
-        const emaster_deployment_config_t *candidate =
-            emaster_deployment_config_at(index);
-        if (candidate != NULL && candidate->hostname != NULL &&
-            strcmp(hostname, candidate->hostname) == 0)
-        {
-            if (match == NULL)
-            {
-                match = candidate;
-            }
-            if (candidate_count < sizeof(candidates) / sizeof(candidates[0]))
-            {
-                candidates[candidate_count++] = candidate;
-            }
-        }
-    }
-
-    /* 唯一匹配时返回配置 */
-    if (candidate_count == 1U)
-    {
-        return match;
-    }
-
-    /* 多个匹配时输出候选列表并返回 NULL */
-    if (candidate_count > 1U)
-    {
-        fprintf(stderr, "错误：当前主机 %s 有 %zu 个匹配的部署配置：\n",
-                hostname, candidate_count);
-        for (index = 0U; index < candidate_count; ++index)
-        {
-            fprintf(stderr, "  %zu. %s",
-                    index + 1U, candidates[index]->deployment_id);
-            if (candidates[index]->topology != NULL)
-            {
-                fprintf(stderr, " (拓扑=%s, 从站数=%zu)",
-                        candidates[index]->topology->topology_id,
-                        candidates[index]->topology->slave_count);
-            }
-            fprintf(stderr, "\n");
-        }
-        fprintf(stderr, "请使用 --deployment 参数指定：\n");
-        fprintf(stderr, "  emaster-dc-prepare %s --deployment %s\n",
-                emaster_text(EMASTER_TEXT_COMMAND_PREPARE_DC),
-                candidates[0]->deployment_id);
-    }
-
-    return NULL;
-}
-
 static bool confirm_prepare(const emaster_deployment_config_t *deployment,
                             size_t axis_count)
 {
@@ -199,39 +136,52 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* 解析命令行参数：支持 --deployment <id> 指定部署配置 */
-    if (argc == 4 && strcmp(argv[1], prepare_command) == 0 &&
-        strcmp(argv[2], "--deployment") == 0)
+    /* 解析命令行参数：支持 --deployment <id> 与 --deployment=<id> 指定部署配置 */
+    if (argc >= 2 && strcmp(argv[1], prepare_command) == 0)
     {
-        deployment = emaster_deployment_config_by_id(argv[3]);
-        if (deployment == NULL)
+        if (argc == 2)
         {
-            fprintf(stderr, "错误：未找到部署配置 '%s'\n", argv[3]);
-            fprintf(stderr, "可用的部署配置：\n");
-            for (size_t i = 0U; i < emaster_deployment_config_count(); ++i)
+            /* 无额外参数时自动匹配当前主机 */
+            deployment = emaster_cli_deployment_for_host("emaster-dc-prepare", prepare_command);
+            if (deployment == NULL)
             {
-                const emaster_deployment_config_t *cfg = emaster_deployment_config_at(i);
-                if (cfg != NULL)
-                {
-                    fprintf(stderr, "  %s", cfg->deployment_id);
-                    if (cfg->hostname != NULL)
-                    {
-                        fprintf(stderr, " (主机=%s)", cfg->hostname);
-                    }
-                    fprintf(stderr, "\n");
-                }
+                /* 共享实现已输出原因与下一步 */
+                return 1;
             }
-            return 2;
         }
-    }
-    else if (argc == 2 && strcmp(argv[1], prepare_command) == 0)
-    {
-        /* 无额外参数时自动匹配当前主机 */
-        deployment = deployment_for_current_host();
-        if (deployment == NULL)
+        else
         {
-            /* deployment_for_current_host 已输出详细错误信息 */
-            return 1;
+            const char *value = NULL;
+            bool consumed_next = false;
+            const emaster_cli_option_result_t result = emaster_cli_option_match(
+                argv[2], "--deployment", (argc > 3) ? argv[3] : NULL, &value, &consumed_next);
+            const int consumed = consumed_next ? 3 : 2;
+
+            if (result != EMASTER_CLI_OPTION_VALUE || consumed != argc - 1)
+            {
+                print_usage(stderr, argv[0], prepare_command);
+                return 2;
+            }
+            deployment = emaster_deployment_config_by_id(value);
+            if (deployment == NULL)
+            {
+                fprintf(stderr, "错误：未找到部署配置 '%s'\n", value);
+                fprintf(stderr, "可用的部署配置：\n");
+                for (size_t i = 0U; i < emaster_deployment_config_count(); ++i)
+                {
+                    const emaster_deployment_config_t *cfg = emaster_deployment_config_at(i);
+                    if (cfg != NULL)
+                    {
+                        fprintf(stderr, "  %s", cfg->deployment_id);
+                        if (cfg->hostname != NULL)
+                        {
+                            fprintf(stderr, " (主机=%s)", cfg->hostname);
+                        }
+                        fprintf(stderr, "\n");
+                    }
+                }
+                return 2;
+            }
         }
     }
     else

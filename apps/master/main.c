@@ -5,6 +5,8 @@
 #include "emaster/bus/command_socket_path.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/cli.h"
+#include "emaster/cli/deployment_for_host.h"
+#include "emaster/cli/option_match.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_load.h"
 #include "emaster/messages.h"
@@ -350,58 +352,6 @@ static bool install_signal_handlers(void) {
  * 在当前主机上查找唯一匹配的部署配置。
  * 若找到多个匹配，返回 NULL 并输出候选配置列表到 stderr。
  */
-static const emaster_deployment_config_t *deployment_for_current_host(void) {
-    char hostname[256];
-    const emaster_deployment_config_t *match = NULL;
-    const emaster_deployment_config_t *candidates[16];
-    size_t candidate_count = 0U;
-    size_t index;
-
-    if (gethostname(hostname, sizeof(hostname) - 1U) != 0) {
-        return NULL;
-    }
-    hostname[sizeof(hostname) - 1U] = '\0';
-
-    /* 收集所有匹配的配置 */
-    for (index = 0U; index < emaster_deployment_config_count(); ++index) {
-        const emaster_deployment_config_t *candidate = emaster_deployment_config_at(index);
-        if (candidate != NULL && candidate->hostname != NULL &&
-            strcmp(hostname, candidate->hostname) == 0) {
-            if (match == NULL) {
-                match = candidate;
-            }
-            if (candidate_count < sizeof(candidates) / sizeof(candidates[0])) {
-                candidates[candidate_count++] = candidate;
-            }
-        }
-    }
-
-    /* 唯一匹配时返回配置 */
-    if (candidate_count == 1U) {
-        return match;
-    }
-
-    /* 多个匹配时输出候选列表并返回 NULL */
-    if (candidate_count > 1U) {
-        fprintf(stderr, "错误：当前主机 %s 有 %zu 个匹配的部署配置：\n",
-                hostname, candidate_count);
-        for (index = 0U; index < candidate_count; ++index) {
-            fprintf(stderr, "  %zu. %s", index + 1U, candidates[index]->deployment_id);
-            if (candidates[index]->topology != NULL) {
-                fprintf(stderr, " (拓扑=%s, 从站数=%zu)",
-                        candidates[index]->topology->topology_id,
-                        candidates[index]->topology->slave_count);
-            }
-            fprintf(stderr, "\n");
-        }
-        fprintf(stderr, "请使用 --deployment 参数指定：\n");
-        fprintf(stderr, "  emaster-master --deployment %s\n",
-                candidates[0]->deployment_id);
-    }
-
-    return NULL;
-}
-
 static void print_usage(FILE *out, const char *program)
 {
     fprintf(out, "用法：%s [--config-dir <目录>] [--deployment <部署ID>]\n", program);
@@ -461,13 +411,42 @@ int main(int argc, char **argv) {
         bool bad_usage = false;
 
         for (argument_index = 1; argument_index < argc && !bad_usage; ++argument_index) {
-            if (strcmp(argv[argument_index], "--config-dir") == 0 && argument_index + 1 < argc) {
-                config_directory = argv[++argument_index];
-            } else if (strcmp(argv[argument_index], "--deployment") == 0 &&
-                       argument_index + 1 < argc) {
-                requested_deployment = argv[++argument_index];
-            } else {
+            const char *argument = argv[argument_index];
+            const char *next = (argument_index + 1 < argc) ? argv[argument_index + 1] : NULL;
+            const char *value = NULL;
+            bool consumed_next = false;
+            emaster_cli_option_result_t result;
+
+            /*
+             * 主站没有位置参数，所以 `--` 之后还有东西就是用法错误。
+             * 单独一个 `--` 是空操作，认下来。
+             */
+            if (strcmp(argument, "--") == 0) {
+                bad_usage = argument_index + 1 < argc;
+                break;
+            }
+
+            result = emaster_cli_option_match(argument, "--config-dir", next, &value, &consumed_next);
+            if (result == EMASTER_CLI_OPTION_VALUE) {
+                config_directory = value;
+            } else if (result == EMASTER_CLI_OPTION_MISSING) {
                 bad_usage = true;
+                break;
+            } else {
+                result = emaster_cli_option_match(argument, "--deployment", next, &value,
+                                                  &consumed_next);
+                if (result == EMASTER_CLI_OPTION_VALUE) {
+                    requested_deployment = value;
+                } else if (result == EMASTER_CLI_OPTION_MISSING) {
+                    bad_usage = true;
+                    break;
+                } else {
+                    bad_usage = true;
+                    break;
+                }
+            }
+            if (consumed_next) {
+                ++argument_index;
             }
         }
         if (bad_usage) {
@@ -481,9 +460,9 @@ int main(int argc, char **argv) {
         if (requested_deployment != NULL) {
             deployment = emaster_deployment_config_by_id(requested_deployment);
         } else {
-            deployment = deployment_for_current_host();
+            deployment = emaster_cli_deployment_for_host("emaster-master", NULL);
             if (deployment == NULL) {
-                /* deployment_for_current_host 已输出详细错误信息 */
+                /* 共享实现已输出原因与下一步 */
                 return 1;
             }
         }

@@ -24,6 +24,7 @@
 
 #include "emaster/bus/command_socket_path.h"
 #include "emaster/cli.h"
+#include "emaster/cli/option_match.h"
 
 #define STATUS_RESPONSE_MAX 2048
 #define STATUS_MAX_AXES 16
@@ -381,15 +382,15 @@ static bool frame_is_truncated(const char *text)
     return strstr(text, "TRUNC") != NULL;
 }
 
-static void print_usage(const char *program)
+static void print_usage(FILE *out, const char *program)
 {
-    printf("用法：%s [--watch 毫秒] [选项]\n", program);
-    printf("  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
-           EMASTER_DEPLOYMENT_ENV);
-    printf("  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
-    printf("  --watch：周期刷新；不指定时只读一次\n");
-    printf("  --help：打印本说明后退出\n");
-    printf("  --version：打印版本号后退出\n");
+    fprintf(out, "用法：%s [--watch 毫秒] [选项]\n", program);
+    fprintf(out, "  --deployment <部署ID>  连接该部署的命令套接字（默认取 $%s）\n",
+            EMASTER_DEPLOYMENT_ENV);
+    fprintf(out, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
+    fprintf(out, "  --watch：周期刷新；不指定时只读一次\n");
+    fprintf(out, "  --help：打印本说明后退出\n");
+    fprintf(out, "  --version：打印版本号后退出\n");
 }
 
 int main(int argc, char **argv)
@@ -404,7 +405,7 @@ int main(int argc, char **argv)
     switch (emaster_cli_info(argc, argv))
     {
     case EMASTER_CLI_HELP:
-        print_usage(argv[0]);
+        print_usage(stdout, argv[0]);
         return 0;
     case EMASTER_CLI_VERSION:
         emaster_cli_print_version("emaster-status");
@@ -420,9 +421,32 @@ int main(int argc, char **argv)
                         "或设环境变量 %s\n", EMASTER_DEPLOYMENT_ENV);
         return 2;
     }
-    if (argc > 2 && strcmp(argv[1], "--watch") == 0)
+    /*
+     * 认不出来的选项要在这里停下。先前不查这个，`--bogus` 被直接忽略，工具照常读一次
+     * 状态就退出，打错的选项一声不吭。`--watch=<毫秒>` 与 `--watch <毫秒>` 都认。
+     */
+    if (argc > 1)
     {
-        watch_ms = strtol(argv[2], NULL, 10);
+        const char *value = NULL;
+        bool consumed_next = false;
+        const emaster_cli_option_result_t result = emaster_cli_option_match(
+            argv[1], "--watch", (argc > 2) ? argv[2] : NULL, &value, &consumed_next);
+        const int consumed = consumed_next ? 2 : 1;
+
+        if (result == EMASTER_CLI_OPTION_MISSING)
+        {
+            fprintf(stderr, "错误：--watch 缺毫秒数\n");
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
+        if (result != EMASTER_CLI_OPTION_VALUE || consumed != argc - 1)
+        {
+            fprintf(stderr, "错误：不认识的选项 '%s'\n",
+                    (consumed + 1 < argc) ? argv[consumed + 1] : argv[1]);
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
+        watch_ms = strtol(value, NULL, 10);
     }
     if (watch_ms < 0)
     {

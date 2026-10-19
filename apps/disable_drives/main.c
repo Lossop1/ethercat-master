@@ -167,6 +167,30 @@ int main(int argc, char *argv[])
         print_usage(stdout, argv[0]);
         return 0;
     }
+    /*
+     * 第一个位置参数是网卡名。以 `-` 开头的一律当选项——先前不查这个，`--bogus` 会被
+     * 当成网卡名，最后报"需要 root"，把用法错误说成了权限问题。
+     * `--` 之后的那一个才算网卡名。
+     */
+    if (strcmp(argv[1], "--") == 0)
+    {
+        if (argc < 3)
+        {
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
+        for (int index = 1; index + 1 < argc; ++index)
+        {
+            argv[index] = argv[index + 1];
+        }
+        --argc;
+    }
+    else if (argv[1][0] == '-')
+    {
+        fprintf(stderr, "错误：不认识的选项 '%s'\n", argv[1]);
+        print_usage(stderr, argv[0]);
+        return 2;
+    }
     if (argc > 3 || (argc == 3 && strcmp(argv[2], "--read") != 0))
     {
         print_usage(stderr, argv[0]);

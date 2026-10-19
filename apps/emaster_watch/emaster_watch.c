@@ -21,6 +21,7 @@
 
 #include "emaster/bus/command_socket_path.h"
 #include "emaster/cli.h"
+#include "emaster/cli/option_match.h"
 
 /* 套接字路径由 --socket / --deployment / $EMASTER_DEPLOYMENT 决定，见
  * command_socket_path.h。这里不再写死某个部署，main 解析失败就直接退出。 */
@@ -198,11 +199,23 @@ int main(int argc, char **argv)
 
     if (argc > 1)
     {
+        const char *unknown = emaster_cli_first_unknown_option(argc, argv);
+
+        /*
+         * 认不出来的选项必须在这里停下。先前它会被当成刷新间隔去解析，报出
+         * "刷新间隔应在 50-5000ms 之间"——把"选项打错了"说成了"数值不合法"。
+         */
+        if (unknown != NULL)
+        {
+            fprintf(stderr, "错误：不认识的选项 '%s'\n", unknown);
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
         refresh_ms = strtol(argv[1], NULL, 10);
         if (refresh_ms < 50 || refresh_ms > 5000)
         {
-            fprintf(stderr, "刷新间隔应在 50-5000ms 之间\n");
-            return 1;
+            fprintf(stderr, "错误：刷新间隔 %ld 不在 50-5000ms 之间\n", refresh_ms);
+            return 2;
         }
     }
 

@@ -15,6 +15,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "emaster/cli/option_match.h"
+
 #define EMASTER_CONFIG_DIR_DEFAULT "config-runtime"
 
 /*
@@ -22,11 +24,16 @@
  * emaster_runtime_config_load()——不是所有子命令都需要配置，枚举网卡就不需要。
  *
  * 选项缺参数时返回 NULL，此时 argv 可能已被部分压缩，调用方应直接报用法错误退出。
+ *
+ * 带值的长选项两种写法都认：`--config-dir <目录>` 与 `--config-dir=<目录>`。`--` 结束
+ * 选项，它本身被吃掉，其后的参数一律当操作数原样留下。
  */
 static inline const char *emaster_cli_config_dir(int *argc, char **argv)
 {
+    static const char option[] = "--config-dir";
     const char *directory = NULL;
     int write_index = 1;
+    bool options_ended = false;
 
     if (argc == NULL || argv == NULL)
     {
@@ -35,18 +42,38 @@ static inline const char *emaster_cli_config_dir(int *argc, char **argv)
 
     for (int read_index = 1; read_index < *argc; ++read_index)
     {
-        if (strcmp(argv[read_index], "--config-dir") == 0)
-        {
-            const char *value = (read_index + 1 < *argc) ? argv[read_index + 1] : NULL;
+        const char *argument = argv[read_index];
+        const char *next = (read_index + 1 < *argc) ? argv[read_index + 1] : NULL;
+        const char *value = NULL;
+        bool consumed_next = false;
+        emaster_cli_option_result_t result;
 
-            if (value == NULL || value[0] == '\0' || value[0] == '-')
+        if (options_ended || strcmp(argument, "--") == 0)
+        {
+            if (!options_ended)
             {
-                return NULL;
+                options_ended = true;
+                continue;
             }
-            directory = value;
-            ++read_index;
+            argv[write_index++] = argv[read_index];
             continue;
         }
+
+        result = emaster_cli_option_match(argument, option, next, &value, &consumed_next);
+        if (result == EMASTER_CLI_OPTION_MISSING)
+        {
+            return NULL;
+        }
+        if (result == EMASTER_CLI_OPTION_VALUE)
+        {
+            directory = value;
+            if (consumed_next)
+            {
+                ++read_index;
+            }
+            continue;
+        }
+
         argv[write_index++] = argv[read_index];
     }
     *argc = write_index;

@@ -17,6 +17,8 @@
 #include "emaster/audit/run_report.h"
 #include "emaster/bus/control_session.h"
 #include "emaster/cli.h"
+#include "emaster/cli/deployment_for_host.h"
+#include "emaster/cli/option_match.h"
 #include "emaster/config/runtime_config.h"
 #include "emaster/config/runtime_config_cli.h"
 #include "emaster/config/runtime_config_load.h"
@@ -232,70 +234,6 @@ static emaster_position_target_source_result_t probe_position_target_source(
  * 在当前主机上查找唯一匹配的部署配置。
  * 若找到多个匹配，返回 NULL 并输出候选配置列表到 stderr。
  */
-static const emaster_deployment_config_t *deployment_for_current_host(void)
-{
-    char hostname[256];
-    const emaster_deployment_config_t *match = NULL;
-    const emaster_deployment_config_t *candidates[16];
-    size_t candidate_count = 0U;
-    size_t index;
-
-    if (gethostname(hostname, sizeof(hostname) - 1U) != 0)
-    {
-        return NULL;
-    }
-    hostname[sizeof(hostname) - 1U] = '\0';
-
-    /* 收集所有匹配的配置 */
-    for (index = 0U; index < emaster_deployment_config_count(); ++index)
-    {
-        const emaster_deployment_config_t *candidate =
-            emaster_deployment_config_at(index);
-        if (candidate != NULL && candidate->hostname != NULL &&
-            strcmp(hostname, candidate->hostname) == 0)
-        {
-            if (match == NULL)
-            {
-                match = candidate;
-            }
-            if (candidate_count < sizeof(candidates) / sizeof(candidates[0]))
-            {
-                candidates[candidate_count++] = candidate;
-            }
-        }
-    }
-
-    /* 唯一匹配时返回配置 */
-    if (candidate_count == 1U)
-    {
-        return match;
-    }
-
-    /* 多个匹配时输出候选列表并返回 NULL */
-    if (candidate_count > 1U)
-    {
-        fprintf(stderr, "错误：当前主机 %s 有 %zu 个匹配的部署配置：\n",
-                hostname, candidate_count);
-        for (index = 0U; index < candidate_count; ++index)
-        {
-            fprintf(stderr, "  %zu. %s",
-                    index + 1U, candidates[index]->deployment_id);
-            if (candidates[index]->topology != NULL)
-            {
-                fprintf(stderr, " (拓扑=%s, 从站数=%zu)",
-                        candidates[index]->topology->topology_id,
-                        candidates[index]->topology->slave_count);
-            }
-            fprintf(stderr, "\n");
-        }
-        fprintf(stderr, "请使用 --deployment 参数指定：\n");
-        fprintf(stderr, "  emaster-target-probe --deployment %s\n",
-                candidates[0]->deployment_id);
-    }
-
-    return NULL;
-}
-
 /* 回调闭环的判定只依据本工具自己的计数和会话报告，不复述中文结果目录。 */
 static void print_probe_summary(const emaster_probe_ramp_t *ramp,
                                 const emaster_control_session_report_t *report,
@@ -469,13 +407,34 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* 解析命令行参数：支持 --deployment <id> 指定部署配置 */
-    if (argc == 3 && strcmp(argv[1], "--deployment") == 0)
+    /* 解析命令行参数：支持 --deployment <id> 与 --deployment=<id> 指定部署配置 */
+    if (argc == 1)
     {
-        deployment = emaster_deployment_config_by_id(argv[2]);
+        /* 无参数时自动匹配当前主机。这是一个默认流程，所以不把无参数改成出帮助。 */
+        deployment = emaster_cli_deployment_for_host("emaster-target-probe", NULL);
         if (deployment == NULL)
         {
-            fprintf(stderr, "错误：未找到部署配置 '%s'\n", argv[2]);
+            /* 共享实现已输出原因与下一步 */
+            return 1;
+        }
+    }
+    else
+    {
+        const char *value = NULL;
+        bool consumed_next = false;
+        const emaster_cli_option_result_t result = emaster_cli_option_match(
+            argv[1], "--deployment", (argc > 2) ? argv[2] : NULL, &value, &consumed_next);
+        const int consumed = consumed_next ? 2 : 1;
+
+        if (result != EMASTER_CLI_OPTION_VALUE || consumed != argc - 1)
+        {
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
+        deployment = emaster_deployment_config_by_id(value);
+        if (deployment == NULL)
+        {
+            fprintf(stderr, "错误：未找到部署配置 '%s'\n", value);
             fprintf(stderr, "可用的部署配置：\n");
             for (size_t i = 0U; i < emaster_deployment_config_count(); ++i)
             {
@@ -492,21 +451,6 @@ int main(int argc, char **argv)
             }
             return 2;
         }
-    }
-    else if (argc == 1)
-    {
-        /* 无参数时自动匹配当前主机。这是一个默认流程，所以不把无参数改成出帮助。 */
-        deployment = deployment_for_current_host();
-        if (deployment == NULL)
-        {
-            /* deployment_for_current_host 已输出详细错误信息 */
-            return 1;
-        }
-    }
-    else
-    {
-        print_usage(stderr, argv[0]);
-        return 2;
     }
 
     if (!install_signal_handlers())

@@ -19,6 +19,7 @@
 
 #include "emaster/bus/command_socket_path.h"
 #include "emaster/cli.h"
+#include "emaster/cli/option_match.h"
 
 /* 套接字路径由 --socket / --deployment / $EMASTER_DEPLOYMENT 决定，见
  * command_socket_path.h。这里不再写死某个部署，main 解析失败就直接退出。 */
@@ -214,6 +215,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "  加 --deployment <部署ID>，或 --socket <路径>，"
                         "或设环境变量 %s\n", EMASTER_DEPLOYMENT_ENV);
         return 2;
+    }
+    /* 认不出来的选项要在这里停下，否则它会被忽略，工具照常起来。 */
+    {
+        const char *unknown = emaster_cli_first_unknown_option(argc, argv);
+
+        if (unknown != NULL)
+        {
+            fprintf(stderr, "错误：不认识的选项 '%s'\n", unknown);
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
     }
 
     /* 安装信号处理 */

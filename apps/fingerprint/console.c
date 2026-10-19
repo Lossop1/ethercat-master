@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "console.h"
+#include "emaster/cli/option_match.h"
 #include "emaster/messages.h"
 
 #include <errno.h>
@@ -49,18 +50,30 @@ emaster_command_t emaster_console_parse_command(int argc, char **argv)
     {
         result.kind = EMASTER_COMMAND_DEPLOYMENTS;
     }
-    else if (argc == 3 && strcmp(argv[1], emaster_text(EMASTER_TEXT_COMMAND_CAPTURE)) == 0)
+    else if (argc >= 3 && strcmp(argv[1], emaster_text(EMASTER_TEXT_COMMAND_CAPTURE)) == 0)
     {
-        result.kind = EMASTER_COMMAND_CAPTURE;
-        result.output_path = argv[2];
-        result.deployment_id = NULL;  /* 自动匹配当前主机 */
-    }
-    else if (argc == 5 && strcmp(argv[1], emaster_text(EMASTER_TEXT_COMMAND_CAPTURE)) == 0 &&
-             strcmp(argv[3], "--deployment") == 0)
-    {
-        result.kind = EMASTER_COMMAND_CAPTURE;
-        result.output_path = argv[2];
-        result.deployment_id = argv[4];  /* 显式指定部署配置 */
+        if (argc == 3)
+        {
+            result.kind = EMASTER_COMMAND_CAPTURE;
+            result.output_path = argv[2];
+            result.deployment_id = NULL; /* 自动匹配当前主机 */
+        }
+        else if (argc == 4 || argc == 5)
+        {
+            /* 显式指定部署配置。`--deployment <ID>` 与 `--deployment=<ID>` 等价。 */
+            const char *value = NULL;
+            bool consumed_next = false;
+            const emaster_cli_option_result_t matched = emaster_cli_option_match(
+                argv[3], "--deployment", (argc == 5) ? argv[4] : NULL, &value, &consumed_next);
+            const int consumed = consumed_next ? 2 : 1;
+
+            if (matched == EMASTER_CLI_OPTION_VALUE && consumed == argc - 3)
+            {
+                result.kind = EMASTER_COMMAND_CAPTURE;
+                result.output_path = argv[2];
+                result.deployment_id = value;
+            }
+        }
     }
     return result;
 }
