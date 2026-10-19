@@ -20,7 +20,7 @@
 #   TRAVERSE    单程耗时（秒），默认 3
 #   DEGREES     单轴位移（输出轴度数），默认 30
 #   RATE        目标更新频率（Hz），默认 100
-#   WAVE        波形 triangle|sine，默认 triangle。**只对 MODE=csp 有效**：
+#   WAVE        波形 triangle|sine，默认 triangle。**只对位置模式 MODE=csp|mit 有效**：
 #               速度与力矩模式下发的数就是那个量本身，客户端固定发方波，
 #               加速度交给驱动器自己的斜坡（0x6083/0x6084），不合成波形
 #   TAG         产物文件名后缀，默认 recip30
@@ -31,10 +31,13 @@
 #                原地保持；0 = 全部轴一起走（默认）。"有一根轴不跟"的排查用
 #                这个把那一根单独拎出来——全动时它不动，可能是它自己的问题，
 #                也可能是多轴一起时的别的问题；单独动它还不动，就只剩它自己。
-#   MODE         控制模式 csp|csv|cst，默认 csp。它必须与部署所选方案的
-#                mode_value 一致（csp=8/csv=9/cst=10），两者不一致时轴根本不会
+#   MODE         控制模式 csp|mit|csv|cst，默认 csp。它必须与部署所选方案的
+#                mode_value 一致（csp=8/mit=5/csv=9/cst=10），两者不一致时轴根本不会
 #                执行目标，而脚本本身看不出来——客户端只报"目标发出去了"。
-#                非 csp 时 --degrees 不再有用（那三个模式的目标不是位置），
+#                mit 是厂商的复合控制律：主站发出去的同样是位置计数，力矩由驱动器
+#                按方案里写死的 Kp/Kd 与位置差自己算，所以它按位置模式处理，
+#                --degrees 与 --wave 都照 csp 那样用（增益在 SAFEOP→OP 时写一次，
+#                不由客户端逐拍给）。非位置模式（csv/cst）时 --degrees 不再有用，
 #                位移改由下面两个量给出。
 #   VELOCITY_DEGREES  csv 的幅值，单位是「度/秒」（默认 5）：驱动器 0x60FF 收的是
 #                    计数/秒，客户端按每度计数换算后发出；换算依据是部署里那条
@@ -97,8 +100,8 @@ MODE=${MODE:-csp}
 VELOCITY_DEGREES=${VELOCITY_DEGREES:-5}
 TORQUE=${TORQUE:-10}
 case "$MODE" in
-    csp|csv|cst) ;;
-    *) echo "错误：MODE=$MODE 不是 csp|csv|cst" >&2; exit 2 ;;
+    csp|mit|csv|cst) ;;
+    *) echo "错误：MODE=$MODE 不是 csp|mit|csv|cst" >&2; exit 2 ;;
 esac
 
 SOCK=/tmp/emaster-${DEPLOYMENT}.sock

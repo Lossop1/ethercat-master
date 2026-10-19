@@ -6,8 +6,9 @@
 直接改目标。格式（协议 v1 文本）是当前的临时形态，入口和流向不变。
 
 发出的是什么量由部署选定的模式决定，命令本身不标量纲：位置模式下是位置计数
-（写 0x607A）、速度模式下是计数每秒（写 0x60FF）、力矩模式下**按驱动器的力矩
-单位**（写 0x6071）。力矩单位两家不一样：MT 是额定力矩的千分比（说明书口径
+（写 0x607A；**厂商 MIT 模式同样收位置计数**，力矩由驱动器按固定的 Kp/Kd 与
+位置差自己算，所以 MIT 归在位置一类）、速度模式下是计数每秒（写 0x60FF）、
+力矩模式下**按驱动器的力矩单位**（写 0x6071）。力矩单位两家不一样：MT 是额定力矩的千分比（说明书口径
 500 = 50%），良质 0x6071 是 0.1%（同一个数在良质上等于十倍的力矩）。主站按
 部署声明的量分派、不换算，本脚本按同一个声明生成目标，所以 --mode 必须与部署
 一致，力矩的幅值要按那台驱动器的单位给。
@@ -20,8 +21,9 @@
   python3 test_external_motion_client.py <socket_path> [选项]
 
 选项:
-  --mode M       csp（默认，位置计数）/ csv（速度计数每秒）/ cst（驱动器力矩单位）
-  --degrees D    各轴相对位移（输出轴度数，默认 30；仅 --mode csp）
+  --mode M       csp（默认，位置计数）/ mit（厂商 MIT，同样收位置计数）/
+                 csv（速度计数每秒）/ cst（驱动器力矩单位）
+  --degrees D    各轴相对位移（输出轴度数，默认 30；仅 --mode csp 与 mit）
   --velocity-degrees V  往返目标速度（输出轴度/秒，默认 5；仅 --mode csv）
   --torque P     目标力矩幅值，单位按驱动器（默认 10；仅 --mode cst）
   --duration S   单程模式的位移耗时（秒，默认 3）
@@ -31,7 +33,7 @@
   --cycles N     往返次数（0 = 不限次数，直到 --total 或主站结束）
   --traverse S   往返模式单程耗时（秒，默认 3）
   --wave W       往返波形：triangle（默认，匀速）或 sine（两端速度为零）。
-                 只对 --mode csp 有效：位置模式下形状只能由客户端给（驱动器只会
+                 只对位置模式（csp 与 mit）有效：位置模式下形状只能由客户端给（驱动器只会
                  照着一个个点走）；速度与力矩模式下发的数**就是**那个量本身，
                  再合成一条曲线等于让人造形状去支配加速度，所以那边每个单程只发一个
                  恒定值，加速度交给驱动器自己的斜坡（0x6083/0x6084）
@@ -201,10 +203,25 @@ SESSION_FIELDS = (
     "wkc", "wkc_expect", "wkc_err", "no_frame", "over_budget", "deadline_missed",
 )
 
+# 发出的是位置计数的模式。csp 是标准位置模式；mit 是厂商的复合控制律，主站发出去
+# 的同样是位置计数（0x607A 那一格），力矩由驱动器按固定的 Kp/Kd 与位置差自己算，
+# 所以它在这一层与 csp 同路：形状由客户端给，位移由 --degrees 折算。
+POSITION_MODES = ("csp", "mit")
+
 # 每个模式发出去的数与读回来的反馈各是哪一路。键取自 OBJECT_FIELDS 右列。
 # 位置模式本来就在用；速度/力矩两路原先没有客户端会给它们发数。
-MODE_FEEDBACK = {"csp": ("pos", "位置"), "csv": ("vel", "速度"), "cst": ("torque", "力矩")}
-MODE_TARGET_UNIT = {"csp": "counts", "csv": "counts/s", "cst": "驱动器力矩单位"}
+MODE_FEEDBACK = {
+    "csp": ("pos", "位置"),
+    "mit": ("pos", "位置"),
+    "csv": ("vel", "速度"),
+    "cst": ("torque", "力矩"),
+}
+MODE_TARGET_UNIT = {
+    "csp": "counts",
+    "mit": "counts",
+    "csv": "counts/s",
+    "cst": "驱动器力矩单位",
+}
 
 
 def parse_axis_values(response, key):
@@ -415,7 +432,7 @@ def hold_phase(t, traverse):
 
 def phase_for(mode, wave):
     """位置模式按 --wave，速度/力矩模式全程一个恒定值。"""
-    if mode == "csp":
+    if mode in POSITION_MODES:
         return sine_phase if wave == "sine" else triangle_phase
     return hold_phase
 
@@ -458,7 +475,8 @@ def dry_run(start, deltas, args):
     """不连主站，按参数生成一个往返周期的目标序列并核对偏移。"""
     phase_fn = phase_for(args.mode, args.wave)
     # 偏移上限是主站对位置模式的目标判据；速度/力矩两路主站不判，这里也不该判。
-    message = check_offset_limit(deltas, args.max_offset) if args.mode == "csp" else None
+    message = (check_offset_limit(deltas, args.max_offset)
+               if args.mode in POSITION_MODES else None)
     if message:
         print(message, flush=True)
     period = 1.0 / args.rate
@@ -583,8 +601,9 @@ def run_reciprocate(client, start, delta, args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("socket_path", nargs="?", default=None)
-    parser.add_argument("--mode", choices=("csp", "csv", "cst"), default="csp",
-                        help="目标量的模式，必须与部署选定的模式一致（默认 csp）")
+    parser.add_argument("--mode", choices=("csp", "mit", "csv", "cst"), default="csp",
+                        help="目标量的模式，必须与部署选定的模式一致（默认 csp；"
+                             "mit = 厂商复合控制律，与 csp 同收位置计数）")
     parser.add_argument("--velocity-degrees", type=float, default=5.0,
                         help="csv：往返目标速度（输出轴度/秒，默认 5）")
     parser.add_argument("--torque", type=int, default=10,
@@ -600,7 +619,7 @@ def main():
     parser.add_argument("--traverse", type=float, default=3.0, help="往返单程耗时（秒）")
     parser.add_argument("--wave", choices=("triangle", "sine"), default="triangle",
                         help="往返波形：triangle（匀速）或 sine（两端速度为零）。"
-                             "只对 --mode csp 有效；速度与力矩模式发的是固定值，"
+                             "只对位置模式（csp 与 mit）有效；速度与力矩模式发的是固定值，"
                              "翻转由驱动器自己的斜坡做，不合成波形")
     parser.add_argument("--total", type=float, default=0.0, help="往返总时长上限（秒）")
     parser.add_argument("--max-offset", type=int, default=114688,
@@ -631,7 +650,7 @@ def main():
         # 时其余轴的目标确实钉在起点上。
         per_degree = axis_counts_per_degree(
             "OK|axes=1,enc=16384|a1:bus=1,enc=16384/1,gear=28/1")[0]
-        if args.mode == "csp":
+        if args.mode in POSITION_MODES:
             amplitude = [int(round(args.degrees * per_degree))] * args.dry_run_axes
             unit = f"counts（{args.degrees:g}°）"
         else:
@@ -640,7 +659,7 @@ def main():
             unit = MODE_TARGET_UNIT[args.mode]
         swing = axis_deltas(args.dry_run_axes, amplitude, args.only)
         # 与连主站那条路一致：速度/力矩用对称的 ± 往返，起点不是 0 而是 -幅值。
-        if args.mode == "csp":
+        if args.mode in POSITION_MODES:
             start, deltas = [0] * args.dry_run_axes, swing
         else:
             start = [-value for value in swing]
@@ -677,7 +696,7 @@ def main():
     print(f"[client] 驱动器限幅 6072={parse_axis_values(status, 'maxT')}（驱动器单位） "
           f"6080={parse_axis_values(status, 'maxV')} counts/s", flush=True)
 
-    if args.mode == "csp":
+    if args.mode in POSITION_MODES:
         start = parse_axis_positions(status)
         amplitudes = axis_deltas(axis_count,
                                  [int(round(args.degrees * value)) for value in per_degree],
