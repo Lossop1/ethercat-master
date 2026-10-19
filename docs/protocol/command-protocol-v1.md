@@ -63,7 +63,8 @@ SDO 载荷是小端。对象不存在、不可读或邮箱失败时回
 - 参数个数与轴数完全相等。
 
 目标离该轴当前位置太远时主站会**拒收这一条**：不中止会话，不改变其余轴，`status` 里的
-`rejected=` 加一，报告里有轴号与偏移量。这条线的宽度由部署键
+`rejected=` 加一，`rej_axis=` / `rej_offset=` 给出最后一次拒收的轴号（从 1 起）与偏移计数；
+报告里有同样的现场。这条线的宽度由部署键
 `external_target_max_offset_millidegrees` 决定（默认 90°），按每轴自己的编码器与齿轮比
 折算成原始计数，所以 25:1 与 28:1 的轴得到不同的线。
 
@@ -107,7 +108,9 @@ ERROR|<正文>
 - 读不到的字段不编值，印明确的 "没读到"（如 `na`），不印 0——0 是一个看起来合理的读数。
 
 `status` 以 `state=` 开头，含 `cycle`、`axes`、`enabled`、`completed`、`wkc`、
-`wkc_expect`、`wkc_err`、`no_frame`、`over_budget`、`deadline_missed`、`rejected`。
+`wkc_expect`、`wkc_err`、`no_frame`、`over_budget`、`deadline_missed`、`rejected`、
+`tgt_age_ms`、`rej_axis`、`rej_offset`。逐轴字段含 `q=`（目标量的种类）与 `why=`
+（轴不动的首要原因：`ok`、`fault`、`halt`、`disabled`、`mode`、`maxT`、`timeout`）。
 `topology` 以 `axes=<轴数>,max_offset=<最小判据>` 开头，逐轴给
 `bus`、`enc=<增量>/<电机转数>`、`gear=<电机转数>/<输出轴转数>`。`dc` 以 `required=` 开头。
 
