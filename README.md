@@ -60,7 +60,6 @@
 | [`docs/time-and-space.txt`](docs/time-and-space.txt) | 对象、空间、时间与读写的运行期资料 |
 | [`docs/product/twincat-function-gap.md`](docs/product/twincat-function-gap.md) | 功能对标：本主站在哪一层、与 TwinCAT 逐层比什么、明确不做什么 |
 | [`docs/product/verified-combinations.md`](docs/product/verified-combinations.md) | 有台架证据的驱动与模式组合；未列出的按未验证处理 |
-| [`docs/product/mt-torque-and-current.md`](docs/product/mt-torque-and-current.md) | MT 驱动器的力矩与电流口径；手册与实测不一致的两处 |
 | `esi/README.md` | 设备描述放哪、从哪来 |
 | `config/README.md` | 配置各族逐个字段的语义 |
 | `tools/gen/device/README.md` | 设备上手工具的边界 |
@@ -318,7 +317,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 | 进不了 OP | 用 `status` 看主站状态，再看逐轴 AL 状态。拓扑或身份不匹配会拒绝建立周期控制 |
 | 轴不动 | 见下面两张表 |
 | 命令口连不上 | 主站刚启动的几十秒内套接字可能还没建好。客户端退避重试，不要快节奏重连 |
-| 报告里温度／电压／电流恒为 `—` | 设备档的 `slow_telemetry` 有没有声明这些对象；MT 没有 0x6078，电流显示 `na` 是正常的（见[MT 力矩与电流](docs/product/mt-torque-and-current.md)） |
+| 报告里温度／电压／电流恒为 `—` | 设备档的 `slow_telemetry` 有没有声明这些对象；MT 没有 0x6078，电流显示 `na` 是正常的 |
 | 报告里字段是 `-` | 取错了层。见[测试方案](docs/test-plan.md)的"报告字段层级"一节 |
 | 普通账号打不开报告目录 | 旧版本把目录建成 `0750`。执行一次 `sudo chmod -R a+rX runtime`；新版本建 `0755` |
 | 收尾显示 `OP=通过`，但有轴不在 OP | 那句走地址 0 广播，只照见环上最后一站。判"哪几根不在 OP"要看逐轴 `shutdown_al_entry` |
