@@ -10,11 +10,12 @@ stop/shutdown 是一句空话——报告里多一个 true，轴上什么都没�
 报错，只会让"我停了它"变成假的，而台架脚本当时还**断言**了这个空操作（"未使主站退出
 （已知缺陷）"），等于把缺陷固化成了期望。
 
-硬件上的端到端判据（发一次 stop，主站真的自行退出）只能在台架上做。这里判的是它成立的
+硬件上的端到端判据（发一次 shutdown，主站真的自行退出）只能在台架上做。这里判的是它成立的
 **结构前提**，四条：
 
-  1. 两条命令分支（stop / shutdown）各自调用那个抬高安全门输入的入口，且带上来源
-     `EMASTER_STOP_SOURCE_COMMAND`；全仓该入口的调用点**恰好两处**——不多开第三条停机路径；
+  1. `shutdown` 分支调用那个抬高安全门输入的入口，且带上来源
+     `EMASTER_STOP_SOURCE_COMMAND`；全仓该入口的调用点**恰好一处**——不多开第二条退会话路径。
+     `stop` 是另一件事：逐轴置 Halt（控制字 bit8），不退会话、不调用停机入口；
   2. `session_control.c` 里**不许再出现** `report->stop_requested =` 赋值：那是把"停机"
      降级成"记一笔"的老写法；
   3. 那个入口把**命令标志**置真，读取端（accessor）把**命令标志或回调**并起来——两半
@@ -22,8 +23,8 @@ stop/shutdown 是一句空话——报告里多一个 true，轴上什么都没�
   4. 全仓 `->stop_requested(` 只有**一处**（accessor 里读回调）。两个读点就是两条路，
      迟早有一条忘了改。
 
-变异对照在**内存里的副本**上做（绝不改仓库文件）：把命令分支改回老写法、把 accessor 拆掉
-一半、再直读回调一次，三处都必须被判红。
+变异对照在**内存里的副本**上做（绝不改仓库文件）：shutdown 分支改回老写法、stop 分支不置
+Halt、accessor 拆掉一半、再直读回调一次，四处都必须被判红。
 """
 
 import os
@@ -124,29 +125,43 @@ def case_body(text, case_label, limit=600):
 
 
 def check_command_branches(files):
-    """1/2：两条命令分支都去抬高安全门输入，且不再有"记一笔"的老写法。"""
+    """1/2：shutdown 抬高安全门输入；stop 逐轴 Halt；两条都不许"记一笔"。"""
     control = files.get(CONTROL)
     if control is None:
         bad(f"{CONTROL} 在", "存在", "读不到")
         return
-    for label in ("EMASTER_COMMAND_STOP_MOTION", "EMASTER_COMMAND_SHUTDOWN"):
-        body = case_body(control, label)
-        if body is None:
-            bad(f"命令分支 {label} 在", "存在", "找不到该 case")
-        elif REQUEST not in body:
-            bad(f"{label} 调用停机入口", REQUEST + f"（带 {SOURCE_COMMAND}）",
-                f"这一条分支里没有它：{body.strip()[:160]}")
-        elif SOURCE_COMMAND not in body:
-            bad(f"{label} 带上停机来源", SOURCE_COMMAND, f"没写来源：{body.strip()[:160]}")
-        else:
-            ok(f"{label} 抬高的是安全门读的那个输入（带 COMMAND 来源）")
+
+    stop_body = case_body(control, "EMASTER_COMMAND_STOP_MOTION")
+    if stop_body is None:
+        bad("命令分支 EMASTER_COMMAND_STOP_MOTION 在", "存在", "找不到该 case")
+    elif "emaster_cia402_controller_set_halt(" not in stop_body:
+        bad("stop 逐轴置 Halt", "emaster_cia402_controller_set_halt(",
+            f"这一条分支里没有它：{stop_body.strip()[:160]}")
+    elif REQUEST in stop_body:
+        bad("stop 不退会话", f"不调用 {REQUEST}",
+            "stop 走进了退会话的停机路径，客户端连接会被一起关掉")
+    else:
+        ok("stop 逐轴置 Halt，不调用退会话的停机入口")
+
+    body = case_body(control, "EMASTER_COMMAND_SHUTDOWN")
+    if body is None:
+        bad("命令分支 EMASTER_COMMAND_SHUTDOWN 在", "存在", "找不到该 case")
+    elif REQUEST not in body:
+        bad("EMASTER_COMMAND_SHUTDOWN 调用停机入口",
+            REQUEST + f"（带 {SOURCE_COMMAND}）",
+            f"这一条分支里没有它：{body.strip()[:160]}")
+    elif SOURCE_COMMAND not in body:
+        bad("EMASTER_COMMAND_SHUTDOWN 带上停机来源", SOURCE_COMMAND,
+            f"没写来源：{body.strip()[:160]}")
+    else:
+        ok("EMASTER_COMMAND_SHUTDOWN 抬高的是安全门读的那个输入（带 COMMAND 来源）")
 
     call_sites = count_calls(files, REQUEST)
-    if call_sites == 2:
-        ok(f"全仓停机入口恰好 2 处调用点（{REQUEST[:-1]}）")
+    if call_sites == 1:
+        ok(f"全仓停机入口恰好 1 处调用点（{REQUEST[:-1]}）")
     else:
-        bad("全仓停机入口恰好 2 处调用点", "2",
-            f"{call_sites} 处——多一处就是多开了一条停机路径")
+        bad("全仓停机入口恰好 1 处调用点", "1",
+            f"{call_sites} 处——stop 不该走这里，多一处就是多开了一条停机路径")
 
     if re.search(r"report->stop_requested\s*=(?!=)", control):
         bad(f"{CONTROL} 里没有把停机降级成记账的赋值", "0 处",
@@ -234,18 +249,30 @@ def mutate(files):
     control = files[CONTROL]
     supervisor = files[SUPERVISOR]
 
-    # 变异 1：命令分支改回老写法——只往报告里记一笔。
+    # 变异 1：shutdown 分支改回老写法——只往报告里记一笔。
     old = ('emaster_soem_session_request_stop(\n'
            '                                session, EMASTER_STOP_SOURCE_COMMAND);')
     new = 'session->report->stop_requested = true;  /* 变异：老写法 */'
     mutated = dict(files)
     if control.count(old) >= 1:
         mutated[CONTROL] = control.replace(old, new, 1)
-        results.append(("命令分支改回'记一笔'", mutated))
+        results.append(("shutdown 分支改回'记一笔'", mutated))
     else:
-        results.append(("命令分支改回'记一笔'（变异点没找到）", None))
+        results.append(("shutdown 分支改回'记一笔'（变异点没找到）", None))
 
-    # 变异 2：accessor 拆掉一半——只认回调，命令标志等于没人读。
+    # 变异 2：stop 分支不置 Halt——命令成功返回，但轴没收到任何停止命令。
+    stop_body = case_body(control, "EMASTER_COMMAND_STOP_MOTION")
+    mutated = dict(files)
+    if stop_body is not None and "emaster_cia402_controller_set_halt(" in stop_body:
+        mutated[CONTROL] = control.replace(
+            stop_body,
+            stop_body.replace("emaster_cia402_controller_set_halt(", "emaster_nothing(", 1),
+            1)
+        results.append(("stop 分支不置 Halt", mutated))
+    else:
+        results.append(("stop 分支不置 Halt（变异点没找到）", None))
+
+    # 变异 3：accessor 拆掉一半——只认回调，命令标志等于没人读。
     accessor_line = "    return session->stop_requested_by_command ||\n"
     mutated = dict(files)
     if accessor_line in supervisor:
@@ -254,7 +281,7 @@ def mutate(files):
     else:
         results.append(("accessor 不再读命令标志（变异点没找到）", None))
 
-    # 变异 3：绕过 accessor，另开一个直读回调的点（两个读点 = 两条路）。
+    # 变异 4：绕过 accessor，另开一个直读回调的点（两个读点 = 两条路）。
     tunnel = "    stop_requested = emaster_soem_session_stop_requested(session);\n"
     mutated = dict(files)
     if tunnel in supervisor:
@@ -288,7 +315,7 @@ def main():
             else:
                 print("      一项都没判红——变异混过去了")
                 return 1
-        print("\n三个变异全部被抓住（这正是要证明的）")
+        print("\n四个变异全部被抓住（这正是要证明的）")
         return 0
 
     files = load_sources(ROOT)
