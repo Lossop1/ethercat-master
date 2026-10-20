@@ -147,6 +147,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 - **第 3、6 步要人给值。** 第 3 步按第 2 步打印的待确认清单逐条处理。第 6 步的换算与限幅推不出来，只能自己填。
 - **不挂运动方案也能起主站。** 挂上才跑内置固定轨迹。要让应用自己给位置目标，就不挂，改用命令接口的 `set_external_target`（提交的是原始位置计数，不是角度）。
 - **第 4 步只在主站没在跑的时候做。** `emaster-scan` 会驱动总线并把从站还原到 INIT；主站在跑时执行会打断它。
+- **回零用 `--mode homing`。** 必须同时给 `--homing-timeout-ms`；`--homing-method`（0x6098）、`--homing-speed-switch`（0x6099:1）、`--homing-speed-zero`（0x6099:2）可省略，省略就保持驱动器里存的值。主站只把驱动器带进模式 6、置控制字 bit4、等状态字 bit12；全部轴到点后自动停机，bit13 或超时按故障停机。
 
 各步的产出与失败点：
 
@@ -373,7 +374,9 @@ sudo bash -c 'ulimit -r unlimited; exec \
 
 发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
 
-**没登记序列号时轴序就是总线顺序；登记了序列号时按序列号绑定。** `init-site --from-scan` 把扫描读到的 `0x1018:04` 逐台写进拓扑。登记后，同型号从站换了环序也照样对得上；登记了但读不到、或读到的值不相等，主站拒绝启动并点名到轴。没登记序列号的拓扑保持原行为：按 vendor/product/revision 取首个未分配的从站。`topology` 的回复带 `ser=`，是主站实际读到的序列号，可直接核对。**主站不做回零**：位置基准由驱动器零点与机械决定，上电后先确认参考位置再发目标。已验证的组合见[驱动与模式组合](docs/product/verified-combinations.md)。
+**没登记序列号时轴序就是总线顺序；登记了序列号时按序列号绑定。** `init-site --from-scan` 把扫描读到的 `0x1018:04` 逐台写进拓扑。登记后，同型号从站换了环序也照样对得上；登记了但读不到、或读到的值不相等，主站拒绝启动并点名到轴。没登记序列号的拓扑保持原行为：按 vendor/product/revision 取首个未分配的从站。`topology` 的回复带 `ser=`，是主站实际读到的序列号，可直接核对。
+
+**回零由执行层带模式、由驱动器走。** 用 `--mode homing` 生成的部署，各轴没有周期目标。主站把驱动器带进模式 6，在 Operation enabled 下置控制字 bit4，等状态字 bit12（homing attained）；bit13（homing error）或超过 `completion_timeout_ms` 按故障停机，全部轴到点后自动停机。回零方法与速度用 `--homing-*` 声明（0x6098 与 0x6099，写进 `safeop_to_op_sdo_writes`），不给就保持驱动器里的值。参考点准不准要在台架上核对。**回零尚未在台架验证。** 其他模式不做回零，位置基准由驱动器零点与机械决定。已验证的组合见[驱动与模式组合](docs/product/verified-combinations.md)。
 
 外部目标超时由 `external_target_timeout_ms` 指定，默认 200 ms。客户端 100 Hz 的目标更新率与主站 1 kHz 的 PDO 交换率不同。断连、目标暂停、重连必须分别测试。**不能假定自动恢复运动。**
 

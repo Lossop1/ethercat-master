@@ -186,6 +186,15 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
 判下去的结果是每一条目标都被拒。`none` 表示该模式没有周期目标（回零：参考点搜寻由驱动器自己
 走），反馈仍是实际位置。
 
+回零（`quantity: none`）另需 `completion_timeout_ms`：从主站第一次在 Operation enabled 下置控制字
+bit4 起，到驱动器报状态字 bit12（homing attained）的最长允许时间，毫秒。部署选中的回零模式必须
+给正数；方案里未选中的回零条目写 0，校验器也要求如此。驱动器报 bit13（homing error）或超过时限，
+会话按故障停机；全部轴到点后自动停机。回零方法（0x6098；17–35 是常见方法号，不是运行模式号）
+与两段速度（0x6099:1/2）用 `safeop_to_op_sdo_writes` 声明，不给就保持驱动器里存的值。主站不产生
+回零轨迹。`init-site --mode homing` 要求同时给 `--homing-timeout-ms`，并可给
+`--homing-method` / `--homing-speed-switch` / `--homing-speed-zero`。设备档的 `supported_modes`
+里没有 6 时，生成器拒绝回零方案。
+
 只要选中的 PDO 组把 `0x6072`（最大力矩）或 `0x6080`（最大电机转速）映射进 RxPDO，方案里
 就必须用 `safeop_to_op_sdo_writes` 给它们固定值。主站每拍写整块输出，漏声明就是每拍写 0；
 MT 驱动器在 `0x6072=0` 时使能成功、状态字正常，但拒绝出力。构建校验会拒绝这种方案，
