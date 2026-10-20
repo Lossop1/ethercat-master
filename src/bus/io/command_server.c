@@ -277,6 +277,11 @@ static void *listen_thread(void *arg)
         {
             command.type = EMASTER_COMMAND_QUERY_DC;
         }
+        else if (bytes_read >= 2 && strncmp(buffer, "al", 2) == 0 &&
+                 (buffer[2] == '\n' || buffer[2] == '\0'))
+        {
+            command.type = EMASTER_COMMAND_QUERY_AL;
+        }
         else if (bytes_read >= 8 && strncmp(buffer, "switch ", 7) == 0)
         {
             /* 注意：比较中包含空格分隔符 */

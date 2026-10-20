@@ -306,6 +306,87 @@ static void format_sdo_read_response(const emaster_soem_session_t *session,
 }
 
 /*
+ * 在线 AL 状态（G-04）的响应。与 `status` 同一种"会话级 + 逐轴"形态：
+ *
+ *   axes=<轴数>,ok=<读到台数>|a1:bus=<总线位置>,al=<状态或 na>,code=<状态码或 na>|...
+ *
+ * AL status 寄存器原值里低四位是状态（1 INIT、2 PRE-OP、3 BOOT、4 SAFE-OP、8 OP），
+ * 0x10 是错误位，所以 20（0x14）读作"SAFE-OP + 错误"。读不到就印 na：0 不是一个
+ * 合法的 AL 状态（在册从站最低是 INIT=1），但"0 = 没读到"的约定只在内部成立，
+ * 对客户端仍要求显式 na。
+ */
+static void format_al_read_response(const emaster_soem_session_t *session,
+                                    emaster_command_response_t *response)
+{
+    size_t axis_count = session->al_read_axis_count;
+    size_t readable = 0U;
+    size_t offset = 0U;
+
+    if (axis_count > (size_t)EMASTER_RUNTIME_FAILURE_MAX_AXES)
+    {
+        axis_count = (size_t)EMASTER_RUNTIME_FAILURE_MAX_AXES;
+    }
+    for (size_t axis = 0U; axis < axis_count; ++axis)
+    {
+        if (session->al_read_state_read[axis] || session->al_read_code_read[axis])
+        {
+            ++readable;
+        }
+    }
+    offset += (size_t)snprintf(response->message, sizeof(response->message),
+                               "axes=%zu,ok=%zu", axis_count, readable);
+    for (size_t axis = 0U; axis < axis_count; ++axis)
+    {
+        char state_text[8];
+        char code_text[16];
+        int written;
+
+        if (session->al_read_state_read[axis])
+        {
+            (void)snprintf(state_text, sizeof(state_text), "%u",
+                           (unsigned)session->al_read_state[axis]);
+        }
+        else
+        {
+            (void)snprintf(state_text, sizeof(state_text), "na");
+        }
+        if (session->al_read_code_read[axis])
+        {
+            (void)snprintf(code_text, sizeof(code_text), "0x%04X",
+                           (unsigned)session->al_read_code[axis]);
+        }
+        else
+        {
+            (void)snprintf(code_text, sizeof(code_text), "na");
+        }
+        written = snprintf(response->message + offset, sizeof(response->message) - offset,
+                           "|a%zu:bus=%u,al=%s,code=%s", axis + 1U,
+                           (unsigned)session->al_read_bus[axis], state_text, code_text);
+        if (written < 0)
+        {
+            break;
+        }
+        offset += (size_t)written;
+        if (offset >= sizeof(response->message))
+        {
+            break;
+        }
+    }
+    if (offset >= sizeof(response->message))
+    {
+        (void)snprintf(response->message + sizeof(response->message) - 8U, 8U, "|TRUNC");
+    }
+    if (readable == 0U)
+    {
+        response->success = false;
+        (void)snprintf(response->message, sizeof(response->message),
+                       "al read failed: 0/%zu 台有应答（观测线程可能已停止）", axis_count);
+        return;
+    }
+    response->success = true;
+}
+
+/*
  * 回零（G-02）。
  *
  * 回零与 CSP/CSV/CST 的根本差别是：目标不是主站给的。方法（0x6098）、两段速度
@@ -1074,7 +1155,50 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         session->sdo_read_pending = false;
                     }
                 }
-                if (!session->sdo_read_pending &&
+                /*
+                 * 未决的 `al`：形状与上面的 sdo_read 相同。差别只有一处——观测线程
+                 * 已经不在时，这里先回一句明确的失败再释放交接。sdo_read 那条路
+                 * 不回复，是因为一次被停机截断的邮箱读没有可用的结果；AL 读没有
+                 * 这个约束，客户端应当立刻知道"没读到"。
+                 */
+                if (session->al_read_pending) {
+                    const uint32_t completed = atomic_load_explicit(
+                        &session->al_read_completed_generation, memory_order_acquire);
+
+                    if (completed == session->al_read_pending_generation) {
+                        if (!session->al_read_timed_out) {
+                            emaster_command_response_t response;
+
+                            format_al_read_response(session, &response);
+                            (void)emaster_command_server_respond(session->command_server,
+                                                                 &response);
+                        }
+                        session->al_read_pending = false;
+                    }
+                    else if (!session->al_read_timed_out &&
+                             now_ns >= session->al_read_deadline_ns) {
+                        emaster_command_response_t response;
+
+                        response.success = false;
+                        (void)snprintf(response.message, sizeof(response.message),
+                                       "al read timeout：观测线程未在 5 s 内答复");
+                        (void)emaster_command_server_respond(session->command_server,
+                                                             &response);
+                        session->al_read_timed_out = true;
+                    }
+                    if (session->al_read_pending &&
+                        (!session->observer_thread_created || !session->observer_running)) {
+                        emaster_command_response_t response;
+
+                        response.success = false;
+                        (void)snprintf(response.message, sizeof(response.message),
+                                       "al read aborted：观测线程已停止");
+                        (void)emaster_command_server_respond(session->command_server,
+                                                             &response);
+                        session->al_read_pending = false;
+                    }
+                }
+                if (!session->sdo_read_pending && !session->al_read_pending &&
                     emaster_command_server_receive(session->command_server, &command)) {
                     emaster_command_response_t response;
                     response.success = false;
@@ -1897,6 +2021,38 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                         }
 
                         /*
+                         * 在线 AL 状态：与 sdo_read 同一套代次交接，只是观测线程
+                         * 发的是 FPRD 而不是邮箱。周期线程不碰寄存器读。
+                         */
+                        case EMASTER_COMMAND_QUERY_AL: {
+                            uint32_t generation;
+
+                            if (!session->observer_thread_created || !session->observer_running) {
+                                (void)snprintf(response.message, sizeof(response.message),
+                                               "观测线程未运行，无法读取 AL 状态");
+                                response.success = false;
+                                break;
+                            }
+
+                            generation = atomic_load_explicit(
+                                             &session->al_read_generation,
+                                             memory_order_relaxed) +
+                                         UINT32_C(1);
+                            if (generation == 0U) {
+                                generation = 1U;
+                            }
+                            session->al_read_pending = true;
+                            session->al_read_pending_generation = generation;
+                            /* 5 s：每台两次 FPRD，单次上限 500 µs，正常碰不到。 */
+                            session->al_read_deadline_ns =
+                                now_ns + UINT64_C(5000000000);
+                            session->al_read_timed_out = false;
+                            atomic_store_explicit(&session->al_read_generation, generation,
+                                                  memory_order_release);
+                            goto sdo_submitted;
+                        }
+
+                        /*
                          * 任意对象字典读：payload "<从站> <索引> <子索引>"。
                          *
                          * 这里只把请求交给观测线程，绝不自己发邮箱——周期线程上
@@ -2072,7 +2228,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 send_response:
                     (void)emaster_command_server_respond(session->command_server, &response);
                 sdo_submitted:
-                    /* sdo_read 已交给观测线程：本拍没有可发的响应。 */
+                    /* sdo_read / al 已交给观测线程：本拍没有可发的响应。 */
                     ;
                 }
             }

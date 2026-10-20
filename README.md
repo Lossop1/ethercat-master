@@ -375,6 +375,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 | `quick_stop`、`fault_reset` | 解析器已有入口。入口存在不代表相关安全功能已经验收 |
 | `recover_axis <轴号>` | 恢复一台处于故障隔离的轴。解析入口是后补上的，**未经台架验证** |
 | `sdo_read <从站号> <索引> <子索引>` | 读任意对象字典条目。从站号从 1 起，索引与子索引接受 `0x` 前缀。由观测线程执行，最多等 5 秒；成功给 `raw=` 与 `u=`/`i=`，失败明说原因，不把 0 当读数 |
+| `al` | 在线读每台配置从站的 AL 状态（0x0130）与 AL 状态码（0x0134）。由观测线程按映射后的总线位置执行，最多等 5 秒；读不到的项印 `na`。`status` 的逐轴字段全部来自过程数据，回答不了"是否掉出 OP"，用这条 |
 
 发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
 
@@ -413,7 +414,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 | `emaster-master` | 主站 |
 | `emaster-scan` | 只读扫描：逐台身份、序列号、AL 状态、`0x6041`、故障码、换算。用法一节第 4 步用它 |
 | `emaster-disable` | **走邮箱把驱动器失能**。主站起不来时也能用 |
-| `emaster-status` | 只读查询命令口一次：`status`。`--watch <毫秒>` 周期刷新 |
+| `emaster-status` | 只读查询命令口一次：`status`。`--watch <毫秒>` 周期刷新；`--al` 读一次逐台 AL 状态与状态码 |
 | `emaster-watch [间隔ms] --deployment <ID>` | 实时监控位置／速度／力矩／状态字 |
 | `emaster-move-deg --deployment <ID>` | 交互式角度控制，自动换算 |
 | `emaster-move --deployment <ID>` | 交互式脉冲控制，底层接口 |

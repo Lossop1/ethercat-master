@@ -214,6 +214,28 @@ typedef struct {
     uint64_t sdo_read_deadline_ns;
     bool sdo_read_timed_out;
     /*
+     * 在线 AL 状态（命令口 `al`）的交接。形状与上面的 sdo_read 相同：周期线程
+     * 写请求、抬代次；观测线程按映射后的总线位置逐台读 AL status 与状态码，
+     * 写完结果后把 completed_generation 抬到同一个数。
+     *
+     * 每位从站两次 FPRD，不走 ecx_readstate：后者在广播读不齐时会退化成每台
+     * 一次、每次 EC_TIMEOUTRET（2 ms），一次请求能把 12 轴变成 24 ms 的尾部。
+     * 这里每次读的超时由观测线程给定（al_read.c 的宏），且不在周期线程上执行。
+     */
+    _Atomic uint32_t al_read_generation;
+    _Atomic uint32_t al_read_completed_generation;
+    size_t al_read_axis_count;
+    uint16_t al_read_bus[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    bool al_read_state_read[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    bool al_read_code_read[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    uint16_t al_read_state[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    uint16_t al_read_code[EMASTER_RUNTIME_FAILURE_MAX_AXES];
+    /* 以下只有周期线程读写。 */
+    bool al_read_pending;
+    uint32_t al_read_pending_generation;
+    uint64_t al_read_deadline_ns;
+    bool al_read_timed_out;
+    /*
      * 慢速遥测快照（SDO 轮询拿到的电流/电压/温度/速度/错误码）。
      *
      * 取代原先"观测线程加锁写 session->axes[]、周期线程加锁抄一遍"的做法：那把锁

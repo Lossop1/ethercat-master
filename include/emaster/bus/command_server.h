@@ -37,6 +37,14 @@ typedef enum {
      * 重新生成，而客户手里通常没有配置树。
      */
     EMASTER_COMMAND_SDO_READ,
+    /*
+     * 在线 AL 状态：读每台配置从站的 0x0130（AL status）与 0x0134（AL status
+     * code）。由观测线程执行，每台两次 FPRD；周期线程只等结果。
+     *
+     * 存在的理由：`status` 的逐轴字段全部来自本拍 PDO，回答不了"驱动器是不是
+     * 掉出了 OP"。报告里有停机时的 AL，但那只在事后可见。
+     */
+    EMASTER_COMMAND_QUERY_AL,
 } emaster_command_type_t;
 
 /* 命令结构：封装命令类型和参数 */

@@ -616,6 +616,80 @@ static void observer_service_sdo_request(emaster_soem_session_t *session,
     *serviced_generation = generation;
 }
 
+/*
+ * 在线 AL 状态读（命令口 `al`）。
+ *
+ * 每台从站两次 FPRD：0x0130（AL status）与 0x0134（AL status code）。超时取 500 µs，
+ * 而 EC_TIMEOUTRET 是 2000 µs——台架正常往返在百微秒量级，这个上限足够，又让
+ * "12 台全掉"的最坏代价停在 12 ms 而不是 48 ms。慢的是观测线程，不是周期线程。
+ *
+ * 与 SDO 不同，这里不看 observer_read_permitted：FPRD 不是邮箱，不会改变从站状态；
+ * 但观测线程已经收到停止标志时仍跳过——停机窗口里没有理由再花这段时间。结果代次
+ * 无论如何都会抬，等待方因此不会永远等一个不来的答复。
+ */
+#define OBSERVER_AL_READ_TIMEOUT_US 500
+
+static void observer_service_al_request(emaster_soem_session_t *session,
+                                        uint32_t *serviced_generation)
+{
+    uint32_t generation =
+        atomic_load_explicit(&session->al_read_generation, memory_order_acquire);
+    size_t axis_count;
+
+    if (generation == *serviced_generation)
+    {
+        return;
+    }
+    axis_count = session->plan->axis_count;
+    if (axis_count > (size_t)EMASTER_RUNTIME_FAILURE_MAX_AXES)
+    {
+        axis_count = (size_t)EMASTER_RUNTIME_FAILURE_MAX_AXES;
+    }
+    session->al_read_axis_count = axis_count;
+    for (size_t axis = 0U; axis < (size_t)EMASTER_RUNTIME_FAILURE_MAX_AXES; ++axis)
+    {
+        session->al_read_bus[axis] = 0U;
+        session->al_read_state_read[axis] = false;
+        session->al_read_code_read[axis] = false;
+        session->al_read_state[axis] = 0U;
+        session->al_read_code[axis] = 0U;
+    }
+    if (session->observer_running)
+    {
+        for (size_t axis = 0U; axis < axis_count; ++axis)
+        {
+            const uint16_t slave_position =
+                emaster_soem_session_axis_slave(session, axis);
+            uint16_t raw = 0U;
+
+            session->al_read_bus[axis] = slave_position;
+            if (slave_position == 0U || slave_position > session->context.slavecount)
+            {
+                continue;
+            }
+            const uint16_t config_address =
+                session->context.slavelist[slave_position].configadr;
+
+            if (ecx_FPRD(&session->context.port, config_address, ECT_REG_ALSTAT,
+                         (uint16_t)sizeof(raw), &raw, OBSERVER_AL_READ_TIMEOUT_US) > 0)
+            {
+                session->al_read_state[axis] = etohs(raw);
+                session->al_read_state_read[axis] = true;
+            }
+            raw = 0U;
+            if (ecx_FPRD(&session->context.port, config_address, ECT_REG_ALSTATCODE,
+                         (uint16_t)sizeof(raw), &raw, OBSERVER_AL_READ_TIMEOUT_US) > 0)
+            {
+                session->al_read_code[axis] = etohs(raw);
+                session->al_read_code_read[axis] = true;
+            }
+        }
+    }
+    atomic_store_explicit(&session->al_read_completed_generation, generation,
+                          memory_order_release);
+    *serviced_generation = generation;
+}
+
 /* 50ms 睡眠同样要可中断，否则 join 还要多等一个完整睡眠周期。 */
 static void observer_sleep(emaster_soem_session_t *session, const struct timespec *interval)
 {
@@ -657,6 +731,7 @@ static void *observer_thread_func(void *arg)
     struct timespec interval = {0, 50000000}; /* 50ms */
     uint64_t iteration = 0U;
     uint32_t sdo_serviced_generation = 0U;
+    uint32_t al_serviced_generation = 0U;
     emaster_observer_stop_trace_t *trace = &session->report->observer_stop;
 
     /*
@@ -712,6 +787,9 @@ static void *observer_thread_func(void *arg)
         /* 命令口的单次 SDO 读。放在停止检查之前，理由与补读相同：停机途中也要
          * 给等待方一个明确结果，而不是让它等一个永远不会来的完成代次。 */
         observer_service_sdo_request(session, &sdo_serviced_generation);
+        /* 命令口的 AL 状态读。与 SDO 同一个理由放在停止检查之前：即使线程马上要
+         * 退出，等待方也要拿到一个明确的完成代次。 */
+        observer_service_al_request(session, &al_serviced_generation);
 
         if (!session->observer_running)
         {

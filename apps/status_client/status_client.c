@@ -149,13 +149,12 @@ static ssize_t read_response(int fd, char *buffer, size_t capacity)
 }
 
 /* 命令服务器统一以 "OK|" 或 "ERROR|" 开头，这里只做前缀切分，不解释语义。 */
-static int send_status_command(int fd, char *buffer, size_t capacity)
+static int send_command(int fd, const char *request, char *buffer, size_t capacity)
 {
-    const char request[] = "status\n";
     char *payload;
     char *newline;
 
-    if (write(fd, request, sizeof(request) - 1U) != (ssize_t)(sizeof(request) - 1U))
+    if (write(fd, request, strlen(request)) != (ssize_t)strlen(request))
     {
         perror("write");
         return -1;
@@ -408,6 +407,139 @@ static bool frame_is_truncated(const char *text)
     return strstr(text, "TRUNC") != NULL;
 }
 
+/*
+ * AL 状态的四个位是编码，低四位是状态，0x10 是错误位。只翻译这两种，
+ * 其余位（如 0x20 的从站需要重新配置）照原值打出来，不替读的人解释。
+ */
+static void format_al_state(const char *raw_text, char *out, size_t capacity)
+{
+    unsigned long raw;
+    char *end = NULL;
+    unsigned state;
+    const char *name;
+
+    if (strcmp(raw_text, "na") == 0)
+    {
+        (void)snprintf(out, capacity, "na");
+        return;
+    }
+    raw = strtoul(raw_text, &end, 10);
+    if (end == raw_text || *end != '\0' || raw > 0xFFUL)
+    {
+        (void)snprintf(out, capacity, "%s", raw_text);
+        return;
+    }
+    state = (unsigned)(raw & 0x0FUL);
+    switch (state)
+    {
+    case 1U:
+        name = "INIT";
+        break;
+    case 2U:
+        name = "PRE-OP";
+        break;
+    case 3U:
+        name = "BOOT";
+        break;
+    case 4U:
+        name = "SAFE-OP";
+        break;
+    case 8U:
+        name = "OP";
+        break;
+    default:
+        name = "?";
+        break;
+    }
+    (void)snprintf(out, capacity, "%lu(%s%s)", raw, name,
+                   (raw & 0x10UL) != 0UL ? "+错误位" : "");
+}
+
+/* `al` 的响应：首段是汇总，其余每段一台。读不到的台印 na，不印 0。 */
+static void print_al_response(const char *text)
+{
+    const char *cursor = text;
+    bool header_printed = false;
+
+    while (*cursor != '\0')
+    {
+        const char *segment_end = strchr(cursor, '|');
+        size_t length = segment_end == NULL ? strlen(cursor)
+                                            : (size_t)(segment_end - cursor);
+        char segment[256];
+
+        if (length >= sizeof(segment))
+        {
+            length = sizeof(segment) - 1U;
+        }
+        memcpy(segment, cursor, length);
+        segment[length] = '\0';
+
+        if (length > 2U && cursor[0] == 'a' && cursor[1] >= '0' && cursor[1] <= '9' &&
+            cursor[2] == ':')
+        {
+            char bus_text[16] = "na";
+            char al_text[16] = "na";
+            char code_text[16] = "na";
+            char state_text[32];
+            char *field;
+            char *saveptr = NULL;
+
+            for (field = strtok_r(segment + 3, ",", &saveptr); field != NULL;
+                 field = strtok_r(NULL, ",", &saveptr))
+            {
+                char *equals = strchr(field, '=');
+
+                if (equals == NULL)
+                {
+                    continue;
+                }
+                *equals = '\0';
+                if (strcmp(field, "bus") == 0)
+                {
+                    (void)snprintf(bus_text, sizeof(bus_text), "%s", equals + 1);
+                }
+                else if (strcmp(field, "al") == 0)
+                {
+                    (void)snprintf(al_text, sizeof(al_text), "%s", equals + 1);
+                }
+                else if (strcmp(field, "code") == 0)
+                {
+                    (void)snprintf(code_text, sizeof(code_text), "%s", equals + 1);
+                }
+            }
+            format_al_state(al_text, state_text, sizeof(state_text));
+            if (!header_printed)
+            {
+                printf("%-4s %-6s %-16s %s\n", "轴", "总线", "AL", "状态码");
+                header_printed = true;
+            }
+            printf("%-4d %-6s %-16s %s\n", atoi(segment + 1), bus_text, state_text,
+                   code_text);
+        }
+        else
+        {
+            /* 汇总段是 "axes=12,ok=12"；逗号换空格即可读。 */
+            char *comma;
+
+            while ((comma = strchr(segment, ',')) != NULL)
+            {
+                *comma = ' ';
+            }
+            printf("%s\n", segment);
+        }
+        if (segment_end == NULL)
+        {
+            break;
+        }
+        cursor = segment_end + 1;
+    }
+    if (!header_printed)
+    {
+        printf("（没有逐轴数据）\n");
+    }
+}
+
 static void print_usage(FILE *out, const char *program)
 {
     fprintf(out, "用法：%s [--watch 毫秒] [选项]\n", program);
@@ -415,6 +547,7 @@ static void print_usage(FILE *out, const char *program)
             EMASTER_DEPLOYMENT_ENV);
     fprintf(out, "  --socket <路径>        直接指定套接字路径，优先于 --deployment\n");
     fprintf(out, "  --watch：周期刷新；不指定时只读一次\n");
+    fprintf(out, "  --al：读取每台从站的 AL 状态与 AL 状态码，读一次后退出\n");
     fprintf(out, "  --help：打印本说明后退出\n");
     fprintf(out, "  --version：打印版本号后退出\n");
 }
@@ -423,6 +556,7 @@ int main(int argc, char **argv)
 {
     char socket_path[EMASTER_SOCKET_PATH_CAPACITY];
     long watch_ms = 0;
+    bool al_mode = false;
     int fd;
 
     /*
@@ -451,7 +585,17 @@ int main(int argc, char **argv)
      * 认不出来的选项要在这里停下。先前不查这个，`--bogus` 被直接忽略，工具照常读一次
      * 状态就退出，打错的选项一声不吭。`--watch=<毫秒>` 与 `--watch <毫秒>` 都认。
      */
-    if (argc > 1)
+    if (argc > 1 && strcmp(argv[1], "--al") == 0)
+    {
+        if (argc != 2)
+        {
+            fprintf(stderr, "错误：--al 不接受参数，也不能与 --watch 同用\n");
+            print_usage(stderr, argv[0]);
+            return 2;
+        }
+        al_mode = true;
+    }
+    else if (argc > 1)
     {
         const char *value = NULL;
         bool consumed_next = false;
@@ -491,11 +635,22 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (watch_ms == 0)
+    if (al_mode)
     {
         char buffer[STATUS_RESPONSE_MAX];
 
-        if (send_status_command(fd, buffer, sizeof(buffer)) != 0)
+        if (send_command(fd, "al\n", buffer, sizeof(buffer)) != 0)
+        {
+            close(fd);
+            return 1;
+        }
+        print_al_response(buffer);
+    }
+    else if (watch_ms == 0)
+    {
+        char buffer[STATUS_RESPONSE_MAX];
+
+        if (send_command(fd, "status\n", buffer, sizeof(buffer)) != 0)
         {
             close(fd);
             return 1;
@@ -518,7 +673,7 @@ int main(int argc, char **argv)
             status_frame_t frame;
             struct timespec delay;
 
-            if (send_status_command(fd, buffer, sizeof(buffer)) != 0)
+            if (send_command(fd, "status\n", buffer, sizeof(buffer)) != 0)
             {
                 break;
             }
