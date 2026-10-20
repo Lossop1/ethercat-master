@@ -98,6 +98,9 @@ MESSAGE_KEYS = [
     "control_session_match",
     "control_session_mismatch",
     "control_session_target_rejected",
+    "control_session_homing_failed",
+    "control_session_homing_timeout",
+    "control_session_homing_line",
     "control_session_unconfirmed",
     "control_session_unconfirmed_done",
     "control_session_not_configured",
@@ -174,6 +177,7 @@ MESSAGE_FORMATS = {
     "control_session_error_class_line": ("s", "s", "u", "u", "u"),
     "control_session_report_saved": ("s",),
     "control_session_report_failed": ("s",),
+    "control_session_homing_line": ("u", "u", "u", "s", "s", "u"),
 }
 
 PRINTF_CONVERSION = re.compile(

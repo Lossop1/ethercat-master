@@ -145,6 +145,24 @@ def validate_operation_profile(
             selected_mode_id is not None,
             f"已批准运行方案 {operation_id} 缺少 selected_mode_id",
         )
+    if selected_mode_id is not None and isinstance(modes, list):
+        selected = next(
+            (
+                mode
+                for mode in modes
+                if isinstance(mode, dict) and mode.get("id") == selected_mode_id
+            ),
+            None,
+        )
+        if isinstance(selected, dict) and selected.get("quantity") == "none":
+            check.require(
+                isinstance(selected.get("completion_timeout_ms"), int)
+                and not isinstance(selected.get("completion_timeout_ms"), bool)
+                and selected.get("completion_timeout_ms", 0) > 0,
+                f"运行方案 {operation_id} 选中的模式 {selected_mode_id} 声明 "
+                "quantity=none（由驱动器自己完成，主站只发启动并核对结果），"
+                "必须在 modes 里给 completion_timeout_ms（正整数，毫秒）",
+            )
     mode_initialization = pdo_set.get("mode_initialization") if pdo_set is not None else None
     if isinstance(mode_initialization, dict) and selected_mode_id is not None and isinstance(modes, list):
         selected_mode = next(
@@ -333,6 +351,24 @@ def validate_modes(
             f"运行方案 {operation_id} 的模式 {mode_label} 必须明确声明 quantity 为 "
             "none、position、velocity 或 torque 之一——"
             "目标通道收的那个数是什么量，主站不从模式号猜",
+        )
+        # 回零完成时限：未选中的模式可以写 0（设备模式集合里带一条 homing 而已），
+        # 选中的回零模式必须有正数——那一档由驱动器自己走完，主站只能等。
+        completion_timeout = mode.get("completion_timeout_ms", 0)
+        timeout_valid = (
+            isinstance(completion_timeout, int)
+            and not isinstance(completion_timeout, bool)
+            and 0 <= completion_timeout <= 0xFFFFFFFF
+        )
+        check.require(
+            timeout_valid,
+            f"运行方案 {operation_id} 的模式 {mode_label} 的 completion_timeout_ms "
+            "必须是 0..4294967295 的整数（毫秒）",
+        )
+        check.require(
+            mode.get("quantity") == "none" or not timeout_valid or completion_timeout == 0,
+            f"运行方案 {operation_id} 的模式 {mode_label} 的 completion_timeout_ms "
+            "只对 quantity=none 的模式有定义；其它模式请删掉这个键（或写 0）",
         )
         sdo_writes = mode.get("safeop_to_op_sdo_writes", [])
         check.require(

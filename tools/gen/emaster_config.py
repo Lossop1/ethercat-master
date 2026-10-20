@@ -519,10 +519,55 @@ def _mit_gain_writes(
     return writes
 
 
-def _modes_block(
-    device: dict[str, Any], pdo_set: dict[str, Any], wanted: str
+def _homing_writes(
+    method: int | None, speed_switch: int | None, speed_zero: int | None
 ) -> list[dict[str, Any]]:
-    """这套 PDO 方案能表达的模式，按 CiA 402 要求的字段逐个核对。"""
+    """回零参数，写成方案里"SAFE-OP 进入 OP 前写并读回"的固定值声明。
+
+    0x6098 是回零方法，0x6099:1/2 是找参考点与找零点两段速度。主站进 OP 前写，
+    随后驱动器在周期里按这三个值自己走。没给的不写 —— 驱动器保留它自己存的值，
+    生成结果里会说明这一点，不替客户编一个方法号。
+    """
+    writes: list[dict[str, Any]] = []
+    if method is not None:
+        writes.append({"index": "0x6098", "subindex": 0, "type": "i8", "value": method})
+    if speed_switch is not None:
+        writes.append(
+            {"index": "0x6099", "subindex": 1, "type": "u32", "value": speed_switch}
+        )
+    if speed_zero is not None:
+        writes.append(
+            {"index": "0x6099", "subindex": 2, "type": "u32", "value": speed_zero}
+        )
+    return writes
+
+
+def _modes_block(
+    device: dict[str, Any],
+    pdo_set: dict[str, Any],
+    wanted: str,
+    homing: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """这套 PDO 方案能表达的模式，按 CiA 402 要求的字段逐个核对。
+
+    homing 只在 --mode homing 时给：{"timeout_ms", "method", "speed_switch",
+    "speed_zero"}。前一项必给，后三项可以缺省。
+    """
+    homing_timeout_ms = 0
+    homing_sdo_writes: list[dict[str, Any]] = []
+    if homing is not None:
+        if wanted != "homing":
+            raise SystemExit("回零参数（方法/速度/完成时限）只能与 --mode homing 一起给")
+        homing_timeout_ms = int(homing.get("timeout_ms", 0))
+        homing_sdo_writes = _homing_writes(
+            homing.get("method"), homing.get("speed_switch"), homing.get("speed_zero")
+        )
+    if wanted == "homing" and homing_timeout_ms <= 0:
+        raise SystemExit(
+            "回零由驱动器自己走，主站只能等它的完成位；不给上限，一台找不到"
+            "参考点的驱动器会让会话一直使能着等下去。请同时给 --homing-timeout-ms "
+            "（正整数，毫秒），照台架实测的搜寻时间留出余量。"
+        )
     supported = device["protocol"]["supported_modes"]
     rx_names = _mode_fields(pdo_set, "rx")
     tx_names = _mode_fields(pdo_set, "tx")
@@ -542,9 +587,13 @@ def _modes_block(
             "required_rx_fields": list(rx_fields),
             "required_tx_fields": list(tx_fields),
             "mode_display_policy": "required",
+            # 只有回零有完成时限；其余模式的节拍由上层目标决定，主站不设总时限。
+            "completion_timeout_ms": homing_timeout_ms if mode_id == "homing" else 0,
         }
         if mode_id == "mit":
             mode["safeop_to_op_sdo_writes"] = _mit_gain_writes(device, pdo_set)
+        elif mode_id == "homing" and homing_sdo_writes:
+            mode["safeop_to_op_sdo_writes"] = homing_sdo_writes
         modes.append(mode)
     if not any(mode["id"] == wanted for mode in modes):
         raise SystemExit(
@@ -729,7 +778,15 @@ def init_site(args: argparse.Namespace) -> int:
     device = _find_device(config, args.device)
     pdo_set = _pick_pdo_set(device, args.pdo_set, args.mode)
     _check_pdo_set_mode(device, pdo_set, args.mode)
-    modes = _modes_block(device, pdo_set, args.mode)
+    homing_args = None
+    if args.mode == "homing":
+        homing_args = {
+            "timeout_ms": args.homing_timeout_ms,
+            "method": args.homing_method,
+            "speed_switch": args.homing_speed_switch,
+            "speed_zero": args.homing_speed_zero,
+        }
+    modes = _modes_block(device, pdo_set, args.mode, homing_args)
 
     host = args.hostname or socket.gethostname()
     host_slug = _slug(host)
@@ -884,6 +941,32 @@ def init_site(args: argparse.Namespace) -> int:
                 "safeop_to_op_sdo_writes，对象 0x6072，取驱动器额定力矩里的一档。",
             )
         )
+    if args.mode == "homing":
+        given = [
+            label
+            for label, value in (
+                ("0x6098 方法", args.homing_method),
+                ("0x6099:1 找参考点速度", args.homing_speed_switch),
+                ("0x6099:2 找零点速度", args.homing_speed_zero),
+            )
+            if value is not None
+        ]
+        kept = (
+            "；其余回零参数保持驱动器里存的值"
+            if len(given) < 3
+            else ""
+        )
+        notes.append(
+            (
+                "回零",
+                "进 OP 前写并读回 "
+                + ("、".join(given) if given else "（未声明任何回零参数）")
+                + kept
+                + f"。主站置控制字 bit4 启动，等状态字 bit12；bit13 或超过 "
+                f"{args.homing_timeout_ms} ms 判失败并停机。"
+                "回零结果（实际位置）就是该轴的参考点，必须在台架上核对。",
+            )
+        )
     _print_notes(notes)
     _print_next(
         "python3 tools/gen/emaster_config.py build",
@@ -990,6 +1073,26 @@ def main() -> int:
     site.add_argument("--mode", default="csp", help="运行模式，缺省 csp")
     site.add_argument("--pdo-set", help="用哪套 PDO 方案，缺省设备档的参照方案")
     site.add_argument(
+        "--homing-method",
+        type=int,
+        help="回零方法（0x6098，INT8）。只在 --mode homing 下有效；不给就保持驱动器里存的值",
+    )
+    site.add_argument(
+        "--homing-speed-switch",
+        type=int,
+        help="找参考点速度（0x6099:1，UINT32，单位随设备）。只在 --mode homing 下有效",
+    )
+    site.add_argument(
+        "--homing-speed-zero",
+        type=int,
+        help="找零点速度（0x6099:2，UINT32，单位随设备）。只在 --mode homing 下有效",
+    )
+    site.add_argument(
+        "--homing-timeout-ms",
+        type=int,
+        help="回零完成时限，毫秒；--mode homing 时必给。超时即判失败并停机",
+    )
+    site.add_argument(
         "--motion",
         help="部署要跑的那份运动方案的 ID（config/motion_profiles/<ID>.json）；"
         "不给就只有空转或外部目标",
@@ -1008,7 +1111,43 @@ def main() -> int:
     args = parser.parse_args()
     if getattr(args, "slaves", 1) < 1:
         raise SystemExit("--slaves 至少要 1")
+    if args.command == "init-site":
+        _check_homing_options(args)
     return args.handler(args)
+
+
+def _check_homing_options(args: argparse.Namespace) -> None:
+    """回零参数只属于回零模式；范围按对象类型当场拦，别等 build 才炸。"""
+    homing_options = (
+        args.homing_method,
+        args.homing_speed_switch,
+        args.homing_speed_zero,
+        args.homing_timeout_ms,
+    )
+    if args.mode != "homing":
+        if any(value is not None for value in homing_options):
+            raise SystemExit(
+                "回零参数（--homing-method / --homing-speed-* / --homing-timeout-ms）"
+                f"只在 --mode homing 下有效，而这次选的是 {args.mode}；请删掉这些选项"
+            )
+        return
+    if args.homing_method is not None and not -128 <= args.homing_method <= 127:
+        raise SystemExit("--homing-method 是 0x6098 的 INT8，取值范围 -128..127")
+    for label, value in (
+        ("--homing-speed-switch", args.homing_speed_switch),
+        ("--homing-speed-zero", args.homing_speed_zero),
+        ("--homing-timeout-ms", args.homing_timeout_ms),
+    ):
+        if value is not None and not 0 <= value <= 0xFFFFFFFF:
+            raise SystemExit(f"{label} 取值范围 0..4294967295")
+    if args.homing_timeout_ms is None:
+        raise SystemExit(
+            "--mode homing 必须同时给 --homing-timeout-ms（正整数，毫秒）。\n"
+            "回零由驱动器自己走，主站只能等它的完成位；没有上限，一台找不到"
+            "参考点的驱动器会让会话一直使能着等下去。"
+        )
+    if args.homing_timeout_ms == 0:
+        raise SystemExit("--homing-timeout-ms 必须大于 0；回零不允许不设完成时限")
 
 
 if __name__ == "__main__":

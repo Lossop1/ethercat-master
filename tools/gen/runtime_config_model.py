@@ -516,6 +516,26 @@ def operation_values(
                     }
                 )
 
+            # 完成时限（回零）。这里只做类型与归属检查；"选中的回零模式必须给正数"
+            # 要等 selected_mode_id 解析完才能判（见下面）。未选中的模式写 0 是允许的：
+            # 设备的模式集合里可以带一条 homing，而这次跑的是 csp。
+            completion_timeout = mode.get("completion_timeout_ms", 0)
+            if (
+                not isinstance(completion_timeout, int)
+                or isinstance(completion_timeout, bool)
+                or not 0 <= completion_timeout <= 0xFFFFFFFF
+            ):
+                raise ValueError(
+                    f"运行方案 {operation_id} 的模式 {mode_id} 的 "
+                    "completion_timeout_ms 必须是 0..4294967295 的整数（毫秒）"
+                )
+            if quantity != "none" and completion_timeout != 0:
+                raise ValueError(
+                    f"运行方案 {operation_id} 的模式 {mode_id} 的 "
+                    "completion_timeout_ms 只对 quantity=none 的模式有定义；"
+                    "其它模式请删掉这个键（或写 0）"
+                )
+
             if device is not None:
                 supported_modes = device.get("protocol", {}).get(
                     "supported_modes", {}
@@ -543,6 +563,7 @@ def operation_values(
                     "mode_display_policy": mode_display_policy,
                     "safeop_to_op_sdo_writes": sdo_writes,
                     "final_sdo_reads": final_reads,
+                    "completion_timeout_ms": completion_timeout,
                 }
             )
 
@@ -562,6 +583,24 @@ def operation_values(
             raise ValueError(
                 f"已批准运行方案 {operation_id} 缺少 selected_mode_id"
             )
+        if selected_mode_id is not None:
+            selected_mode = next(
+                (mode for mode in mode_values if mode["id"] == selected_mode_id),
+                None,
+            )
+            # 回零：参考点搜寻由驱动器自己走，主站除了等状态位没有第二只手。没有期限，
+            # 一台找不到参考点的驱动器会让会话一直使能着等下去。这一档必须显式给正数，
+            # 不替客户编一个"看起来合理"的毫秒数。
+            if (
+                selected_mode is not None
+                and selected_mode["quantity"] == "none"
+                and selected_mode["completion_timeout_ms"] == 0
+            ):
+                raise ValueError(
+                    f"运行方案 {operation_id} 选中的模式 {selected_mode_id} 声明 "
+                    "quantity=none（由驱动器自己完成，主站只发启动并核对结果），"
+                    "必须在 modes 里给 completion_timeout_ms（正整数，毫秒）"
+                )
         mode_initialization = pdo_set.get("mode_initialization") if pdo_set is not None else None
         if isinstance(mode_initialization, dict) and selected_mode_id is not None:
             selected_mode = next(

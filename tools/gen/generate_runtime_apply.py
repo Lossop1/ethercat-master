@@ -135,6 +135,8 @@ def runtime_rows(operations: list[dict[str, Any]], motions: list[dict[str, Any]]
                     f"EMASTER_MODE_QUANTITY_{mode['quantity'].upper()}",
                 ),
                 (f"{mbase}.display", f"EMASTER_MODE_DISPLAY_{mode['mode_display_policy'].upper()}"),
+                # 回零的完成时限；周期模式恒为 0（见 runtime_config_model 的说明）。
+                (f"{mbase}.completion_timeout_ms", str(mode["completion_timeout_ms"])),
                 (f"{mbase}.rx_fields.count", str(len(mode["rx_fields"]))),
                 (f"{mbase}.tx_fields.count", str(len(mode["tx_fields"]))),
             ]
@@ -295,6 +297,9 @@ def render(operations: list[dict[str, Any]], motions: list[dict[str, Any]]) -> s
         "    memcpy(leaf, base, sizeof(leaf));",
         '    if (!key_push(leaf, sizeof(leaf), "display") ||',
         "        !resolve_display_policy(reader, leaf, &out->mode_display_policy)) { return false; }",
+        "    memcpy(leaf, base, sizeof(leaf));",
+        '    if (!key_push(leaf, sizeof(leaf), "completion_timeout_ms") ||',
+        "        !emaster_config_reader_u32(reader, leaf, &out->completion_timeout_ms)) { return false; }",
         "",
         "    /* 字段名数组：const char *const *，运行期没法逐项赋值，",
         "       所以数组声明成指针可变的，赋给字段时显式转型。 */",
