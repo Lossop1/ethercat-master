@@ -308,8 +308,17 @@ emaster_control_session_status_t emaster_soem_control_session(
         plan->cycle_ns == 0U) {
         return EMASTER_CONTROL_SESSION_INVALID_ARGUMENT;
     }
+    /*
+     * 指纹由调用方在加载配置后填入，会话不读配置、也不写这两个字段（见头文件）。
+     * 清零输出字段时要把它带过去：整份 memset 会顺手抹掉，报告里就成了 null，
+     * status 里成了 na，而启动行明明印过指纹——三方对不上，现场只能怀疑自己看错。
+     */
+    const bool config_fingerprint_valid = report->config_fingerprint_valid;
+    const uint64_t config_fingerprint = report->config_fingerprint;
     memset(session, 0, sizeof(*session));
     memset(report, 0, sizeof(*report));
+    report->config_fingerprint_valid = config_fingerprint_valid;
+    report->config_fingerprint = config_fingerprint;
     memset(axis_storage, 0, plan->axis_count * sizeof(*axis_storage));
     /*
      * 原子字段不能只靠 memset 归零（C11 要求 atomic_init）。两个代次都从 0 起，
