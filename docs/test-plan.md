@@ -805,7 +805,9 @@ PRE-OP → SAFE-OP → OP 整段（控制字要到 OP 才发得出去，SAFE-OP 
     bit4，等状态字 bit12；bit13 或超过 `completion_timeout_ms` 按故障停机，全部轴到点
     自动停机。控制台逐轴印 `home=`，报告自 schema 21 起记启动/完成交换号。离线已证：
     生成器接受与拒绝的各种选项组合、扁平文件装载、单测与报告 JSON。待验：
-      - 台架两台驱动器的 ESI 是否声明模式 6；不声明时 `--mode homing` 应被第一步挡掉；
+      - ESI 是否声明模式 6 —— 2026-10-20：良质手册的模式只有 CSP/CSV/CST；
+        `init-site --mode homing` 以 exit 1 拒绝（PDO 方案 dynamic_csp_csv_cst
+        表达不了 homing）。台架没有支持模式 6 的驱动器，后续各项无法验证；
       - 写入的 0x6098/0x6099 是否读回一致，驱动器是否按该方法真的走；
       - bit4 启动后 bit12 在时限内到，且到点后自动停机；
       - 故意给一个走不到参考点的方法或过短时限，是否以 `HOMING_TIMEOUT` 停机；
