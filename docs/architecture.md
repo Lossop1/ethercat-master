@@ -413,7 +413,7 @@ SIGINT / stop / shutdown / 应用 stop callback
 | --- | --- | --- |
 | 观测线程共享普通 `volatile bool` | `session_internal.h` 的 `observer_running` / `observer_exited` 在 observer 与周期线程间读写；`volatile` 不提供 C 线程同步或原子语义，构成潜在数据竞争 | 改 C11 `_Atomic` 或明确的 mutex/condition 同步，并以 ThreadSanitizer/并发测试验证 |
 | 命令线程生命周期与连接并发 | `command_server.c` 的 `running` 是跨线程普通 bool；响应取 fd 快照后解锁再 send，监听线程同时可能 close/accept，数值相同的 fd 可能已代表新连接；队列项也未绑定连接代次 | 生命周期标志用原子或锁；明确连接所有权、代次与响应归属，覆盖快速断连/重连场景 |
-| 部分 DC/停机访问使用轴序号 | PDO 路径使用映射后的总线位置，但 `session_setup.c` 的 Sync0 配置及 `session_shutdown.c` 的关闭 Sync0/部分邮箱路径仍有 `axis_index + 1` | 配置轴与总线位置不连续时可能读写错误从站；此类拓扑不能直接宣称支持 |
+| 部分 DC/停机访问使用轴序号 | 已修（2026-10-20）：`session_setup.c` 的 Sync0 配置与读回、`session_shutdown.c` 的关闭 Sync0 与停机邮箱，以及 PDO 审计的从站标记，都改用映射后的总线位置。剩余 `axis_index + 1` 只出现在给人看的轴号与独立的 `emaster-dc-prepare` 工具（该工具先核对身份，不匹配即退出） | 代码路径已统一；非连续拓扑仍无实测，不宣称支持 |
 | DC 样本没有独立新鲜度标记 | `session_exchange.c` 以 `context.DCtime > 0` 判断有效；SOEM 未收到新响应时可能保留上一值 | `dc_startup_stable` 和 PI 反馈可能包含旧时间；需要按数据报有效性和周期序号复核 |
 | 目标判据用的是主站采样的实际位置 | `session_target.c` 的 `target_guard` 比较对象是上一拍从 PDO 解出的实际位置，不是驱动器内部锁存值 | 判据本身只拦量纲错位与未初始化值，这个差别不影响它的用途；若将来要求它做精度判定则必须先解决这一条 |
 

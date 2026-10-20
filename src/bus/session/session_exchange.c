@@ -986,9 +986,9 @@ emaster_control_session_status_t emaster_soem_session_exchange(emaster_soem_sess
         cycle_trace_push(&session->report->cycle_trace, &trace_sample);
     }
     for (size_t axis = 0U; axis < session->plan->axis_count; ++axis) {
-        if (!emaster_cia_process_image_audit_output(&session->images[axis], &session->report->audit,
-                                                    phase, (uint16_t)(axis + 1U), session->exchange,
-                                                    matched)) {
+        if (!emaster_cia_process_image_audit_output(
+                &session->images[axis], &session->report->audit, phase,
+                emaster_soem_session_axis_slave(session, axis), session->exchange, matched)) {
             return matched
                        ? fail_exchange(session, phase, EMASTER_CONTROL_SESSION_AUDIT_FAILED, true)
                        : EMASTER_CONTROL_SESSION_WKC_MISMATCH;

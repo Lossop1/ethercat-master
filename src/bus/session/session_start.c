@@ -292,8 +292,8 @@ emaster_control_session_status_t emaster_soem_session_start(emaster_soem_session
         }
         if (!emaster_cia_process_image_audit_input(
                 &session->images[axis_index], &session->report->audit,
-                EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION, (uint16_t)(axis_index + 1U),
-                session->exchange)) {
+                EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION,
+                emaster_soem_session_axis_slave(session, axis_index), session->exchange)) {
             status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
             return status;
         }

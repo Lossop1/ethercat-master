@@ -464,8 +464,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                     &actual_position) ||
             !emaster_cia_process_image_audit_input(
                 &session->images[axis_index], &session->report->audit,
-                EMASTER_AUDIT_PHASE_OPERATION_REQUEST, (uint16_t)(axis_index + 1U),
-                session->exchange)) {
+                EMASTER_AUDIT_PHASE_OPERATION_REQUEST,
+                emaster_soem_session_axis_slave(session, axis_index), session->exchange)) {
             status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
             return status;
         }
@@ -524,7 +524,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 }
                 if (!emaster_cia_process_image_audit_input(
                         &session->images[axis_index], &session->report->audit,
-                        EMASTER_AUDIT_PHASE_CYCLIC_OPERATION, (uint16_t)(axis_index + 1U),
+                        EMASTER_AUDIT_PHASE_CYCLIC_OPERATION,
+                        emaster_soem_session_axis_slave(session, axis_index),
                         session->exchange)) {
                     status = EMASTER_CONTROL_SESSION_AUDIT_FAILED;
                     return status;

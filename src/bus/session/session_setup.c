@@ -579,8 +579,9 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         session->report->dc_configured = true;
         session->report->dc_reference_slave = session->context.grouplist[0].DCnext;
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
-            const ec_slavet *slave = &session->context.slavelist[
-                emaster_soem_session_axis_slave(session, axis_index)];
+            const uint16_t slave_position =
+                emaster_soem_session_axis_slave(session, axis_index);
+            const ec_slavet *slave = &session->context.slavelist[slave_position];
 
             if (session->plan->axes[axis_index].operation_profile->sync_strategy !=
                 EMASTER_SYNC_STRATEGY_DC) {
@@ -592,8 +593,7 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
                 status = EMASTER_CONTROL_SESSION_DC_CONFIG_FAILED;
                 return status;
             }
-            ecx_dcsync0(&session->context, (uint16_t)(axis_index + 1U), TRUE,
-                        session->plan->cycle_ns,
+            ecx_dcsync0(&session->context, slave_position, TRUE, session->plan->cycle_ns,
                         session->plan->axes[axis_index].operation_profile->sync0_shift_ns);
             session->images[axis_index].sync0_configured = true;
             session->axes[axis_index].dc.sync0_requested = true;
@@ -604,11 +604,11 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
             /* DCCUC 与 DCSYNCACT 是连续的 8 位寄存器；按 16 位读回才能核对完整
              * AssignActivate，而不是只确认 SOEM 当前默认激活的 Sync0 位。 */
             if (!emaster_session_observer_read_dc_register(
-                    &session->context, (uint16_t)(axis_index + 1U), ECT_REG_DCCYCLE0, &cycle_value,
+                    &session->context, slave_position, ECT_REG_DCCYCLE0, &cycle_value,
                     (uint16_t)sizeof(cycle_value), &session->report->audit,
                     EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, session->exchange) ||
                 !emaster_session_observer_read_dc_register(
-                    &session->context, (uint16_t)(axis_index + 1U), ECT_REG_DCCUC, &activation,
+                    &session->context, slave_position, ECT_REG_DCCUC, &activation,
                     (uint16_t)sizeof(activation), &session->report->audit,
                     EMASTER_AUDIT_PHASE_PREOP_CONFIGURATION, session->exchange) ||
                 etohl(cycle_value) != session->plan->cycle_ns ||
@@ -648,7 +648,8 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         size_t command_index;
         emaster_soem_sdo_reader_context_t sdo;
 
-        emaster_soem_sdo_context_init(&sdo, &session->context, (uint16_t)(axis_index + 1U),
+        emaster_soem_sdo_context_init(&sdo, &session->context,
+                                      emaster_soem_session_axis_slave(session, axis_index),
                                       &session->report->audit,
                                       EMASTER_AUDIT_PHASE_SAFEOP_INITIALIZATION, session->exchange);
 

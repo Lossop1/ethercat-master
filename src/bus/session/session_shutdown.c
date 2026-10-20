@@ -166,16 +166,18 @@ static uint64_t snapshot_al_states(emaster_soem_session_t *session, const char *
     return end_ns > start_ns ? end_ns - start_ns : 0U;
 }
 
-static void disable_sync0(ecx_contextt *context, emaster_cia_process_image_t *runtime,
-                          size_t count) {
+static void disable_sync0(emaster_soem_session_t *session)
+{
     size_t axis_index;
 
-    if (context == NULL || runtime == NULL) {
+    if (session == NULL) {
         return;
     }
-    for (axis_index = 0U; axis_index < count; ++axis_index) {
-        if (runtime[axis_index].sync0_configured) {
-            ecx_dcsync0(context, (uint16_t)(axis_index + 1U), FALSE, 0U, 0);
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+        if (session->images[axis_index].sync0_configured) {
+            /* 用映射后的总线位置：配置顺序与接线顺序可以不同。 */
+            ecx_dcsync0(&session->context,
+                        emaster_soem_session_axis_slave(session, axis_index), FALSE, 0U, 0);
         }
     }
 }
@@ -534,7 +536,8 @@ static stop_result_t stop_process_data(emaster_soem_session_t *session) {
             if (axis->input_decoded) {
                 (void)emaster_cia_process_image_audit_input(
                     &session->images[axis_index], &session->report->audit,
-                    EMASTER_AUDIT_PHASE_SAFE_STOP, (uint16_t)(axis_index + 1U), session->exchange);
+                    EMASTER_AUDIT_PHASE_SAFE_STOP,
+                    emaster_soem_session_axis_slave(session, axis_index), session->exchange);
             }
             if (!axis->input_decoded ||
                 !emaster_cia402_decode_status_word(axis->status_word, &state)) {
@@ -1097,7 +1100,7 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
                 EC_STATE_PRE_OP;
     }
     if (session->sync0_started) {
-        disable_sync0(&session->context, session->images, session->plan->axis_count);
+        disable_sync0(session);
         session->report->sync0_disabled = true;
     }
     /*
@@ -1128,12 +1131,24 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         size_t bit2_set = 0U;
         size_t disable_attempted = 0U;
         size_t unreadable = 0U;
+        size_t unmapped = 0U;
 
         for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
             emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
             emaster_soem_sdo_reader_context_t sdo;
+            const uint16_t slave_position =
+                emaster_soem_session_axis_slave(session, axis_index);
 
-            emaster_soem_sdo_context_init(&sdo, &session->context, (uint16_t)(axis_index + 1U),
+            /*
+             * 拓扑映射失败时 position 可能仍是 0（映射允许部分填充）。0 在 SOEM 里是
+             * 广播/邮箱从站，不能拿它写 0x6040——那会打到不该打的从站。这一轴本来
+             * 就没被主站配置过，跳过并单独计数。
+             */
+            if (slave_position == 0U) {
+                ++unmapped;
+                continue;
+            }
+            emaster_soem_sdo_context_init(&sdo, &session->context, slave_position,
                                           &session->report->audit,
                                           EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC, session->exchange);
             /*
@@ -1162,14 +1177,18 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
         /* 记录 0x6041 读数；bit2 不当失能判据。 */
         session->report->shutdown_disable_attempted_count = disable_attempted;
         session->report->shutdown_statusword_bit2_clear_count =
-            session->plan->axis_count - bit2_set - unreadable;
+            session->plan->axis_count - bit2_set - unreadable - unmapped;
         session->report->shutdown_statusword_bit2_set_count = bit2_set;
         session->report->shutdown_statusword_unreadable_count = unreadable;
         printf("[SHUTDOWN]%s 失能核对 0x6041：bit2=0 %zu 台 / bit2=1 %zu 台 / 读不回 %zu 台，"
-               "写入尝试 %zu 台（共 %zu 台）\n",
-               (bit2_set > 0U || unreadable > 0U) ? " ！" : "",
+               "写入尝试 %zu 台（共 %zu 台）",
+               (bit2_set > 0U || unreadable > 0U || unmapped > 0U) ? " ！" : "",
                session->report->shutdown_statusword_bit2_clear_count, bit2_set, unreadable,
                disable_attempted, session->plan->axis_count);
+        if (unmapped > 0U) {
+            printf("；%zu 台未映射到从站，未尝试失能", unmapped);
+        }
+        printf("\n");
         printf("[SHUTDOWN] bit2=0 不代表已失能（真使能时也读到）\n");
         fflush(stdout);
     }
@@ -1182,7 +1201,8 @@ void emaster_soem_session_shutdown(emaster_soem_session_t *session) {
             emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
             emaster_soem_sdo_reader_context_t sdo;
 
-            emaster_soem_sdo_context_init(&sdo, &session->context, (uint16_t)(axis_index + 1U),
+            emaster_soem_sdo_context_init(&sdo, &session->context,
+                                          emaster_soem_session_axis_slave(session, axis_index),
                                           &session->report->audit,
                                           EMASTER_AUDIT_PHASE_FINAL_DIAGNOSTIC, session->exchange);
             /*
