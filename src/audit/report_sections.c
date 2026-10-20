@@ -1588,12 +1588,16 @@ bool emaster_run_report_write(FILE *stream,
      * "设备没答、无从比对"。升版是因为版本 18 里只有一个 position_scale，读者无从知道
      * 设备当时报的是什么，同版本下"设备在说谎"与"人写对了档"两份报告会长得一样。
      *
-     * 20：回零（G-02）。以前主站只认 csp/csv/cst，"按回零运行"这件事根本不存在；
+     * 21：回零（G-02）。以前主站只认 csp/csv/cst，"按回零运行"这件事根本不存在；
      * 现在逐轴记启动/完成交换号、驱动器 bit13 与完成时限，结果级记是否配置、轴数、
      * 是否完成/失败。不升版的话，旧读者会把一份回零报告读成"运动从未开始"——
      * motion_started / motion_completed 对回零没有意义，回零的完成与否只在这组新字段里。
+     *
+     * 22：错误分类新增编号与下一步（G-06）。版本 21 只有键与中文名，现场报修还得
+     * 查手册才知道往哪查。编号一经发布不再变；下一步是一句可执行的排查方向。不升版
+     * 的话，同版本报告有的带这两列、有的不带，读者分不清"没有下一步"与"还没写"。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":21,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":22,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1765,6 +1769,13 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(emaster_json_string(stream, emaster_error_class_key(report->error_class)));
     REQUIRE_WRITE(fputs(",\"error_class_text\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, emaster_error_class_text(report->error_class)));
+    /* 编号是给工单用的短码；下一步是给现场的一句话。两者与键一起写，读报告的人
+     * 不必再翻手册才知道该动哪里。编号分配记录见 docs/product/error-codes.md。 */
+    REQUIRE_WRITE(fprintf(stream, ",\"error_class_code\":%u",
+                          (unsigned)emaster_error_class_code(report->error_class)) >= 0);
+    REQUIRE_WRITE(fputs(",\"error_class_next_step\":", stream) != EOF);
+    REQUIRE_WRITE(
+        emaster_json_string(stream, emaster_error_class_next_step(report->error_class)));
     REQUIRE_WRITE(fprintf(
         stream,
         ",\"error_class_evidence_no_frame\":%s,\"error_class_evidence_sync\":%s,"

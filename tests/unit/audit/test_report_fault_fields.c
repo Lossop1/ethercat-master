@@ -530,9 +530,10 @@ int main(int argc, char **argv)
      * 多了登记的序列号、实际读到的序列号与核对结果——19 及以前只有身份三元组，
      * 同型号从站换位在报告里看不出来。升到 21 的理由：回零有了自己的进度——逐轴
      * 启动/完成交换号与故障位，结果级是否完成——motion_started/completed 对回零
-     * 没有意义，不升版就会把一份回零报告读成"运动从未开始"。 */
-    check(strstr(text, "\"schema_version\":21") != NULL,
-          "schema_version 是 21（回零进度字段）");
+     * 没有意义，不升版就会把一份回零报告读成"运动从未开始"。升到 22 的理由：错误
+     * 分类多了稳定编号与下一步——21 及以前只有键与中文名，现场报修还得翻手册。 */
+    check(strstr(text, "\"schema_version\":22") != NULL,
+          "schema_version 是 22（错误分类编号与下一步）");
     check(strstr(text, "\"homing_configured\":true,\"homing_axis_count\":") != NULL,
           "结果级写出回零轴数");
     check(strstr(text, "\"homing_start_exchange\":") != NULL &&
@@ -542,10 +543,13 @@ int main(int argc, char **argv)
           "故障现场带上环上实扫台数：环上 10 台、配置 3 轴，读到这一列才知道是少站");
     check(strstr(text,
                  "\"error_class\":\"DRIVE_FAULT\",\"error_class_text\":\"驱动器自报故障\","
+                 "\"error_class_code\":200,"
+                 "\"error_class_next_step\":\"读逐轴 603F 与厂商故障码，"
+                 "按驱动器手册处理；确认原因消除后再 fault_reset。\","
                  "\"error_class_evidence_no_frame\":false,"
                  "\"error_class_evidence_sync\":false,"
                  "\"error_class_silent_axes\":0,\"error_class_sync_axes\":0,") != NULL,
-          "结果里带上了类别与证据位（夹具是 DRIVE_FAULT，两条通信证据都为假）");
+          "结果里带上了类别、编号、下一步与证据位（夹具是 DRIVE_FAULT，两条通信证据都为假）");
     check(strstr(text, "\"error_class_first_silent_axis\":0,") != NULL &&
               strstr(text, "\"error_class_first_sync_axis\":0") != NULL,
           "两个'第一根'轴号也落盘（没有时取 0）");

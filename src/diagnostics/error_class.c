@@ -1,40 +1,90 @@
 #include "emaster/diagnostics/error_class.h"
 
 /*
- * 类别表。键是稳定 ASCII（进 JSON，给分析脚本读），文本是中文（进控制台与报告，给人读）。
- * 两者都**不许随重构改名**：键改名等于让归档报告与脚本对不上。
+ * 类别表。键是稳定 ASCII（进 JSON，给分析脚本读），文本是中文（进控制台与报告，给人读），
+ * 编号是现场报修用的短码，下一步是可执行的排查方向。四项都**不许随重构改名**：
+ * 键或编号一变，归档报告、脚本与工单就对不上。
+ *
+ * 编号按段分配，留出空位：1xx 配置与总线，2xx 驱动器，3xx 运动，4xx 停机，
+ * 5xx 审计，9xx 内部。已发布的编号不复用；新增类别取同段的下一号。
  */
 typedef struct
 {
+    uint16_t code;
     const char *key;
     const char *text;
+    const char *next_step;
 } error_class_entry_t;
 
 static const error_class_entry_t CLASS_TABLE[] = {
-    [EMASTER_ERROR_CLASS_UNCLASSIFIED] = {"UNCLASSIFIED", "未分类（规则没接住，属缺陷）"},
-    [EMASTER_ERROR_CLASS_NONE] = {"NONE", "无故障"},
-    [EMASTER_ERROR_CLASS_CONFIG] = {"CONFIG", "调用参数非法"},
-    [EMASTER_ERROR_CLASS_BUS_INTERFACE] = {"BUS_INTERFACE", "网卡/套接字不可用"},
-    [EMASTER_ERROR_CLASS_BUS_NO_SLAVES] = {"BUS_NO_SLAVES", "总线上没有从站"},
-    [EMASTER_ERROR_CLASS_BUS_TOPOLOGY] = {"BUS_TOPOLOGY", "拓扑或身份不符"},
-    [EMASTER_ERROR_CLASS_BUS_CONFIG] = {"BUS_CONFIG", "从站配置失败（PDO/映像/SDO）"},
-    [EMASTER_ERROR_CLASS_BUS_STARTUP_STATE] = {"BUS_STARTUP_STATE", "从站没进到目标状态"},
-    [EMASTER_ERROR_CLASS_BUS_DC_CONFIG] = {"BUS_DC_CONFIG", "DC/SYNC0 配置失败"},
-    [EMASTER_ERROR_CLASS_BUS_DC_SYNC] = {"BUS_DC_SYNC", "运行期 DC 同步失败"},
-    [EMASTER_ERROR_CLASS_BUS_CYCLE_TIMING] = {"BUS_CYCLE_TIMING", "周期等待失败或截止错失"},
-    [EMASTER_ERROR_CLASS_BUS_RING_TAIL_LOST] = {"BUS_RING_TAIL_LOST", "环尾丢失/物理层：整帧缺失且轴不应答"},
-    [EMASTER_ERROR_CLASS_BUS_LINK_DROPPED] = {"BUS_LINK_DROPPED", "整帧缺失（各站仍应答）"},
-    [EMASTER_ERROR_CLASS_BUS_SYNCHRONIZATION] = {"BUS_SYNCHRONIZATION", "同步错误：轴报同步类 AL 码或 SYNC0 连续迟到"},
-    [EMASTER_ERROR_CLASS_BUS_SHORT_FRAME] = {"BUS_SHORT_FRAME", "短帧：计数变短且无同步/应答证据"},
-    [EMASTER_ERROR_CLASS_DRIVE_FAULT] = {"DRIVE_FAULT", "驱动器自报故障"},
-    [EMASTER_ERROR_CLASS_DRIVE_FEEDBACK] = {"DRIVE_FEEDBACK", "反馈或控制器失败"},
-    [EMASTER_ERROR_CLASS_DRIVE_LIMIT] = {"DRIVE_LIMIT", "驱动器内部限位或限幅生效"},
-    [EMASTER_ERROR_CLASS_MOTION] = {"MOTION", "运动层：目标非法或跟随误差"},
-    [EMASTER_ERROR_CLASS_SHUTDOWN] = {"SHUTDOWN", "停机阶段失败"},
+    [EMASTER_ERROR_CLASS_UNCLASSIFIED] = {
+        0U, "UNCLASSIFIED", "未分类（规则没接住，属缺陷）",
+        "保留报告与运行配置并上报：这是主站的分类缺口，不是设备问题。"},
+    [EMASTER_ERROR_CLASS_NONE] = {1U, "NONE", "无故障", "无需处理。"},
+    [EMASTER_ERROR_CLASS_CONFIG] = {
+        100U, "CONFIG", "调用参数非法",
+        "核对部署文件与命令行参数，按报错点名的字段改；改完重新 build。"},
+    [EMASTER_ERROR_CLASS_BUS_INTERFACE] = {
+        110U, "BUS_INTERFACE", "网卡/套接字不可用",
+        "核对网卡名、接口是否启用、进程权限（需 root 或 CAP_NET_RAW）。"},
+    [EMASTER_ERROR_CLASS_BUS_NO_SLAVES] = {
+        111U, "BUS_NO_SLAVES", "总线上没有从站",
+        "查从站供电与网线，先跑 emaster-scan 确认能看到从站。"},
+    [EMASTER_ERROR_CLASS_BUS_TOPOLOGY] = {
+        112U, "BUS_TOPOLOGY", "拓扑或身份不符",
+        "核对拓扑配置与实机站序、vendor/product/revision、序列号；换过设备后重新扫描并生成。"},
+    [EMASTER_ERROR_CLASS_BUS_CONFIG] = {
+        113U, "BUS_CONFIG", "从站配置失败（PDO/映像/SDO）",
+        "按报告里的逐轴 PDO 差异与 SDO 失败项改配置；确认设备固件与设备档一致。"},
+    [EMASTER_ERROR_CLASS_BUS_STARTUP_STATE] = {
+        114U, "BUS_STARTUP_STATE", "从站没进到目标状态",
+        "看逐轴 AL 状态与错误码，确认从站在时限内进 SAFE-OP/OP；必要时 reset。"},
+    [EMASTER_ERROR_CLASS_BUS_DC_CONFIG] = {
+        115U, "BUS_DC_CONFIG", "DC/SYNC0 配置失败",
+        "核对运行方案的 DC 策略、参考从站与 AssignActivate；确认参考从站支持 DC。"},
+    [EMASTER_ERROR_CLASS_BUS_DC_SYNC] = {
+        120U, "BUS_DC_SYNC", "运行期 DC 同步失败",
+        "核对周期、DC 相位与参考从站；对比报告里的逐轴 timing。"},
+    [EMASTER_ERROR_CLASS_BUS_CYCLE_TIMING] = {
+        121U, "BUS_CYCLE_TIMING", "周期等待失败或截止错失",
+        "查主机实时性与 CPU 占用、周期线程上的阻塞操作，以及周期是否小于链路耗时。"},
+    [EMASTER_ERROR_CLASS_BUS_RING_TAIL_LOST] = {
+        130U, "BUS_RING_TAIL_LOST", "环尾丢失/物理层：整帧缺失且轴不应答",
+        "查报告里不应答的轴号对应的线缆、接头与供电；重点看环尾最后一站。"},
+    [EMASTER_ERROR_CLASS_BUS_LINK_DROPPED] = {
+        131U, "BUS_LINK_DROPPED", "整帧缺失（各站仍应答）",
+        "查全环线缆与电磁干扰；看丢失链计数与网卡错误计数是否同时增长。"},
+    [EMASTER_ERROR_CLASS_BUS_SYNCHRONIZATION] = {
+        132U, "BUS_SYNCHRONIZATION", "同步错误：轴报同步类 AL 码或 SYNC0 连续迟到",
+        "核对 SYNC0 周期/相位与从站 DC 设置；看报告里的同步轴号与连续迟到峰值。"},
+    [EMASTER_ERROR_CLASS_BUS_SHORT_FRAME] = {
+        133U, "BUS_SHORT_FRAME", "短帧：计数变短且无同步/应答证据",
+        "查对应站点的 PDO 配置与固件版本；看计数窗口最大值出现在哪一拍。"},
+    [EMASTER_ERROR_CLASS_DRIVE_FAULT] = {
+        200U, "DRIVE_FAULT", "驱动器自报故障",
+        "读逐轴 603F 与厂商故障码，按驱动器手册处理；确认原因消除后再 fault_reset。"},
+    [EMASTER_ERROR_CLASS_DRIVE_FEEDBACK] = {
+        201U, "DRIVE_FEEDBACK", "反馈或控制器失败",
+        "查编码器/反馈接线与驱动器诊断，按驱动器手册处理。"},
+    [EMASTER_ERROR_CLASS_DRIVE_LIMIT] = {
+        202U, "DRIVE_LIMIT", "驱动器内部限位或限幅生效",
+        "核对目标与限幅（额定力矩、速度、软限位）设置，确认是否触到限位。"},
+    [EMASTER_ERROR_CLASS_MOTION] = {
+        300U, "MOTION", "运动层：目标非法或跟随误差",
+        "核对目标是否超偏移上限、换算与跟随误差窗；回零看方法、速度与完成时限。"},
+    [EMASTER_ERROR_CLASS_SHUTDOWN] = {
+        400U, "SHUTDOWN", "停机阶段失败",
+        "查停机阶段的总线与驱动器状态，确认安全停与恢复 INIT 卡在哪一步。"},
     [EMASTER_ERROR_CLASS_SHUTDOWN_UNCONFIRMED] = {
-        "SHUTDOWN_UNCONFIRMED", "停机未确认：轴已离开运行使能，未满足停机判据"},
-    [EMASTER_ERROR_CLASS_AUDIT] = {"AUDIT", "审计层失败"},
-    [EMASTER_ERROR_CLASS_INTERNAL] = {"INTERNAL", "内部失败（内存等）"},
+        401U, "SHUTDOWN_UNCONFIRMED",
+        "停机未确认：轴已离开运行使能，未满足停机判据",
+        "核对停机判据的掩码与值是否与驱动器实际状态字一致；先读一次末拍状态字。"},
+    [EMASTER_ERROR_CLASS_AUDIT] = {
+        500U, "AUDIT", "审计层失败",
+        "保留报告并检查磁盘空间与报告目录权限；反复出现时上报。"},
+    [EMASTER_ERROR_CLASS_INTERNAL] = {
+        900U, "INTERNAL", "内部失败（内存等）",
+        "保留报告与运行配置并上报；内部失败不在现场修。"},
 };
 
 /*
@@ -45,7 +95,9 @@ static const error_class_entry_t CLASS_TABLE[] = {
 _Static_assert(sizeof(CLASS_TABLE) / sizeof(CLASS_TABLE[0]) == (size_t)EMASTER_ERROR_CLASS_INTERNAL + 1U,
                "类别表与 emaster_error_class_t 对不上：新增类别后要同步补键与文本");
 
-static const error_class_entry_t UNKNOWN_ENTRY = {"UNCLASSIFIED", "未分类（越界值）"};
+static const error_class_entry_t UNKNOWN_ENTRY = {
+    0U, "UNCLASSIFIED", "未分类（越界值）",
+    "保留报告并上报：类别编号越界，说明主站内部状态已损坏。"};
 
 static const error_class_entry_t *entry_of(emaster_error_class_t id)
 {
@@ -63,9 +115,19 @@ const char *emaster_error_class_key(emaster_error_class_t id)
     return entry_of(id)->key;
 }
 
+uint16_t emaster_error_class_code(emaster_error_class_t id)
+{
+    return entry_of(id)->code;
+}
+
 const char *emaster_error_class_text(emaster_error_class_t id)
 {
     return entry_of(id)->text;
+}
+
+const char *emaster_error_class_next_step(emaster_error_class_t id)
+{
+    return entry_of(id)->next_step;
 }
 
 emaster_error_class_t emaster_error_class_derive(const emaster_error_class_facts_t *facts,

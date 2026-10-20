@@ -268,8 +268,14 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
     fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_ERROR_CLASS_LINE),
             emaster_error_class_key(report->error_class),
             emaster_error_class_text(report->error_class),
+            (unsigned int)emaster_error_class_code(report->error_class),
             (unsigned long long)report->wkc_no_frame_count,
             report->error_class_silent_axes, report->error_class_sync_axes);
+    /* 无故障时"下一步：无需处理"是噪声；只有真出事才印。 */
+    if (report->error_class != EMASTER_ERROR_CLASS_NONE) {
+        fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_ERROR_NEXT_STEP),
+                emaster_error_class_next_step(report->error_class));
+    }
     if (report->first_cycle_failure.present) {
         const emaster_cycle_failure_t *failure = &report->first_cycle_failure;
         fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_FIRST_FAILURE_LINE),

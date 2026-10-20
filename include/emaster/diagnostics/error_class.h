@@ -71,8 +71,16 @@ typedef enum
  * 写的是这个键，Python 侧读它，不镜像任何码表。 */
 const char *emaster_error_class_key(emaster_error_class_t id);
 
+/* 稳定数字编号，给现场电话/工单用（"E130" 比念一个长键快）。编号一经发布
+ * 不再改变，也不随枚举顺序走——分配记录在 docs/product/error-codes.md。 */
+uint16_t emaster_error_class_code(emaster_error_class_t id);
+
 /* 中文文本，进控制台与报告，给人读。两者都保证不返回 NULL。 */
 const char *emaster_error_class_text(emaster_error_class_t id);
+
+/* 下一步做什么（一句中文）。进控制台与报告；不许写成"请联系厂商"这种
+ * 哪一类都用得上的话——每一类必须给出可执行的排查方向。 */
+const char *emaster_error_class_next_step(emaster_error_class_t id);
 
 /* ── 派生 ────────────────────────────────────────────────────────────────
  *
