@@ -896,7 +896,15 @@ static bool write_axis(FILE *stream,
         ",\"esc_registers_read\":%s"
         ",\"esc_dl_control\":%u,\"esc_watchdog_pdi\":%u"
         ",\"final_diagnostic_reads\":%zu,"
-        "\"final_diagnostic_successes\":%zu}}",
+        "\"final_diagnostic_successes\":%zu},"
+        /*
+         * 回零的进度。与 runtime 平级（它不属于过程数据回读），也不嵌成对象：
+         * 嵌一层会让按 [^}]* 抠块的现成工具在内层 } 处截断。
+         * homing_configured 为假时其余五项无意义。
+         */
+        "\"homing_configured\":%s,\"homing_start_exchange\":%" PRIu64
+        ",\"homing_attained\":%s,\"homing_attained_exchange\":%" PRIu64
+        ",\"homing_error\":%s,\"homing_timeout_ms\":%" PRIu32 "}",
         axis->safeop_mode_display_sdo_read ? "true" : "false",
         (int)axis->safeop_mode_display_sdo,
         axis->safeop_drive_diagnostic.read_succeeded ? "true" : "false",
@@ -992,7 +1000,13 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->esc_dl_control,
         (unsigned int)axis->esc_watchdog_pdi,
         axis->final_diagnostic_read_count,
-        axis->final_diagnostic_success_count) >= 0);
+        axis->final_diagnostic_success_count,
+        axis->homing_configured ? "true" : "false",
+        (uint64_t)axis->homing_start_exchange,
+        axis->homing_attained ? "true" : "false",
+        (uint64_t)axis->homing_attained_exchange,
+        axis->homing_error ? "true" : "false",
+        axis->homing_timeout_ms) >= 0);
     return true;
 }
 
@@ -1573,8 +1587,13 @@ bool emaster_run_report_write(FILE *stream,
      * 但自报的四条数原样留在 device 里。device_agrees 是 true/false/null 三态，null 表示
      * "设备没答、无从比对"。升版是因为版本 18 里只有一个 position_scale，读者无从知道
      * 设备当时报的是什么，同版本下"设备在说谎"与"人写对了档"两份报告会长得一样。
+     *
+     * 20：回零（G-02）。以前主站只认 csp/csv/cst，"按回零运行"这件事根本不存在；
+     * 现在逐轴记启动/完成交换号、驱动器 bit13 与完成时限，结果级记是否配置、轴数、
+     * 是否完成/失败。不升版的话，旧读者会把一份回零报告读成"运动从未开始"——
+     * motion_started / motion_completed 对回零没有意义，回零的完成与否只在这组新字段里。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":20,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":21,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1625,7 +1644,15 @@ bool emaster_run_report_write(FILE *stream,
         "\"safety_control_permitted\":%s,\"safety_blocking_reasons\":%" PRIu32
         ",\"safe_op_reached\":%s,\"op_reached\":%s,"
         "\"all_axes_enabled_reached\":%s,\"motion_started\":%s,"
-        "\"motion_completed\":%s,\"safe_output_sent\":%s,"
+        "\"motion_completed\":%s,"
+        /*
+         * 回零这一层与 motion_* 并列而不是塞进去：回零没有周期目标，motion_started
+         * 对它是 false 也不代表没在动。homing_axis_count 是配置了回零的轴数，
+         * completed/failed 是整轮的结论；逐轴的启动/完成交换号在轴对象里。
+         */
+        "\"homing_configured\":%s,\"homing_axis_count\":%zu,"
+        "\"homing_completed\":%s,\"homing_failed\":%s,"
+        "\"safe_output_sent\":%s,"
         /*
          * P12.1: 停机请求与它的来源。stop_requested 此前根本没进报告（只有终端摘要
          * 用），于是"这一轮是被停下来的"在报告里读不出来；来源则是套接字命令与
@@ -1685,6 +1712,10 @@ bool emaster_run_report_write(FILE *stream,
         report->all_axes_enabled_reached ? "true" : "false",
         report->motion_started ? "true" : "false",
         report->motion_completed ? "true" : "false",
+        report->homing_configured ? "true" : "false",
+        report->homing_axis_count,
+        report->homing_completed ? "true" : "false",
+        report->homing_failed ? "true" : "false",
         report->safe_output_sent ? "true" : "false",
         report->safe_state_reached ? "true" : "false",
         report->stop_requested ? "true" : "false",

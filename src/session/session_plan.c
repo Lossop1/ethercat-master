@@ -285,8 +285,9 @@ emaster_session_plan_build(const emaster_deployment_config_t *deployment,
          * 通道，良质的 0x1601 是精简 CSP）。所以运行期不按型号分支、也不猜通道号，
          * 只认档里这一份声明。它不在里面，就是这份配置配错了设备。
          *
-         * 主站这一边：值认出来了，还得有把目标字段绑进过程映像的能力。8/9/10 各有目标，
-         * 模式 6（回零）没有目标、只写控制字与模式本身（见 cia402/controller.h）。
+         * 主站这一边：值认出来了，还得有把目标字段绑进过程映像的能力。8/9/10 各有目标；
+         * 模式 6（回零）没有周期目标，主站只写控制字与模式、置 bit4 启动、等状态字
+         * bit12/bit13（见 cia402/controller.h 与 session_control.c 的 homing_step）。
          * 缺口在主站这一侧，跟设备没关系。
          */
         if (!device_declares_mode(device, operation_mode->value))

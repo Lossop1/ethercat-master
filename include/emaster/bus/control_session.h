@@ -67,7 +67,18 @@ typedef enum
      * 全会话、全轴失能。一条符号写反的目标会让整台机器人瘫掉，而那恰恰是最需要
      * "其余部分继续"的时候。
      */
-    EMASTER_CONTROL_SESSION_TARGET_REJECTED
+    EMASTER_CONTROL_SESSION_TARGET_REJECTED,
+    /*
+     * 回零失败：驱动器置了状态字 bit13（homing error）。参考点没找到，或者找到的
+     * 不是这一套参数要的那一个。会话按故障停机，报告里逐轴记 bit12/bit13 的首次时刻。
+     */
+    EMASTER_CONTROL_SESSION_HOMING_FAILED,
+    /*
+     * 回零超时：到 completion_timeout_ms 仍没有全部轴报 bit12。与 HOMING_FAILED
+     * 分开，是因为处置不同——这一档先查时限够不够、轴是不是卡在硬限位上，而不是
+     * 查回零方法号或开关接线。
+     */
+    EMASTER_CONTROL_SESSION_HOMING_TIMEOUT
 } emaster_control_session_status_t;
 
 /*
@@ -353,6 +364,28 @@ typedef struct
     uint64_t motion_final_error_counts;
     uint64_t max_following_error_counts;
     uint64_t max_observed_following_error_counts;
+    /*
+     * 回零（运行方案声明 quantity == none）的进度，逐轴。
+     *
+     * 回零不是主站规划的轨迹：方法、速度、开关都在驱动器里，主站只置控制字 bit4
+     * 启动，然后等状态字 bit12（attained）/ bit13（error）。所以这里记的是**时间
+     * 坐标与结果**，不是目标：
+     *   configured        本轴的运行模式是回零。
+     *   started           主站第一次在 Operation enabled 下发出 bit4 的交换号。
+     *   attained          驱动器第一次报 bit12 的交换号；homing_attained 一旦为真
+     *                     不再改写，与其它 *_seen 字段同一口径。
+     *   error             驱动器报过 bit13（或报完 bit12 之后又置位——按驱动器语义
+     *                     那次参考点不可用）。
+     *   timeout_ms        本模式配置的完成时限；0 表示运行期没设时限（配置层拒绝
+     *                     这种回零方案，但报告要如实写出它看到了什么）。
+     */
+    bool homing_configured;
+    bool homing_started;
+    uint64_t homing_start_exchange;
+    bool homing_attained;
+    uint64_t homing_attained_exchange;
+    bool homing_error;
+    uint32_t homing_timeout_ms;
     /*
      * 这一轴的外部目标偏移上限（counts），以及它到底有没有被判。
      *
@@ -1168,6 +1201,15 @@ typedef struct
     bool all_axes_enabled_reached;
     bool motion_started;
     bool motion_completed;
+    /*
+     * 回零这一轮走到哪里。configured 为假表示本部署没有回零轴，下面两项无意义。
+     * completed 为真时会话按"全部轴报 bit12"自动停机（与运动方案走完同一条出口）；
+     * failed 为真表示至少一轴报了 bit13 或超过时限，status 里是具体是哪一档。
+     */
+    bool homing_configured;
+    size_t homing_axis_count;
+    bool homing_completed;
+    bool homing_failed;
     /*
      * 外部目标被合理性判据拒收的记录（判据见 emaster/motion/target_guard.h）。
      *

@@ -23,6 +23,17 @@ enum
     EMASTER_CIA402_CONTROL_HALT_BIT = 0x0100
 };
 
+/*
+ * 控制字 bit4：Homing operation start（回零启动）。
+ *
+ * 只对回零模式有意义：置位前驱动器按 0x6098/0x6099 里存的方法与速度自己找参考点，
+ * 主站不产生任何周期目标。上升沿启动，主站在驱动器报完成（状态字 bit12）之后清零。
+ */
+enum
+{
+    EMASTER_CIA402_CONTROL_HOMING_START_BIT = 0x0010
+};
+
 enum
 {
     EMASTER_CIA402_MODE_MIT = 5,
@@ -83,6 +94,12 @@ typedef struct
     /* Halt 位（控制字 bit8）：置位时在 Enable Operation 控制字上叠加 0x0100，
      * 驱动器减速至零后保持使能；清零后恢复跟随目标。持续有效，非单次脉冲。 */
     bool halt_active;
+    /*
+     * 回零启动位（控制字 bit4）。会话在回零模式里置位，驱动器报完成或报错后清零。
+     * 与 halt 一样只在 Operation enabled 且目标为 Operation enabled 时叠加——
+     * 上电路径上提前置 bit4 不会让驱动器提前开始找参考点。
+     */
+    bool homing_start;
 } emaster_cia402_controller_t;
 
 /* 每周期输出的控制字规划结果；调用者负责把控制字编码到已确认的 RxPDO。 */
@@ -125,6 +142,13 @@ void emaster_cia402_controller_request_fault_reset(
  * 清零后恢复跟随目标。持续有效，非单次脉冲。 */
 void emaster_cia402_controller_set_halt(emaster_cia402_controller_t *controller,
                                         bool active);
+
+/*
+ * 设置或清除回零启动位（控制字 bit4）。只在回零模式下由会话调用；驱动器报完成后
+ * 必须清零，把上升沿留给下一次回零。
+ */
+void emaster_cia402_controller_set_homing_start(
+    emaster_cia402_controller_t *controller, bool active);
 
 /*
  * 按当前状态字规划一个周期的控制字。该函数不自动推进目标、不处理超时、不读取时钟，

@@ -58,6 +58,10 @@ static const char *session_status_text(emaster_control_session_status_t status) 
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_UNCONFIRMED);
     case EMASTER_CONTROL_SESSION_TARGET_REJECTED:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_TARGET_REJECTED);
+    case EMASTER_CONTROL_SESSION_HOMING_FAILED:
+        return emaster_text(EMASTER_TEXT_CONTROL_SESSION_HOMING_FAILED);
+    case EMASTER_CONTROL_SESSION_HOMING_TIMEOUT:
+        return emaster_text(EMASTER_TEXT_CONTROL_SESSION_HOMING_TIMEOUT);
     case EMASTER_CONTROL_SESSION_AUDIT_FAILED:
         return emaster_text(EMASTER_TEXT_CONTROL_SESSION_AUDIT_FAILED);
     case EMASTER_CONTROL_SESSION_INTERFACE_OPEN_FAILED:
@@ -223,6 +227,16 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
                     (unsigned long)axis->device_position_scale.encoder_motor_revolutions,
                     (unsigned long)axis->device_position_scale.gear_motor_revolutions,
                     (unsigned long)axis->device_position_scale.gear_shaft_revolutions);
+        }
+        if (axis->homing_configured) {
+            /* 回零没有目标可对比，能给的只有两个时刻和两位状态：主站在第几拍发出
+             * bit4、驱动器在第几拍报 bit12，以及有没有报 bit13。 */
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_HOMING_LINE),
+                    (unsigned int)axis->position,
+                    (unsigned long long)axis->homing_start_exchange,
+                    (unsigned long long)axis->homing_attained_exchange,
+                    result_text(axis->homing_attained), result_text(axis->homing_error),
+                    (unsigned int)axis->homing_timeout_ms);
         }
         if (report->motion_completed) {
             fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_MOTION_LINE),

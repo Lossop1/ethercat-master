@@ -39,10 +39,10 @@ SOURCES = ("src/audit/run_report.c", "src/audit/report_sections.c",
            "src/audit/report_error_class.c",
            "src/setpoint/wire.c")
 
-# 变异：把 runtime 对象收尾的两个括号去掉一个。这是"加字段时数错了括号"的真实长相，
-# C 照样编得过、C 用例的子串断言照样全过，只有 JSON 会解析不了。
-MUTATE_FROM = r'"\"final_diagnostic_successes\":%zu}}",'
-MUTATE_TO = r'"\"final_diagnostic_successes\":%zu}",'
+# 变异：去掉 runtime 对象的收尾括号（回零字段接在它后面、再收轴对象）。这是"加字段时
+# 数错了括号"的真实长相，C 照样编得过、C 用例的子串断言照样全过，只有 JSON 会解析不了。
+MUTATE_FROM = r'"\"final_diagnostic_successes\":%zu},'
+MUTATE_TO = r'"\"final_diagnostic_successes\":%zu,'
 
 PASSED = 0
 FAILED = 0

@@ -258,6 +258,14 @@ bool emaster_cia402_controller_step(emaster_cia402_controller_t *controller,
         output->control_word = (uint16_t)(output->control_word |
                                           EMASTER_CIA402_CONTROL_HALT_BIT);
     }
+    /* 回零启动位与 halt 同一条门：只有真在 Operation enabled 里才叠加。 */
+    if (controller->homing_start &&
+        state == EMASTER_CIA402_STATE_OPERATION_ENABLED &&
+        controller->goal == EMASTER_CIA402_GOAL_OPERATION_ENABLED)
+    {
+        output->control_word = (uint16_t)(output->control_word |
+                                          EMASTER_CIA402_CONTROL_HOMING_START_BIT);
+    }
     return true;
 }
 
@@ -267,5 +275,14 @@ void emaster_cia402_controller_set_halt(emaster_cia402_controller_t *controller,
     if (controller != NULL)
     {
         controller->halt_active = active;
+    }
+}
+
+void emaster_cia402_controller_set_homing_start(
+    emaster_cia402_controller_t *controller, bool active)
+{
+    if (controller != NULL)
+    {
+        controller->homing_start = active;
     }
 }

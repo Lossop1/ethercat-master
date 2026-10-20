@@ -305,6 +305,123 @@ static void format_sdo_read_response(const emaster_soem_session_t *session,
                    (unsigned)session->sdo_read_subindex, size, raw);
 }
 
+/*
+ * 回零（G-02）。
+ *
+ * 回零与 CSP/CSV/CST 的根本差别是：目标不是主站给的。方法（0x6098）、两段速度
+ * （0x6099）与开关都在驱动器自己手里，主站只做三件事——把驱动器带进该模式、
+ * 在 Operation enabled 下置控制字 bit4、然后读状态字。所以这里没有轨迹，只有
+ * 两个坐标（启动交换号、完成交换号）和两条判据。
+ *
+ * 判据只用 6041 的两位：bit12 = homing attained，bit13 = homing error。这是
+ * CiA 402 对所有回零方法共同的两位，不依赖厂商码。bit10（target reached）不进来：
+ * 它说的是"上一个周期目标到了"，回零没有周期目标，部分驱动器在这两位之前就把它
+ * 置真，拿它判完成会提前放手。
+ *
+ * 为什么必须有完成时限：bit12 不来的时候，驱动器既没故障也没掉出使能，会话会
+ * 一直"正常运行"地等下去，而轴一直在找参考点。时限由运行方案逐模式给，配置层
+ * 拒绝没给的已选回零模式。
+ *
+ * 启动位只在"全部轴已使能、模式已确认、本拍没有别的安全否决"时置。bit4 的上升沿
+ * 才启动；驱动器报完成或报错之后立刻清零（下一次回零还要用这个上升沿）。
+ */
+static void homing_step(emaster_soem_session_t *session, bool all_axes_enabled,
+                        bool all_modes_confirmed,
+                        emaster_control_session_status_t *safety_status,
+                        bool *safety_denied)
+{
+    enum
+    {
+        /* mode_specific_status 的低两位就是 6041 的 bit12 / bit13。 */
+        HOMING_STATUS_ATTAINED = 0x01U,
+        HOMING_STATUS_ERROR = 0x02U
+    };
+    const uint64_t cycle_ns = (uint64_t)session->plan->cycle_ns;
+    bool any_configured = false;
+    bool all_attained = true;
+    bool failed = false;
+    emaster_control_session_status_t failure_status = EMASTER_CONTROL_SESSION_OK;
+    size_t axis_index;
+
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+        const emaster_operation_mode_t *mode =
+            session->plan->axes[axis_index].operation_mode;
+        emaster_control_session_axis_result_t *axis = &session->axes[axis_index];
+        bool attained;
+        bool error;
+
+        /* 回零由模式的 quantity 声明，不按模式号猜。 */
+        if (mode == NULL || mode->quantity != EMASTER_MODE_QUANTITY_NONE) {
+            continue;
+        }
+        any_configured = true;
+
+        attained = (axis->mode_specific_status & HOMING_STATUS_ATTAINED) != 0U;
+        error = (axis->mode_specific_status & HOMING_STATUS_ERROR) != 0U;
+
+        if (error) {
+            axis->homing_error = true;
+            if (!axis->homing_attained) {
+                all_attained = false;
+            }
+            failed = true;
+            failure_status = EMASTER_CONTROL_SESSION_HOMING_FAILED;
+            emaster_cia402_controller_set_homing_start(
+                &session->controllers[axis_index], false);
+            continue;
+        }
+        if (!attained) {
+            all_attained = false;
+        } else if (!axis->homing_attained) {
+            /* 首次为准：报告要的是"哪一拍到的"，不是最后一次读到的那一拍。 */
+            axis->homing_attained = true;
+            axis->homing_attained_exchange = session->exchange;
+        }
+
+        {
+            const bool start = all_axes_enabled && all_modes_confirmed &&
+                               !*safety_denied && !attained;
+
+            emaster_cia402_controller_set_homing_start(
+                &session->controllers[axis_index], start);
+            if (start && !axis->homing_started) {
+                axis->homing_started = true;
+                axis->homing_start_exchange = session->exchange;
+            }
+            /*
+             * 超时从第一次真正发出 bit4 的那一拍算起。时限按配置的毫秒数，
+             * 用交换号乘周期折算——周期线程里没有别的时基比它更贴近驱动器
+             * 实际经历的时间。
+             */
+            if (start && mode->completion_timeout_ms > 0U &&
+                session->exchange >= axis->homing_start_exchange) {
+                const uint64_t elapsed_ms =
+                    (session->exchange - axis->homing_start_exchange) * cycle_ns /
+                    UINT64_C(1000000);
+                if (elapsed_ms >= (uint64_t)mode->completion_timeout_ms) {
+                    failed = true;
+                    /* 驱动器自己报了错比"等太久"更有信息量，不覆盖它。 */
+                    if (failure_status != EMASTER_CONTROL_SESSION_HOMING_FAILED) {
+                        failure_status = EMASTER_CONTROL_SESSION_HOMING_TIMEOUT;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!any_configured) {
+        return;
+    }
+    if (failed) {
+        session->report->homing_failed = true;
+        emaster_soem_session_note_runtime_failure(session, failure_status, safety_status);
+        *safety_denied = true;
+    }
+    if (all_attained && !failed) {
+        session->report->homing_completed = true;
+    }
+}
+
 emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t *session) {
     size_t axis_index;
     bool motion_initialized = false;
@@ -316,6 +433,22 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
 
     emaster_soem_session_set_state(session, EMASTER_CONTROL_STATE_ENABLING,
                                    EMASTER_CONTROL_SESSION_OK);
+    /*
+     * 回零方案在计划里就定了。先把"本部署有没有回零轴、是哪几轴、时限多少"写进
+     * 报告：即使会话在启动阶段就失败，一份回零配置也不该被读成没有回零。运行期
+     * 的启动/完成/报错仍由 homing_step 逐拍更新。
+     */
+    session->report->homing_axis_count = 0U;
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+        const emaster_operation_mode_t *mode =
+            session->plan->axes[axis_index].operation_mode;
+        if (mode != NULL && mode->quantity == EMASTER_MODE_QUANTITY_NONE) {
+            session->axes[axis_index].homing_configured = true;
+            session->axes[axis_index].homing_timeout_ms = mode->completion_timeout_ms;
+            ++session->report->homing_axis_count;
+        }
+    }
+    session->report->homing_configured = session->report->homing_axis_count > 0U;
 
     mode_confirmation_deadline_cycle =
         session->report->cycle_count + session->transition_cycles;
@@ -693,6 +826,13 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                 emaster_soem_session_note_runtime_failure(session, status, &safety_status);
                 safety_denied = true;
             }
+            /*
+             * 回零：使能与模式确认之后启动控制字 bit4，并核对 bit12/bit13。
+             * 放在运动块之前——回零轴没有运动方案，下面的块本来就不会进。
+             * 无论本拍是否已被别的失败否决都要调用：它负责把启动位清零。
+             */
+            homing_step(session, all_axes_enabled, all_modes_confirmed, &safety_status,
+                        &safety_denied);
             if (feedback_valid && !safety_denied &&
                 (session->plan->motion_profile != NULL ||
                  session->position_target_source != NULL) &&
@@ -1171,6 +1311,15 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                     quantity == EMASTER_MODE_QUANTITY_POSITION ? "pos" :
                                     quantity == EMASTER_MODE_QUANTITY_VELOCITY ? "vel" :
                                     quantity == EMASTER_MODE_QUANTITY_TORQUE   ? "tor" : "none";
+                                /*
+                                 * 回零进度压成一个数：0 不是回零轴，1 已启动未完成，
+                                 * 2 已到参考点，3 驱动器报了回零错误。与 why=homing
+                                 * 并排看，"在找"和"报错"才分得开。
+                                 */
+                                const int homing_state =
+                                    axis->homing_error ? 3 :
+                                    axis->homing_attained ? 2 :
+                                    axis->homing_started ? 1 : 0;
                                 const char *why_text = "ok";
                                 if ((axis->status_word & 0x0008U) != 0U || error_code != 0U)
                                 {
@@ -1192,6 +1341,12 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                  .operation_mode->value)
                                 {
                                     why_text = "mode";
+                                }
+                                else if (axis->homing_configured && !axis->homing_attained)
+                                {
+                                    /* 回零的轴本来就不该有位置目标，它"不动"是正常的
+                                     * ——除非 bit13 已经报了错，那条在 fault 分支。 */
+                                    why_text = "homing";
                                 }
                                 else if (max_limits_read && slow_axis != NULL &&
                                          slow_axis->max_torque == 0)
@@ -1298,7 +1453,7 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    "mode=%d,tgt_rb=%s,rb_age_ms=%s,maxT=%s,maxV=%s,"
                                                    "control=0x%04x,current=%s,bus_v=%s,mosfet_t=%s,"
                                                    "motor_t=%s,motor_rpm=%s,cmd_rpm=%s,"
-                                                   "ext_err=%s,servo_err=%s,q=%s,why=%s",
+                                                   "ext_err=%s,servo_err=%s,q=%s,home=%d,why=%s",
                                                    (unsigned int)(axis_index + 1U),
                                                    axis->actual_position,
                                                    reported_velocity,
@@ -1323,7 +1478,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                    current_text, bus_voltage_text, mosfet_text,
                                                    motor_temperature_text, motor_rpm_text,
                                                    command_rpm_text, extended_error_text,
-                                                   servo_error_text, quantity_text, why_text);
+                                                   servo_error_text, quantity_text, homing_state,
+                                                   why_text);
                                 if (written < 0) {
                                     break;
                                 }
@@ -1902,6 +2058,14 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
             // 只有配置了运动配置时，motion_completed 才导致退出
             // 无运动配置时保持运行，等待外部实时指令
             if (session->plan->motion_profile != NULL && session->report->motion_completed) {
+                break;
+            }
+            /*
+             * 回零全部到点就停机。回零是一次性动作：所有轴都报了 bit12 之后继续
+             * 使能等待没有任何意义，而"等外部停机"会让一台已经到参考点的轴一直
+             * 带电。与运动方案走完共用同一条出口（安全停用、诊断、写报告）。
+             */
+            if (session->report->homing_completed) {
                 break;
             }
             if (safety_denied &&

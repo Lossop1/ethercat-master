@@ -528,9 +528,16 @@ int main(int argc, char **argv)
      * device_agrees——18 及以前只有一个 position_scale，读者无从知道设备当时报的是
      * 什么，"设备在说谎"与"人写对了档"两份报告长得一样。升到 20 的理由：逐轴身份段
      * 多了登记的序列号、实际读到的序列号与核对结果——19 及以前只有身份三元组，
-     * 同型号从站换位在报告里看不出来。 */
-    check(strstr(text, "\"schema_version\":20") != NULL,
-          "schema_version 是 20（换算段自报值；身份段写序列号与核对结果）");
+     * 同型号从站换位在报告里看不出来。升到 21 的理由：回零有了自己的进度——逐轴
+     * 启动/完成交换号与故障位，结果级是否完成——motion_started/completed 对回零
+     * 没有意义，不升版就会把一份回零报告读成"运动从未开始"。 */
+    check(strstr(text, "\"schema_version\":21") != NULL,
+          "schema_version 是 21（回零进度字段）");
+    check(strstr(text, "\"homing_configured\":true,\"homing_axis_count\":") != NULL,
+          "结果级写出回零轴数");
+    check(strstr(text, "\"homing_start_exchange\":") != NULL &&
+              strstr(text, "\"homing_timeout_ms\":") != NULL,
+          "逐轴写出回零启动交换号与完成时限");
     check(strstr(text, "\"bus_slave_count\":10") != NULL,
           "故障现场带上环上实扫台数：环上 10 台、配置 3 轴，读到这一列才知道是少站");
     check(strstr(text,

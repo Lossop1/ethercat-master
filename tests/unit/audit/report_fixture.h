@@ -328,6 +328,30 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->report.setpoint_last_reject_reason = EMASTER_SETPOINT_REJECT_MODE_MISMATCH;
     fixture->report.setpoint_last_reject_axis = 4U;
     /*
+     * 回零（21 起）。三根轴给成整轮回零的三种形状：一根到点、一根驱动器报 bit13、
+     * 一根还等着（各自时限不同，好把"照抄一个时限给全体"分开）。整轮结论是失败，
+     * 与夹具的 DRIVE_FAULT 一致——回零失败本身就是一次会话失败。
+     */
+    fixture->report.homing_configured = true;
+    fixture->report.homing_axis_count = FIXTURE_AXIS_COUNT;
+    fixture->report.homing_completed = false;
+    fixture->report.homing_failed = true;
+    fixture->axis_results[0].homing_configured = true;
+    fixture->axis_results[0].homing_started = true;
+    fixture->axis_results[0].homing_start_exchange = UINT64_C(100);
+    fixture->axis_results[0].homing_attained = true;
+    fixture->axis_results[0].homing_attained_exchange = UINT64_C(220);
+    fixture->axis_results[0].homing_timeout_ms = UINT32_C(5000);
+    fixture->axis_results[1].homing_configured = true;
+    fixture->axis_results[1].homing_started = true;
+    fixture->axis_results[1].homing_start_exchange = UINT64_C(100);
+    fixture->axis_results[1].homing_error = true;
+    fixture->axis_results[1].homing_timeout_ms = UINT32_C(5000);
+    fixture->axis_results[2].homing_configured = true;
+    fixture->axis_results[2].homing_started = true;
+    fixture->axis_results[2].homing_start_exchange = UINT64_C(101);
+    fixture->axis_results[2].homing_timeout_ms = UINT32_C(3000);
+    /*
      * 不用 snprintf：report_path 是 const char*，编译器不知道它多长，会对每一次调用
      * 报"可能截断"。夹具里传的都是短字面量，照容量卡一刀就够；末尾的 NUL 由上面的
      * memset 留下。
