@@ -1153,6 +1153,16 @@ typedef struct
      * 而"写到哪去了"在报告内容里原本看不出任何异常。
      */
     char report_path[EMASTER_REPORT_PATH_CAPACITY];
+    /*
+     * 本次运行加载的运行时配置指纹（config-runtime 四个 flat 文件的内容，定义见
+     * emaster/config/runtime_config_load.h）。报告由此能回答"这份证据是哪份配置跑
+     * 出来的"，现场不必再靠人记版本号。
+     *
+     * valid 单独一位，不让 0 兼任"没加载"：0 是合法哈希值，两种情形必须分得开。
+     * 由调用方（工具入口）在加载配置后填入；会话本身不读配置，也不写这两个字段。
+     */
+    uint64_t config_fingerprint;
+    bool config_fingerprint_valid;
     emaster_control_session_axis_result_t *axes;
     size_t axis_count;
     size_t io_map_size;

@@ -511,6 +511,19 @@ int main(int argc, char **argv) {
     fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_START), deployment->hostname,
             deployment->ethercat_interface, deployment->topology->topology_id,
             (unsigned int)plan.axis_count);
+    {
+        /*
+         * 配置指纹在这里就印出来：它由四个配置文件的内容确定，与本次会话是否跑到
+         * OP 无关。报告里记同一个值，现场拿报告对终端就能确认"这份报告是哪份配置
+         * 跑出来的"。
+         */
+        uint64_t config_fingerprint;
+
+        if (emaster_runtime_config_fingerprint(&config_fingerprint)) {
+            fprintf(stdout, emaster_text(EMASTER_TEXT_CONTROL_SESSION_CONFIG_FINGERPRINT),
+                    (unsigned long long)config_fingerprint);
+        }
+    }
     (void)fflush(stdout);
 
     /* 设置轴数量供命令处理使用 */
@@ -614,6 +627,8 @@ int main(int argc, char **argv) {
     }
 
     memset(&report, 0, sizeof(report));
+    report.config_fingerprint_valid =
+        emaster_runtime_config_fingerprint(&report.config_fingerprint);
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.stop_requested = application_stop_requested;
     /*

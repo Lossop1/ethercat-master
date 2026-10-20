@@ -6,6 +6,7 @@
 #include "emaster/config/generated_deployment.h"
 #include "emaster/config/generated_runtime.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -17,6 +18,29 @@
  */
 static emaster_config_reader_t g_readers[4];
 static bool g_loaded = false;
+
+/*
+ * 四个文件的内容指纹。加载顺序固定，文件名与内容一起进哈希：只把内容从一个文件
+ * 挪到另一个文件，指纹也会变。在 apply 之前计算 —— apply 会就地插 NUL、去转义，
+ * 之后再哈希算的就不是磁盘上的字节了。
+ */
+#define EMASTER_CONFIG_FNV_OFFSET UINT64_C(14695981039346656037)
+#define EMASTER_CONFIG_FNV_PRIME UINT64_C(1099511628211)
+
+static uint64_t g_config_fingerprint = 0U;
+
+static uint64_t fnv1a_bytes(uint64_t hash, const void *data, size_t size)
+{
+    const unsigned char *bytes = (const unsigned char *)data;
+    size_t index;
+
+    for (index = 0U; index < size; ++index)
+    {
+        hash ^= (uint64_t)bytes[index];
+        hash *= EMASTER_CONFIG_FNV_PRIME;
+    }
+    return hash;
+}
 
 static bool load_one(size_t slot, const char *directory, const char *name,
                      bool (*apply)(const emaster_config_reader_t *))
@@ -35,6 +59,10 @@ static bool load_one(size_t slot, const char *directory, const char *name,
         fprintf(stderr, "打不开 %s\n", path);
         return false;
     }
+    /* 先哈希磁盘上的原始字节，再让 apply 就地改写缓冲。 */
+    g_config_fingerprint = fnv1a_bytes(g_config_fingerprint, name, strlen(name) + 1U);
+    g_config_fingerprint =
+        fnv1a_bytes(g_config_fingerprint, g_readers[slot].buffer, g_readers[slot].size);
     if (!apply(&g_readers[slot]))
     {
         /*
@@ -80,6 +108,7 @@ bool emaster_runtime_config_load(const char *directory)
     {
         return true;
     }
+    g_config_fingerprint = EMASTER_CONFIG_FNV_OFFSET;
     /* 顺序不能颠倒：部署按 ID 引用前三者。 */
     if (!load_one(0U, directory, "topologies.flat", emaster_generated_config_apply) ||
         !load_one(1U, directory, "catalog.flat", emaster_generated_catalog_apply) ||
@@ -89,5 +118,15 @@ bool emaster_runtime_config_load(const char *directory)
         return false;
     }
     g_loaded = true;
+    return true;
+}
+
+bool emaster_runtime_config_fingerprint(uint64_t *fingerprint)
+{
+    if (fingerprint == NULL || !g_loaded)
+    {
+        return false;
+    }
+    *fingerprint = g_config_fingerprint;
     return true;
 }

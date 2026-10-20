@@ -1596,8 +1596,14 @@ bool emaster_run_report_write(FILE *stream,
      * 22：错误分类新增编号与下一步（G-06）。版本 21 只有键与中文名，现场报修还得
      * 查手册才知道往哪查。编号一经发布不再变；下一步是一句可执行的排查方向。不升版
      * 的话，同版本报告有的带这两列、有的不带，读者分不清"没有下一步"与"还没写"。
+     *
+     * 23：报告新增 config_fingerprint（G-12）：这一轮加载的四个运行时配置文件的
+     * 内容指纹。版本 22 及以前，两份报告并排只能比部署 ID 与时间；现场改了配置再跑，
+     * 中间的差异全靠人记。写成十六进制字符串，因为 64 位整数放进 JSON 数字会在
+     * JavaScript 里丢精度；没加载过配置时为 null，不拿 0 冒充。不升版的话，旧读者
+     * 会把"没有这一列"读成"配置没变"。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":22,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":23,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
@@ -1607,6 +1613,19 @@ bool emaster_run_report_write(FILE *stream,
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->ethercat_interface));
     REQUIRE_WRITE(fputs(",\"topology_id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->topology->topology_id));
+    /*
+     * 这一轮加载的运行时配置指纹。与部署 ID 不同：部署 ID 由人起名，同名改内容是
+     * 家常便饭；指纹随内容变。写成字符串是为了不丢精度（见上面 schema 23 的说明）。
+     */
+    REQUIRE_WRITE(fputs(",\"config_fingerprint\":", stream) != EOF);
+    if (report->config_fingerprint_valid)
+    {
+        REQUIRE_WRITE(fprintf(stream, "\"0x%016" PRIX64 "\"", report->config_fingerprint) >= 0);
+    }
+    else
+    {
+        REQUIRE_WRITE(fputs("null", stream) != EOF);
+    }
     /*
      * 报告实际落盘的位置。相对路径按进程 CWD 解析，从别处启动就写到别处——没有
      * 这一列，那种事故在报告里看不出任何异常。调用方没解析时留空。

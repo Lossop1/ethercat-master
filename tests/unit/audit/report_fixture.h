@@ -309,6 +309,13 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
     fixture->report.target_rejection_axis = 2U;
     fixture->report.target_rejection_offset_counts = UINT64_C(150000);
     /*
+     * 配置指纹（23 起）。取一个高位也非零的值：写成 JSON 数字的话，JavaScript 读到
+     * 这里就会丢精度——所以必须写成十六进制字符串。valid 单独一位，0 不能兼任
+     * "没加载配置"。
+     */
+    fixture->report.config_fingerprint = UINT64_C(0x0123456789ABCDEF);
+    fixture->report.config_fingerprint_valid = true;
+    /*
      * 设点通道（14 起）。给成"开过、收过、也拒过"的样子，好把三层分开：
      *
      *   enabled 真而计数全零 —— 通道开了但客户端从没连上，是另一回事；

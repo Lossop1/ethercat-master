@@ -531,9 +531,13 @@ int main(int argc, char **argv)
      * 同型号从站换位在报告里看不出来。升到 21 的理由：回零有了自己的进度——逐轴
      * 启动/完成交换号与故障位，结果级是否完成——motion_started/completed 对回零
      * 没有意义，不升版就会把一份回零报告读成"运动从未开始"。升到 22 的理由：错误
-     * 分类多了稳定编号与下一步——21 及以前只有键与中文名，现场报修还得翻手册。 */
-    check(strstr(text, "\"schema_version\":22") != NULL,
-          "schema_version 是 22（错误分类编号与下一步）");
+     * 分类多了稳定编号与下一步——21 及以前只有键与中文名，现场报修还得翻手册。
+     * 升到 23 的理由：部署段多了配置指纹——22 及以前两份报告并排只能比部署 ID 与
+     * 时间，现场改了配置再跑，中间的差异全靠人记。 */
+    check(strstr(text, "\"schema_version\":23") != NULL,
+          "schema_version 是 23（配置指纹）");
+    check(strstr(text, "\"config_fingerprint\":\"0x0123456789ABCDEF\"") != NULL,
+          "配置指纹写成十六进制字符串——写成 JSON 数字会在 JavaScript 里丢精度");
     check(strstr(text, "\"homing_configured\":true,\"homing_axis_count\":") != NULL,
           "结果级写出回零轴数");
     check(strstr(text, "\"homing_start_exchange\":") != NULL &&

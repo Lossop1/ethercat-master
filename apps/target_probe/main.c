@@ -497,6 +497,8 @@ int main(int argc, char **argv)
     (void)fflush(stdout);
 
     memset(&report, 0, sizeof(report));
+    report.config_fingerprint_valid =
+        emaster_runtime_config_fingerprint(&report.config_fingerprint);
     memset(&ramp, 0, sizeof(ramp));
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.stop_requested = probe_stop_requested;

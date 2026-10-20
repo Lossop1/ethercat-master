@@ -66,6 +66,7 @@
     "dc_prepare_sync0_readback_failed": "Sync0 寄存器读回校验失败",
     "control_session_usage": "用法：\n  %s\n",
     "control_session_start": "主站启动：主机=%s，EtherCAT接口=%s，拓扑=%s，从站数=%u。按 Ctrl+C 安全停止。\n",
+    "control_session_config_fingerprint": "配置指纹：0x%016llX（config-runtime 四个文件）。报告里记同一个值。\n",
     "control_session_plan_failed": "运行方案不完整或未启用，拒绝建立 CiA 402 控制会话。\n",
     "control_session_mode_not_declared": "轴 %u：运行方案要求模式 %d（%s），设备档声明的模式集合里没有它。这份运行方案配的不是这台设备。\n",
     "control_session_mode_not_drivable": "轴 %u：模式 %d（%s）在设备档里有声明，但主站当前还不能驱动它。缺口在主站这一侧，不是设备。\n",
