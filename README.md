@@ -381,7 +381,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 
 **没登记序列号时轴序就是总线顺序；登记了序列号时按序列号绑定。** `init-site --from-scan` 把扫描读到的 `0x1018:04` 逐台写进拓扑。登记后，同型号从站换了环序也照样对得上；登记了但读不到、或读到的值不相等，主站拒绝启动并点名到轴。没登记序列号的拓扑保持原行为：按 vendor/product/revision 取首个未分配的从站。`topology` 的回复带 `ser=`，是主站实际读到的序列号，可直接核对。
 
-**回零由执行层带模式、由驱动器走。** 用 `--mode homing` 生成的部署，各轴没有周期目标。主站把驱动器带进模式 6，在 Operation enabled 下置控制字 bit4，等状态字 bit12（homing attained）；bit13（homing error）或超过 `completion_timeout_ms` 按故障停机，全部轴到点后自动停机。回零方法与速度用 `--homing-*` 声明（0x6098 与 0x6099，写进 `safeop_to_op_sdo_writes`），不给就保持驱动器里的值。参考点准不准要在台架上核对。**台架只验证了失败路径**（良质驱动器无终点开关，进入模式 6 后报 bit13，主站正确停机）；成功归零待接/配终点开关。其他模式不做回零，位置基准由驱动器零点与机械决定。已验证的组合见[驱动与模式组合](docs/product/verified-combinations.md)。
+**回零由执行层带模式、由驱动器走。** 用 `--mode homing` 生成的部署，各轴没有周期目标。主站把驱动器带进模式 6，在 Operation enabled 下置控制字 bit4，等状态字 bit12（homing attained）；bit13（homing error）或超过 `completion_timeout_ms` 按故障停机，全部轴到点后自动停机。回零方法与速度用 `--homing-*` 声明（0x6098 与 0x6099，写进 `safeop_to_op_sdo_writes`），不给就保持驱动器里的值。方法号的含义随厂商：良质台架 2026-10-20 用方法 35（当前位置置零）走到 bit12、位置归零、退出码 0；方法 17（负向终点开关）在驱动器的 LW1 配置完成前报 bit13，主站正确停机。方法 35 不寻找物理参考点。参考点准不准要在台架上核对。其他模式不做回零，位置基准由驱动器零点与机械决定。已验证的组合见[驱动与模式组合](docs/product/verified-combinations.md)。
 
 外部目标超时由 `external_target_timeout_ms` 指定，默认 200 ms。客户端 100 Hz 的目标更新率与主站 1 kHz 的 PDO 交换率不同。断连、目标暂停、重连必须分别测试。**不能假定自动恢复运动。**
 
