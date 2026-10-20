@@ -782,6 +782,23 @@ def _read_scan(path: Path) -> tuple[int, list[dict[str, str]]]:
     return total, scanned
 
 
+def _scan_serial(entry: dict[str, str]) -> int | None:
+    """扫描里的 ESC 序列号。0 与 na 一样按"没读到"处理。
+
+    部分批次的 ESC 把 0x1018:04 读成 0（台架 6 台良质全是这样）。0 不是合法序列号，
+    写进拓扑会被运行期配置校验拒掉（必须是正整数或 null）；拿它当键更糟——六台会
+    被当成同一台。所以这里只有正整数才算数。
+    """
+    raw = entry.get("serial")
+    if raw in (None, "na"):
+        return None
+    try:
+        value = int(raw, 10)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _check_scan_identity(device: dict[str, Any], scanned: list[dict[str, str]]) -> None:
     """拿扫到的逐台身份跟设备档对。对不上要点名到台。
 
@@ -832,7 +849,7 @@ def init_site(args: argparse.Namespace) -> int:
         scan_path = Path(args.from_scan)
         axis_count, scanned = _read_scan(scan_path)
         _check_scan_identity(device, scanned)
-        with_serial = sum(1 for entry in scanned if entry.get("serial") not in (None, "na"))
+        with_serial = sum(1 for entry in scanned if _scan_serial(entry) is not None)
         if with_serial == axis_count:
             mapping_note = "逐台序列号已填入，轴按序列号绑定，换线后仍能对齐。"
         elif with_serial == 0:
@@ -859,9 +876,9 @@ def init_site(args: argparse.Namespace) -> int:
         )
 
     serial_by_position = {
-        int(entry["position"]): int(entry["serial"])
+        int(entry["position"]): _scan_serial(entry)
         for entry in scanned
-        if entry.get("serial") not in (None, "na")
+        if _scan_serial(entry) is not None
     }
     topology_id = f"{host_slug}-{axis_count}-axis"
     operation_id = _operation_id(device, args.mode, args.cycle_ns)
