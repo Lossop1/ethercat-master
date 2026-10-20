@@ -78,7 +78,8 @@ static const error_class_entry_t CLASS_TABLE[] = {
     [EMASTER_ERROR_CLASS_SHUTDOWN_UNCONFIRMED] = {
         401U, "SHUTDOWN_UNCONFIRMED",
         "停机未确认：轴已离开运行使能，未满足停机判据",
-        "核对停机判据的掩码与值是否与驱动器实际状态字一致；先读一次末拍状态字。"},
+        "控制台已印出使能与停住状态字及掩码候选；填进策略档后重跑 add-device 与 build。"
+        "也可用 tools/analysis/stop_criterion.py 从报告推出。"},
     [EMASTER_ERROR_CLASS_AUDIT] = {
         500U, "AUDIT", "审计层失败",
         "保留报告并检查磁盘空间与报告目录权限；反复出现时上报。"},

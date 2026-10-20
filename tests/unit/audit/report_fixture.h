@@ -125,6 +125,8 @@ static inline void report_fixture_init(report_fixture_t *fixture, const char *re
 
     /* 轴 1：健康。任何故障列都没有值，正是"不许凭空长出来"的那根。 */
     fixture->axis_results[0].status_word = FIXTURE_ENABLED_STATUS_WORD;
+    fixture->axis_results[0].operation_enabled_seen = true;
+    fixture->axis_results[0].operation_enabled_status_word = FIXTURE_ENABLED_STATUS_WORD;
     fixture->axis_results[0].axis_status = EMASTER_AXIS_STATUS_NORMAL;
 
     /* 轴 2：照抄 P12.17 的形状——第 22383 拍判故障、状态字 0x1208、未隔离。 */

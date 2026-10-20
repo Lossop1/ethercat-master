@@ -617,7 +617,55 @@ static void log_stop_unconfirmed(const emaster_soem_session_t *session) {
         printf("末拍 %zu 台均已离开运行使能\n", axis_count);
     }
     if (no_mask) {
-        printf("[SHUTDOWN] 出路：实测该型号 0x6041 停机读数，填进策略档掩码后重跑 add-device 与 build\n");
+        /*
+         * 掩码不是猜出来的：同一轴在使能时与停住时的 0x6041 差异就是判据的候选。
+         * 这里把本轮实测的两个值当场印出来，人只需要把这两个数抄进策略档，不必再
+         * 翻报告或自己按位推。差异为零说明这一轮没有可用的推导（例如轴从未使能），
+         * 此时不印建议，免得给出一个恒真的判据。
+         */
+        bool derivable = axis_count > 0U;
+        bool same_across_axes = true;
+        uint16_t first_mask = 0U;
+        uint16_t first_value = 0U;
+
+        for (size_t index = 0U; index < axis_count; ++index) {
+            const emaster_control_session_axis_result_t *axis = &session->axes[index];
+            const uint16_t mask =
+                (uint16_t)(axis->operation_enabled_status_word ^ axis->status_word);
+            const uint16_t value = (uint16_t)(axis->status_word & mask);
+
+            if (!axis->operation_enabled_seen || mask == 0U) {
+                derivable = false;
+                break;
+            }
+            if (index == 0U) {
+                first_mask = mask;
+                first_value = value;
+            } else if (mask != first_mask || value != first_value) {
+                same_across_axes = false;
+            }
+        }
+        if (derivable && same_across_axes) {
+            printf("[SHUTDOWN] 判据候选（本轮实测）：使能 0x%04X → 停住 0x%04X；"
+                   "safe_stop_status_mask=0x%04X，safe_stop_status_value=0x%04X\n",
+                   (unsigned)session->axes[0].operation_enabled_status_word,
+                   (unsigned)session->axes[0].status_word, (unsigned)first_mask,
+                   (unsigned)first_value);
+        } else if (derivable) {
+            for (size_t index = 0U; index < axis_count; ++index) {
+                const emaster_control_session_axis_result_t *axis = &session->axes[index];
+                const uint16_t mask =
+                    (uint16_t)(axis->operation_enabled_status_word ^ axis->status_word);
+
+                printf("[SHUTDOWN] 判据候选 轴%zu：使能 0x%04X → 停住 0x%04X；"
+                       "mask=0x%04X，value=0x%04X\n",
+                       index + 1U, (unsigned)axis->operation_enabled_status_word,
+                       (unsigned)axis->status_word, (unsigned)mask,
+                       (unsigned)(axis->status_word & mask));
+            }
+        }
+        printf("[SHUTDOWN] 出路：把上值填进 config/device_policies/<型号>.json，"
+               "重跑 add-device 与 build，再跑一轮确认停机确认变为通过\n");
     }
     fflush(stdout);
 }

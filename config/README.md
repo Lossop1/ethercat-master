@@ -59,7 +59,12 @@ JSON 不支持注释，本文件是字段语义的唯一配套说明；新增字
   上限值——那是对 12 位定点数的量程，不是 EtherCAT 侧该用的增益；
 - `protocol.safe_stop_status_mask` / `safe_stop_status_value`：停机时判定"设备已进入安全状态"的
   状态字掩码与期望值，必须台架实测填写，不得照标准默认值抄。掩码 0 表示该型号没有可靠的设备侧
-  停机判据，运行期只走标准 CiA 402 状态判据（未使能/未就绪），期望值也必须为 0；
+  停机判据，运行期只走标准 CiA 402 状态判据（未使能/未就绪），期望值也必须为 0。
+  实测的填法：跑一轮让轴真正使能后停机。若报告记"停机未确认"，控制台会印出该轮使能时与停住时
+  的 `0x6041`，以及由两者差异得到的候选掩码；同一份报告也可离线推：
+  `python3 tools/analysis/stop_criterion.py runtime/reports/<报告>.json`。候选来自一次实跑，
+  写进策略档前确认它对应的是"已停住"而不是别的状态位。改完必须重跑 `add-device`，只跑 `build`
+  不会把掩码带进设备档。
 - `conversion`：可选。人对这台设备写下的换算与方向。
   `encoder_counts_per_motor_revolution_default`（608F:1/608F:2）、`gear_motor_revolutions_default`
   与 `gear_shaft_revolutions_default`（6091:1/6091:2，直驱写 1 和 1）三项必须同时给出且均为正

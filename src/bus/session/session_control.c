@@ -747,6 +747,10 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
 
                 axis_result->control_word = session->controller_outputs[axis_index].control_word;
                 axis_result->cia402_state = session->controller_outputs[axis_index].observed_state;
+                if (operation_enabled && !axis_result->operation_enabled_seen) {
+                    /* 首次为准：停机判据要的是"使能时长什么样"，取第一次读到的值。 */
+                    axis_result->operation_enabled_status_word = axis_result->status_word;
+                }
                 axis_result->operation_enabled_seen |= operation_enabled;
                 axis_result->switch_on_disabled_seen |=
                     session->controller_outputs[axis_index].observed_state ==

@@ -533,9 +533,15 @@ int main(int argc, char **argv)
      * 没有意义，不升版就会把一份回零报告读成"运动从未开始"。升到 22 的理由：错误
      * 分类多了稳定编号与下一步——21 及以前只有键与中文名，现场报修还得翻手册。
      * 升到 23 的理由：部署段多了配置指纹——22 及以前两份报告并排只能比部署 ID 与
-     * 时间，现场改了配置再跑，中间的差异全靠人记。 */
-    check(strstr(text, "\"schema_version\":23") != NULL,
-          "schema_version 是 23（配置指纹）");
+     * 时间，现场改了配置再跑，中间的差异全靠人记。升到 24 的理由：逐轴多了首次使能时
+     * 的 0x6041——停机判据掩码要由"使能时长什么样、停住时长什么样"推出，23 及以前
+     * 报告里只有停住后的值。 */
+    check(strstr(text, "\"schema_version\":24") != NULL,
+          "schema_version 是 24（使能状态字）");
+    check(strstr(text,
+                 "\"operation_enabled_seen\":true,"
+                 "\"operation_enabled_status_word\":\"0x0237\"") != NULL,
+          "使能与停住状态字分开落盘，停机判据的推导不必再翻停机循环采样");
     check(strstr(text, "\"config_fingerprint\":\"0x0123456789ABCDEF\"") != NULL,
           "配置指纹写成十六进制字符串——写成 JSON 数字会在 JavaScript 里丢精度");
     check(strstr(text, "\"homing_configured\":true,\"homing_axis_count\":") != NULL,

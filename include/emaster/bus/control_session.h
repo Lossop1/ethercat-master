@@ -410,6 +410,15 @@ typedef struct
     bool ready_to_switch_on_seen;
     bool switched_on_seen;
     bool operation_enabled_seen;
+    /*
+     * 第一次进入 Operation enabled 时读到的 0x6041，原样留作停机判据的推导证据。
+     *
+     * 为什么要单独存：报告里运行期的 status_word 是最后一拍的，停机之后它已经被
+     * 停机循环改写成"停住"的那个值。只有把"使能时长什么样"和"停住时长什么样"放在
+     * 一起，人才能算出 safe_stop_status_mask 该填哪一位，而不是靠翻停机循环的采样。
+     * 有效性看 operation_enabled_seen：没使能过就没有这个读数。
+     */
+    uint16_t operation_enabled_status_word;
     emaster_drive_diagnostic_t drive_diagnostic;
     emaster_sync_diagnostic_t sm2_diagnostic;
     emaster_sync_diagnostic_t sm3_diagnostic;

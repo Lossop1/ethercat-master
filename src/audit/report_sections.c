@@ -880,7 +880,9 @@ static bool write_axis(FILE *stream,
         ",\"velocity_loop_kp\":%u,\"velocity_loop_ki\":%u,\"velocity_loop_kd\":%u"
         ",\"position_loop_kp\":%u,\"position_loop_ki\":%u,\"position_loop_kd\":%u"
         ",\"current_loop_kp\":%u,\"current_loop_ki\":%u,\"current_loop_kd\":%u"
-        ",\"operation_enabled_seen\":%s,\"motion_final_position\":%" PRId32
+        ",\"operation_enabled_seen\":%s"
+        ",\"operation_enabled_status_word\":\"0x%04X\""
+        ",\"motion_final_position\":%" PRId32
         ",\"max_following_error_counts\":%" PRIu64
         ",\"max_observed_following_error_counts\":%" PRIu64
         ",\"error_counters_read\":%s"
@@ -969,6 +971,7 @@ static bool write_axis(FILE *stream,
         (unsigned int)axis->current_loop_ki,
         (unsigned int)axis->current_loop_kd,
         axis->operation_enabled_seen ? "true" : "false",
+        (unsigned int)axis->operation_enabled_status_word,
         axis->motion_final_position, axis->max_following_error_counts,
         axis->max_observed_following_error_counts,
         axis->error_counters_read ? "true" : "false",
@@ -1603,7 +1606,7 @@ bool emaster_run_report_write(FILE *stream,
      * JavaScript 里丢精度；没加载过配置时为 null，不拿 0 冒充。不升版的话，旧读者
      * 会把"没有这一列"读成"配置没变"。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":23,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":24,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));
