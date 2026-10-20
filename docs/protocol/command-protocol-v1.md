@@ -109,7 +109,9 @@ ERROR|<正文>
 
 `status` 以 `state=` 开头，含 `cycle`、`axes`、`enabled`、`completed`、`wkc`、
 `wkc_expect`、`wkc_err`、`no_frame`、`over_budget`、`deadline_missed`、`rejected`、
-`tgt_age_ms`、`rej_axis`、`rej_offset`。逐轴字段含 `q=`（目标量的种类）与 `why=`
+`tgt_age_ms`、`rej_axis`、`rej_offset`、`cfg`。`cfg` 是主站加载的运行时配置指纹，
+与报告里的 `deployment.config_fingerprint` 同值；主站没加载过配置时印 `na`。
+逐轴字段含 `q=`（目标量的种类）与 `why=`
 （轴不动的首要原因：`ok`、`fault`、`halt`、`disabled`、`mode`、`maxT`、`timeout`）。
 `topology` 以 `axes=<轴数>,max_offset=<最小判据>` 开头，逐轴给
 `bus`、`enc=<增量>/<电机转数>`、`gear=<电机转数>/<输出轴转数>`、`torque=0`、

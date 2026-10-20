@@ -1156,6 +1156,25 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                        ->target_rejection_offset_counts);
                             }
                             /*
+                             * 这轮跑的是哪份配置。与报告里的 deployment.config_fingerprint
+                             * 同一个值，所以运行中就能拿 status 对终端/报告；没加载过
+                             * 配置印 na，不印 0——0 是合法哈希值。
+                             */
+                            char config_fingerprint_text[24];
+                            if (session->report->config_fingerprint_valid)
+                            {
+                                (void)snprintf(config_fingerprint_text,
+                                               sizeof(config_fingerprint_text),
+                                               "0x%016llX",
+                                               (unsigned long long)
+                                                   session->report->config_fingerprint);
+                            }
+                            else
+                            {
+                                (void)snprintf(config_fingerprint_text,
+                                               sizeof(config_fingerprint_text), "na");
+                            }
+                            /*
                              * 会话级计数一并给出去（P12.52）：此前它们只在报告里，
                              * 也就是只有跑完才看得到，而"这一轮现在健康吗"是运行中
                              * 就要回答的问题。全是累加计数，读它们不改任何状态。
@@ -1164,7 +1183,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 "state=%d cycle=%lu axes=%zu enabled=%d completed=%d"
                                 ",wkc=%d,wkc_expect=%u,wkc_err=%llu,no_frame=%llu"
                                 ",over_budget=%llu,deadline_missed=%d"
-                                ",rejected=%llu,tgt_age_ms=%s,rej_axis=%s,rej_offset=%s",
+                                ",rejected=%llu,tgt_age_ms=%s,rej_axis=%s,rej_offset=%s"
+                                ",cfg=%s",
                                 (int)session->report->state,
                                 (unsigned long)session->report->cycle_count,
                                 session->plan->axis_count,
@@ -1177,7 +1197,8 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 (unsigned long long)session->report->over_budget_cycle_count,
                                 session->report->cycle_deadline_missed ? 1 : 0,
                                 (unsigned long long)session->report->target_rejected_count,
-                                target_age_text, reject_axis_text, reject_offset_text);
+                                target_age_text, reject_axis_text, reject_offset_text,
+                                config_fingerprint_text);
 
                             for (axis_index = 0U;
                                  axis_index < session->plan->axis_count; ++axis_index) {

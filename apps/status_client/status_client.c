@@ -52,6 +52,12 @@ typedef struct
     long axis_count;
     int enabled;
     int completed;
+    /*
+     * 主站加载的运行时配置指纹。valid 为假时显示 na：0 是合法哈希值，不能兼作
+     * "没加载"。parse_summary_field 只在 cfg 字段真的出现且不是 na 时置真。
+     */
+    bool fingerprint_valid;
+    unsigned long long fingerprint;
     bool truncated;
     status_axis_t axes[STATUS_MAX_AXES];
     size_t axis_seen;
@@ -208,6 +214,15 @@ static void parse_summary_field(char *field, status_frame_t *frame)
     {
         frame->completed = (int)strtol(value, NULL, 10);
     }
+    else if (strcmp(field, "cfg") == 0)
+    {
+        /* "na" 表示主站没加载过配置；按 0 解析会把 na 读成合法指纹 0。 */
+        if (strcmp(value, "na") != 0)
+        {
+            frame->fingerprint = strtoull(value, NULL, 16);
+            frame->fingerprint_valid = true;
+        }
+    }
 }
 
 /*
@@ -343,11 +358,22 @@ static long following_error(const status_axis_t *axis)
 static void print_frame(const status_frame_t *frame)
 {
     size_t index;
+    char fingerprint_text[24];
 
-    printf("state=%ld cycle=%ld axes=%ld enabled=%s completed=%s\n",
+    if (frame->fingerprint_valid)
+    {
+        (void)snprintf(fingerprint_text, sizeof(fingerprint_text), "0x%016llX",
+                       frame->fingerprint);
+    }
+    else
+    {
+        (void)snprintf(fingerprint_text, sizeof(fingerprint_text), "na");
+    }
+    printf("state=%ld cycle=%ld axes=%ld enabled=%s completed=%s cfg=%s\n",
            frame->state, frame->cycle, frame->axis_count,
            frame->enabled < 0 ? "-" : (frame->enabled ? "是" : "否"),
-           frame->completed < 0 ? "-" : (frame->completed ? "是" : "否"));
+           frame->completed < 0 ? "-" : (frame->completed ? "是" : "否"),
+           fingerprint_text);
     if (frame->axis_seen == 0U)
     {
         printf("（未解析到轴数据，主站可能尚未进入使能状态）\n");
