@@ -228,7 +228,7 @@ def _pdo_set_draft(
             )
         if len(derived["pdo_sets"]) != 1:
             raise SystemExit("设备级推导给出的 PDO 方案不是一套，无法起草策略")
-        return [
+        draft = [
             {
                 "id": "direct",
                 "assignment_style": "direct_1c12",
@@ -237,6 +237,16 @@ def _pdo_set_draft(
                 "mode_value": STANDARD_MODE_VALUES["csp"],
             }
         ]
+        # 非模块化设备也可能在对象字典里声明回零；同一套映射换 0x6060 即可。
+        if "homing" in modes and _module_expresses_homing(derived, None):
+            draft.append(
+                {
+                    **draft[0],
+                    "id": "direct-homing",
+                    "mode_value": supported_modes["homing"],
+                }
+            )
+        return draft
 
     draft: list[dict[str, Any]] = []
     for module in modules:
@@ -279,7 +289,34 @@ def _pdo_set_draft(
                     "模式仍由运行方案选。",
                 )
             )
+        # 回零没有专门的模块，厂商只声明对象。同一套映射把 0x6060 写 6 就是回零，
+        # 所以给这条多模式方案再起草一条 -homing：客户 --mode homing 时不必自己
+        # 抄 JSON。单模式模块的模式被启动命令钉死，不改它。
+        if (
+            "homing" in supported_modes
+            and entry.get("mode_value") is not None
+            and _module_expresses_homing(derived, module["module_ident"])
+        ):
+            draft.append(
+                {
+                    **entry,
+                    "id": f"{entry['id'].rsplit('-', 1)[0]}-homing",
+                    "mode_value": supported_modes["homing"],
+                }
+            )
     return draft
+
+
+def _module_expresses_homing(derived: dict[str, Any], module_ident: str) -> bool:
+    """这套模块的过程数据够不够跑回零：只要控制字、模式与反馈那几项。"""
+    rx_fields, tx_fields, _quantity = MODE_FIELDS["homing"]
+    for pdo_set in derived["pdo_sets"]:
+        if pdo_set.get("module_ident") != module_ident:
+            continue
+        names = _mode_fields(pdo_set, "rx") | _mode_fields(pdo_set, "tx")
+        if all(name in names for name in rx_fields + tx_fields):
+            return True
+    return False
 
 
 def add_device(args: argparse.Namespace) -> int:

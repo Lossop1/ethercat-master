@@ -393,10 +393,31 @@ def module_mode_ids(module: dict[str, Any]) -> dict[str, int]:
     return modes
 
 
-def _modes(modules: list[dict[str, Any]]) -> dict[str, int]:
+def _declares_homing(objects: list[dict[str, Any]]) -> bool:
+    """对象字典里有 0x6098 与 0x6099:1，就是厂商声明了回零模式 6。
+
+    回零没有独立的 PDO 模块：同一套过程数据在 0x6060 写 6 就切到回零。所以不能
+    只从模块名认模式，要看对象字典。这两个对象是 CiA 402 规定的回零参数入口，
+    厂商把它们写进 ESI 就是可用声明 —— 没有它们，写了模式 6 也无处给方法与速度。
+    """
+    for entry in objects:
+        if entry["index"].lower() != "0x6099":
+            continue
+        if any(item.get("subindex") == 1 for item in entry.get("subitems") or []):
+            break
+    else:
+        return False
+    return any(entry["index"].lower() == "0x6098" for entry in objects)
+
+
+def _modes(
+    modules: list[dict[str, Any]], objects: list[dict[str, Any]]
+) -> dict[str, int]:
     modes: dict[str, int] = {}
     for module in modules:
         modes.update(module_mode_ids(module))
+    if "homing" not in modes and _declares_homing(objects):
+        modes["homing"] = STANDARD_MODE_VALUES["homing"]
     return dict(sorted(modes.items()))
 
 
@@ -428,7 +449,7 @@ def derive(facts: dict[str, Any]) -> dict[str, Any]:
             "assign_activate_by_strategy": facts["synchronization"][
                 "assign_activate_by_strategy"
             ],
-            "supported_modes": _modes(modules),
+            "supported_modes": _modes(modules, facts.get("object_dictionary") or []),
         },
         # 对象字典里能直接认出的遥测对象。策略档缺这一项时 add-device
         # 用这份起草；已有策略档仍以策略档为准。
