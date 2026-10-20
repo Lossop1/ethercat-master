@@ -193,6 +193,12 @@ typedef struct
     uint16_t position;
     const char *axis_id;
     const char *profile_id;
+    /*
+     * ESC 序列号（0x1018:04）。0 表示这份拓扑没有登记序列号，运行期退回
+     * "身份三元组 + 环序"的老做法。非 0 时它就是轴到物理从站的键：同型号
+     * 从站换了环序，主站按序列号找，不按谁先出现。
+     */
+    uint32_t serial_number;
 } emaster_topology_slave_config_t;
 
 /* status 原样保存用户给出的配置事实，基础设施不自行解释审批语义。 */

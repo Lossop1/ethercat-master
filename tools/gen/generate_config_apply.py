@@ -30,13 +30,17 @@ def flat_rows(topologies: list[dict[str, Any]]) -> list[tuple[str, str]]:
         rows.append((f"{base}.topology_id", topology["id"]))
         rows.append((f"{base}.status", topology["status"]))
         rows.append((f"{base}.slaves.count", str(len(topology["slaves"]))))
-        # 模型层把每个从站归一化成 (position, axis_id, profile_id) 三元组并按
-        # position 排序 —— 不是字典，别再按字段名取。
-        for index, (position, axis_id, profile_id) in enumerate(topology["slaves"]):
+        # 模型层把每个从站归一化成 (position, axis_id, profile_id, serial_number)
+        # 四元组并按 position 排序 —— 不是字典，别再按字段名取。
+        for index, (position, axis_id, profile_id, serial_number) in enumerate(
+            topology["slaves"]
+        ):
             slot = f"{base}.slaves.{index}"
             rows.append((f"{slot}.position", str(position)))
             rows.append((f"{slot}.axis_id", axis_id))
             rows.append((f"{slot}.profile_id", profile_id))
+            # 0 是"这份拓扑没有登记序列号"，不是序列号 0。运行期据此退回旧做法。
+            rows.append((f"{slot}.serial_number", str(serial_number)))
     return rows
 
 
@@ -106,6 +110,7 @@ def render(topologies: list[dict[str, Any]]) -> str:
         "    size_t index;",
         "    size_t count;",
         "    uint32_t position = 0U;",
+        "    uint32_t serial_number = 0U;",
         "",
         '    if (snprintf(key, sizeof(key), "topology.%zu", ordinal) < 0)',
         "    {",
@@ -172,6 +177,15 @@ def render(topologies: list[dict[str, Any]]) -> str:
         "        {",
         "            return false;",
         "        }",
+        "        memcpy(nested, key, sizeof(nested));",
+        '        if (!key_push(nested, sizeof(nested), "slaves") ||',
+        "            !key_push_index(nested, sizeof(nested), index) ||",
+        '            !key_push(nested, sizeof(nested), "serial_number") ||',
+        "            !emaster_config_reader_u32(reader, nested, &serial_number))",
+        "        {",
+        "            return false;",
+        "        }",
+        "        slave->serial_number = serial_number;",
         "    }",
         "    out->slaves = slaves[ordinal];",
         "    out->slave_count = count;",

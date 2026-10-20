@@ -112,7 +112,8 @@ ERROR|<正文>
 `tgt_age_ms`、`rej_axis`、`rej_offset`。逐轴字段含 `q=`（目标量的种类）与 `why=`
 （轴不动的首要原因：`ok`、`fault`、`halt`、`disabled`、`mode`、`maxT`、`timeout`）。
 `topology` 以 `axes=<轴数>,max_offset=<最小判据>` 开头，逐轴给
-`bus`、`enc=<增量>/<电机转数>`、`gear=<电机转数>/<输出轴转数>`。`dc` 以 `required=` 开头。
+`bus`、`enc=<增量>/<电机转数>`、`gear=<电机转数>/<输出轴转数>`、`torque=0`、
+`ser=<主站读到的序列号>`（读不到印 `na`）。`dc` 以 `required=` 开头。
 
 完整的字段表由构造它们的那段代码定义（`src/bus/session/session_control.c` 中三个
 `case EMASTER_COMMAND_QUERY_*`），仓库里参考的解析实现是 `tools/closed_loop_client.py`

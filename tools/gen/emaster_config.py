@@ -672,6 +672,7 @@ def _read_scan(path: Path) -> tuple[int, list[dict[str, str]]]:
         r" vendor=0x(?P<vendor>[0-9A-Fa-f]+)"
         r" product=0x(?P<product>[0-9A-Fa-f]+)"
         r" revision=0x(?P<revision>[0-9A-Fa-f]+)"
+        r"(?: serial=(?P<serial>\d+|na))?"
     )
     total: int | None = None
     scanned: list[dict[str, str]] = []
@@ -732,22 +733,42 @@ def init_site(args: argparse.Namespace) -> int:
 
     host = args.hostname or socket.gethostname()
     host_slug = _slug(host)
+    scanned: list[dict[str, str]] = []
     if args.from_scan:
         scan_path = Path(args.from_scan)
         axis_count, scanned = _read_scan(scan_path)
         _check_scan_identity(device, scanned)
+        with_serial = sum(1 for entry in scanned if entry.get("serial") not in (None, "na"))
+        if with_serial == axis_count:
+            mapping_note = "逐台序列号已填入，轴按序列号绑定，换线后仍能对齐。"
+        elif with_serial == 0:
+            mapping_note = (
+                "扫描没有读到序列号；轴只能按身份和环序绑定，"
+                "同型号多轴时请人工核对物理顺序。"
+            )
+        else:
+            mapping_note = (
+                f"只有 {with_serial}/{axis_count} 台读到序列号；"
+                "缺序列号的那几轴仍按身份和环序绑定。"
+            )
         axis_note = (
             "轴数",
-            f"{axis_count} 台，来自扫描 {scan_path}，逐台身份已核对。"
-            f"环序到物理关节的对应仍未确认。",
+            f"{axis_count} 台，来自扫描 {scan_path}，逐台身份已核对。{mapping_note}",
         )
     else:
         axis_count = args.slaves
         axis_note = (
             "轴数",
             f"按 --slaves {axis_count} 填的，没跟实物比过。"
-            f"接上真机跑 emaster-scan 核对；环序到物理关节的对应也仍未确认。",
+            f"接上真机跑 emaster-scan 核对；没有序列号，同型号多轴时"
+            f"环序到物理关节的对应仍未确认。",
         )
+
+    serial_by_position = {
+        int(entry["position"]): int(entry["serial"])
+        for entry in scanned
+        if entry.get("serial") not in (None, "na")
+    }
     topology_id = f"{host_slug}-{axis_count}-axis"
     operation_id = _operation_id(device, args.mode, args.cycle_ns)
     deployment_id = f"{topology_id}-idle"
@@ -785,6 +806,7 @@ def init_site(args: argparse.Namespace) -> int:
                 "axis_id": f"axis_{position:02d}",
                 "joint_assignment": None,
                 "profile_id": device["profile_id"],
+                "serial_number": serial_by_position.get(position),
             }
             for position in range(1, axis_count + 1)
         ],

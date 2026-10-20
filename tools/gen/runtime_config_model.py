@@ -160,6 +160,7 @@ def topology_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         entries = []
         positions: set[int] = set()
         axis_ids: set[str] = set()
+        serial_numbers: set[int] = set()
         for slave in slaves:
             if not isinstance(slave, dict):
                 raise ValueError(f"拓扑 {topology_id} 的从站条目必须是对象")
@@ -174,11 +175,25 @@ def topology_values(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             profile_id = required_string(
                 slave, "profile_id", f"拓扑 {topology_id} 的从站"
             )
+            serial_present, serial_number = optional_positive_integer(
+                slave.get("serial_number"),
+                f"拓扑 {topology_id} 的从站 {axis_id} 的 serial_number",
+                0xFFFFFFFF,
+            )
             if position in positions or axis_id in axis_ids:
                 raise ValueError(f"拓扑 {topology_id} 的位置或轴 ID 重复")
+            if serial_present:
+                if serial_number in serial_numbers:
+                    raise ValueError(
+                        f"拓扑 {topology_id} 的序列号 {serial_number} 重复；"
+                        "一个序列号只能绑定一根轴"
+                    )
+                serial_numbers.add(serial_number)
             positions.add(position)
             axis_ids.add(axis_id)
-            entries.append((position, axis_id, profile_id))
+            entries.append(
+                (position, axis_id, profile_id, serial_number if serial_present else 0)
+            )
 
         # 总线位置从 1 开始，但拓扑规模完全取自配置列表，不绑定具体轴数。
         if positions != set(range(1, len(entries) + 1)):
@@ -803,7 +818,7 @@ def deployment_values(
                 )
             topology_profile_ids = {
                 profile_id
-                for _, _, profile_id in topology_by_id[topology_id]["slaves"]
+                for _, _, profile_id, _ in topology_by_id[topology_id]["slaves"]
             }
             if set(selected_profile_ids) != topology_profile_ids:
                 raise ValueError(
@@ -849,7 +864,7 @@ def deployment_values(
                     f"部署 {deployment_id} 的运行模式与运动方案要求不一致"
                 )
             topology_axis_ids = {
-                axis_id for _, axis_id, _ in topology_by_id[topology_id]["slaves"]
+                axis_id for _, axis_id, _, _ in topology_by_id[topology_id]["slaves"]
             }
             motion_axis_ids = {axis["axis_id"] for axis in motion["axes"]}
             if motion_axis_ids != topology_axis_ids:

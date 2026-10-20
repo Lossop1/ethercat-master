@@ -494,6 +494,29 @@ static bool write_axis(FILE *stream,
 {
     const emaster_operation_profile_t *operation = axis_plan->operation_profile;
     const emaster_pdo_set_profile_t *pdo = axis_plan->pdo_set;
+    char expected_serial[16];
+    char observed_serial[16];
+    const char *serial_match;
+
+    /*
+     * 序列号三态：没登记（null）、登记了但没读到（observed=null）、读到了
+     * （两边都是十六进制串）。match 只有登记过才有 true/false。
+     */
+    if (axis_plan->topology_slave->serial_number != 0U) {
+        (void)snprintf(expected_serial, sizeof(expected_serial), "\"0x%08" PRIX32 "\"",
+                       axis_plan->topology_slave->serial_number);
+    } else {
+        (void)snprintf(expected_serial, sizeof(expected_serial), "null");
+    }
+    if (axis->serial_number_read) {
+        (void)snprintf(observed_serial, sizeof(observed_serial), "\"0x%08" PRIX32 "\"",
+                       axis->actual_serial_number);
+    } else {
+        (void)snprintf(observed_serial, sizeof(observed_serial), "null");
+    }
+    serial_match = axis->serial_number_checked
+                       ? (axis->serial_number_match ? "true" : "false")
+                       : "null";
 
     REQUIRE_WRITE(fprintf(
         stream,
@@ -505,14 +528,17 @@ static bool write_axis(FILE *stream,
     REQUIRE_WRITE(fprintf(
         stream,
         "\"vendor_id\":\"0x%08" PRIX32 "\",\"product_code\":\"0x%08" PRIX32
-        "\",\"revision\":\"0x%08" PRIX32 "\"},\"observed\":{"
+        "\",\"revision\":\"0x%08" PRIX32 "\",\"serial_number\":%s},\"observed\":{"
         "\"vendor_id\":\"0x%08" PRIX32 "\",\"product_code\":\"0x%08" PRIX32
-        "\",\"revision\":\"0x%08" PRIX32 "\"},\"match\":%s},",
+        "\",\"revision\":\"0x%08" PRIX32 "\",\"serial_number\":%s},"
+        "\"match\":%s,\"serial_match\":%s},",
         axis_plan->device_profile->identity.vendor_id,
         axis_plan->device_profile->identity.product_code,
         axis_plan->device_profile->identity.revision,
+        expected_serial,
         axis->actual_vendor_id, axis->actual_product_code, axis->actual_revision,
-        axis->identity_match ? "true" : "false") >= 0);
+        observed_serial,
+        axis->identity_match ? "true" : "false", serial_match) >= 0);
     REQUIRE_WRITE(fputs("\"operation\":{\"profile_id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, operation->profile_id));
     REQUIRE_WRITE(fputs(",\"mode_id\":", stream) != EOF);
@@ -1548,7 +1574,7 @@ bool emaster_run_report_write(FILE *stream,
      * "设备没答、无从比对"。升版是因为版本 18 里只有一个 position_scale，读者无从知道
      * 设备当时报的是什么，同版本下"设备在说谎"与"人写对了档"两份报告会长得一样。
      */
-    REQUIRE_WRITE(fputs("{\"schema_version\":19,\"generated_at_utc\":", stream) != EOF);
+    REQUIRE_WRITE(fputs("{\"schema_version\":20,\"generated_at_utc\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, generated_at_utc));
     REQUIRE_WRITE(fputs(",\"deployment\":{\"id\":", stream) != EOF);
     REQUIRE_WRITE(emaster_json_string(stream, plan->deployment->deployment_id));

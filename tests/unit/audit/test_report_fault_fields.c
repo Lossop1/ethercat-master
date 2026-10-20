@@ -526,9 +526,11 @@ int main(int argc, char **argv)
      * TOPOLOGY_MISMATCH——2026-10-14 台架就是这样（报告写轴数=12，环上只有 10 台，
      * 凭那一份报告断不出来）。升到 19 的理由：逐轴的换算段里多出从站自报那一笔与
      * device_agrees——18 及以前只有一个 position_scale，读者无从知道设备当时报的是
-     * 什么，"设备在说谎"与"人写对了档"两份报告长得一样。 */
-    check(strstr(text, "\"schema_version\":19") != NULL,
-          "schema_version 是 19（换算段要写下从站自报值与它跟生效值一致不一致）");
+     * 什么，"设备在说谎"与"人写对了档"两份报告长得一样。升到 20 的理由：逐轴身份段
+     * 多了登记的序列号、实际读到的序列号与核对结果——19 及以前只有身份三元组，
+     * 同型号从站换位在报告里看不出来。 */
+    check(strstr(text, "\"schema_version\":20") != NULL,
+          "schema_version 是 20（换算段自报值；身份段写序列号与核对结果）");
     check(strstr(text, "\"bus_slave_count\":10") != NULL,
           "故障现场带上环上实扫台数：环上 10 台、配置 3 轴，读到这一列才知道是少站");
     check(strstr(text,

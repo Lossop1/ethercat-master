@@ -124,7 +124,7 @@ $EDITOR config/device_policies/<文件名>.json
 # 4 只读扫描总线：环上有几台、每台各是什么型号。要 root：原始套接字
 sudo build/apps/diagnose_slave/emaster-scan <网卡> > scan.txt
 
-# 5 生成拓扑、运行方案与部署。轴数和逐台身份都取自扫描
+# 5 生成拓扑、运行方案与部署。轴数、逐台身份与序列号都取自扫描
 python3 tools/gen/emaster_config.py init-site --device <设备档 ID> \
   --interface <网卡> --from-scan scan.txt
 
@@ -193,10 +193,11 @@ sudo build/apps/status_client/emaster-status --deployment <部署ID>
 
 ```bash
 sudo timeout 3 nc -U /tmp/emaster-<部署ID>.sock <<< topology
-# OK|axes=<轴数>,max_offset=<目标偏移上限计数>|a1:bus=<轴号>,enc=<增量数>/<电机转数>,gear=<M>/<S>,torque=0|a2:...
+# OK|axes=<轴数>,max_offset=<目标偏移上限计数>|a1:bus=<轴号>,enc=<增量数>/<电机转数>,gear=<M>/<S>,torque=0,ser=<序列号>|a2:...
 ```
 
 `torque` 是保留字段，恒为 `0`。额定力矩在设备描述和配置里都没有数据源，不填猜测值。
+`ser` 是主站实际读到的 `0x1018:04`；读不到印 `na`。
 
 **停止：Ctrl+C。** 主站注册了 SIGINT 和 SIGTERM，两者走**和命令口 `shutdown` 完全相同**的安全停机路径：安全输出 → 停用各轴 → 回 INIT。
 
@@ -372,7 +373,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 
 发命令请复用 `tools/interactive_control.py`、`tools/emaster_client.py` 或控制台 Engine。**每条命令回一行**，但一行回复也可能被拆成多次到达：按换行符读到完整一行再判定，不要假定一次 socket read 就是一条完整回复。
 
-**轴序就是总线顺序，主站不绑定驱动器序列号。** 换线、换同型号驱动器或重排从站后，先用 `topology` 核对轴数与换算，再用 `sdo_read <从站号> 0x1018 4` 读序列号人工确认。**主站不做回零**：位置基准由驱动器零点与机械决定，上电后先确认参考位置再发目标。已验证的组合见[驱动与模式组合](docs/product/verified-combinations.md)。
+**没登记序列号时轴序就是总线顺序；登记了序列号时按序列号绑定。** `init-site --from-scan` 把扫描读到的 `0x1018:04` 逐台写进拓扑。登记后，同型号从站换了环序也照样对得上；登记了但读不到、或读到的值不相等，主站拒绝启动并点名到轴。没登记序列号的拓扑保持原行为：按 vendor/product/revision 取首个未分配的从站。`topology` 的回复带 `ser=`，是主站实际读到的序列号，可直接核对。**主站不做回零**：位置基准由驱动器零点与机械决定，上电后先确认参考位置再发目标。已验证的组合见[驱动与模式组合](docs/product/verified-combinations.md)。
 
 外部目标超时由 `external_target_timeout_ms` 指定，默认 200 ms。客户端 100 Hz 的目标更新率与主站 1 kHz 的 PDO 交换率不同。断连、目标暂停、重连必须分别测试。**不能假定自动恢复运动。**
 
@@ -403,7 +404,7 @@ sudo bash -c 'ulimit -r unlimited; exec \
 | 工具 | 说明 |
 | --- | --- |
 | `emaster-master` | 主站 |
-| `emaster-scan` | 只读扫描：逐台身份、AL 状态、`0x6041`、故障码、换算。用法一节第 4 步用它 |
+| `emaster-scan` | 只读扫描：逐台身份、序列号、AL 状态、`0x6041`、故障码、换算。用法一节第 4 步用它 |
 | `emaster-disable` | **走邮箱把驱动器失能**。主站起不来时也能用 |
 | `emaster-status` | 只读查询命令口一次：`status`。`--watch <毫秒>` 周期刷新 |
 | `emaster-watch [间隔ms] --deployment <ID>` | 实时监控位置／速度／力矩／状态字 |
@@ -445,7 +446,8 @@ sudo bash -c 'ulimit -r unlimited; exec \
 | 命令口超长行整块丢弃 | `command_server.c` 攒到 511 字节还没有换行时丢掉整块并打一条警告。丢弃的是那一行，连接不断——但是这一行里的命令不会被执行 |
 | 断连后保持位置（已定的产品行为） | 目标超过 `external_target_timeout_ms`（默认 200 ms）没更新时，CSP 保持最后目标：不是撤使能，也不是受控减速。若将来要求"通信丢失即停机"，那是行为变更，不是缺陷修复。见[目标通道契约](docs/protocol/target-channel-contract.md)第 4 节 |
 | 偏移上限折算不出来的轴不做目标判据 | 换算不可用的轴根本不让跑（会话判 `MOTION_INVALID`）。但换算可用、而上限折算结果为零（部署把 `external_target_max_offset_millidegrees` 配得过小）或溢出的轴会跑且不判；报告里 `offset_limit_checked=false` 如实标出 |
-| 同型号从站不能唯一确定物理轴 | `topology_mapper.c` 按 vendor/product/revision 选择首个未分配的匹配项，没有序列号或物理标签参与映射。**环序不等于物理关节标签** |
+| 未登记序列号时，同型号从站不能唯一确定物理轴 | 拓扑里每台从站可登记 `serial_number`（扫描读 `0x1018:04`）。**没登记**的轴仍按 vendor/product/revision 选首个未分配项，**环序不等于物理关节标签**。登记序列号的映射路径尚未经台架验证 |
+| 旧配置目录要与新版主站一起重建 | 扁平文件新增 `topology.<n>.slaves.<m>.serial_number`。缺这个键时主站报"缺键"并退出；对配置源跑一次 `emaster_config.py build` 即可 |
 | DC/Sync0 可靠性是模型估计 | `sync0_margin_ns` 使用参考 DC 时间、启动期 `pdelay` 和配置的 Sync0 相位，没有直接采集 Sync0 边沿或 SM2 完成时间。非负裕量不能证明目标已在正确的 Sync0 前由每个驱动器锁存 |
 | 目标判据不是速度限制 | `session_target.c` 只查 `|目标 - 实际位置|`，且只对位置轴查。客户端连发两条各自合法的目标，两条之间的速度可以任意大，主站不看这个 |
 | 断供写 0 不等于受控停止 | 速度与力矩模式超时后主站写 0，但减速由驱动器自己的斜坡完成，主站不等它停；力矩模式下 0 力矩就是轴松开。谁写什么由运行方案声明的量（`quantity`）决定，见[目标通道契约](docs/protocol/target-channel-contract.md)第 4 节 |

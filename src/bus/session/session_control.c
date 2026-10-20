@@ -1513,10 +1513,18 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                 const emaster_control_session_axis_result_t *axis =
                                     &session->axes[axis_index];
                                 const emaster_position_scale_t *scale = &axis->position_scale;
+                                char serial_text[16];
                                 int written;
 
                                 if (offset < 0 || (size_t)offset >= sizeof(response.message)) {
                                     break;
+                                }
+                                if (axis->serial_number_read) {
+                                    (void)snprintf(serial_text, sizeof(serial_text),
+                                                   "0x%08X",
+                                                   (unsigned)axis->actual_serial_number);
+                                } else {
+                                    (void)snprintf(serial_text, sizeof(serial_text), "na");
                                 }
                                 /* 编码器分辨率 = encoder_increments / encoder_motor_revolutions
                                  * 齿轮比 = gear_motor_revolutions : gear_shaft_revolutions
@@ -1528,13 +1536,14 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                  * 会让客户端拿它把千分比折成牛米。保留位置、不编值。 */
                                 written = snprintf(response.message + offset,
                                                    sizeof(response.message) - (size_t)offset,
-                                                   "|a%u:bus=%u,enc=%u/%u,gear=%u/%u,torque=0",
+                                                   "|a%u:bus=%u,enc=%u/%u,gear=%u/%u,torque=0,ser=%s",
                                                    (unsigned int)(axis_index + 1U),
                                                    (unsigned int)axis->position,
                                                    (unsigned int)scale->encoder_increments,
                                                    (unsigned int)scale->encoder_motor_revolutions,
                                                    (unsigned int)scale->gear_motor_revolutions,
-                                                   (unsigned int)scale->gear_shaft_revolutions);
+                                                   (unsigned int)scale->gear_shaft_revolutions,
+                                                   serial_text);
                                 if (written < 0) {
                                     break;
                                 }

@@ -80,7 +80,10 @@ static void collect_safety_conditions(
     conditions->output_initialized = true;
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
     {
-        conditions->topology_verified &= session->axes[axis_index].identity_match;
+        conditions->topology_verified &=
+            session->axes[axis_index].identity_match &&
+            (!session->axes[axis_index].serial_number_checked ||
+             session->axes[axis_index].serial_number_match);
         conditions->pdo_verified &= session->axes[axis_index].pdo_match &&
                                     session->axes[axis_index].process_map_match;
         conditions->output_initialized &= session->axes[axis_index].output_initialized;

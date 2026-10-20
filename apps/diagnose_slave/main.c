@@ -263,12 +263,15 @@ int main(int argc, char *argv[])
         uint32_t gear_shaft = 0U;
         uint32_t encoder_increments = 0U;
         uint32_t encoder_revolutions = 0U;
+        uint32_t serial_number = 0U;
         char gear_motor_text[24];
         char gear_shaft_text[24];
         char encoder_increments_text[24];
         char encoder_revolutions_text[24];
+        char serial_number_text[24];
         bool gear_read = false;
         bool encoder_read = false;
+        bool serial_number_read = false;
         uint32_t max_motor_speed = 0U;
         uint32_t profile_velocity = 0U;
         uint32_t profile_acceleration = 0U;
@@ -295,6 +298,12 @@ int main(int argc, char *argv[])
                                     &encoder_increments) &&
                            read_u32(&context, (uint16_t)index, UINT16_C(0x608F), UINT8_C(0x02),
                                     &encoder_revolutions);
+            /*
+             * 0x1018:04 序列号。同型号从站靠它区分，拓扑配置用它把轴绑定到
+             * 物理关节。读不到就印 na —— 不能拿 0 冒充一个序列号。
+             */
+            serial_number_read = read_u32(&context, (uint16_t)index, UINT16_C(0x1018),
+                                          UINT8_C(0x04), &serial_number);
         }
 
         /*
@@ -406,6 +415,8 @@ int main(int argc, char *argv[])
 
         format_u32(gear_motor_text, sizeof(gear_motor_text), gear_read, gear_motor);
         format_u32(gear_shaft_text, sizeof(gear_shaft_text), gear_read, gear_shaft);
+        format_u32(serial_number_text, sizeof(serial_number_text), serial_number_read,
+                   serial_number);
         format_u32(encoder_increments_text, sizeof(encoder_increments_text), encoder_read,
                    encoder_increments);
         format_u32(encoder_revolutions_text, sizeof(encoder_revolutions_text), encoder_read,
@@ -466,14 +477,18 @@ int main(int argc, char *argv[])
                            sizeof(al_code), &al_code, EC_TIMEOUTRET);
         }
 
+        /*
+         * 序列号紧跟在身份三元组后面：`init-site` 只从这一小段取身份，顺序变了
+         * 它就取不到。其余字段保持原顺序。
+         */
         printf("slave=%d name=%s vendor=0x%08X product=0x%08X revision=0x%08X "
-               "state=%u al_status=0x%04X dc=%d coe=%d mbx_rl=%u cfgadr=%u al_wkc=%d "
+               "serial=%s state=%u al_status=0x%04X dc=%d coe=%d mbx_rl=%u cfgadr=%u al_wkc=%d "
                "alctl_wkc=%d state_after=%u ack_wkc=%d al_code=0x%04X errbit=%d "
                "gear=%s/%s enc=%s/%s "
                "maxspeed_6080=%s pvel_6081=%s pacc_6083=%s pdec_6084=%s "
                "cia402_6041=%s cia402=%s cia402_603f=%s fault_203f=%s fault_203e=%s\n",
                index, slave->name, (unsigned)slave->eep_man, (unsigned)slave->eep_id,
-               (unsigned)slave->eep_rev, (unsigned)slave->state,
+               (unsigned)slave->eep_rev, serial_number_text, (unsigned)slave->state,
                (unsigned)slave->ALstatuscode, slave->hasdc != 0U ? 1 : 0,
                (slave->mbx_proto & ECT_MBXPROT_COE) != 0U ? 1 : 0, (unsigned)slave->mbx_rl,
                (unsigned)slave->configadr, al_probe_wkc,

@@ -221,6 +221,15 @@ typedef struct
     uint32_t actual_product_code;
     uint32_t actual_revision;
     bool identity_match;
+    /*
+     * 序列号核对。checked 只有在拓扑登记了序列号时才为真；read 说邮箱到底读没
+     * 读到；match 是"读到且等于登记值"。三者分开，报告才能区分"没登记"、
+     * "登记了但读不到"和"读到了但不是这台"。
+     */
+    bool serial_number_checked;
+    bool serial_number_read;
+    uint32_t actual_serial_number;
+    bool serial_number_match;
     bool pdo_match;
     bool process_map_match;
     /*

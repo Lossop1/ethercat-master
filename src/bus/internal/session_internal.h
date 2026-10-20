@@ -405,6 +405,9 @@ typedef struct {
     uint32_t vendor_id;
     uint32_t product_code;
     uint32_t revision;
+    /* 0x1018:04 只在这一份拓扑至少登记了一个序列号时才读。 */
+    bool serial_number_read;
+    uint32_t serial_number;
     bool assigned;
 } emaster_discovered_slave_t;
 

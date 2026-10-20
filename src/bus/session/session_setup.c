@@ -150,6 +150,15 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         status = EMASTER_CONTROL_SESSION_TOPOLOGY_MISMATCH;
         return status;
     }
+    /*
+     * 先等全体到 PRE-OP，再映射。映射读 0x1018:04 走邮箱，而邮箱在从站进
+     * PRE-OP 之前不可用；原先这一步在映射之后，序列号会稳定读不到。
+     */
+    if (!emaster_soem_wait_preop(&session->context)) {
+        status = EMASTER_CONTROL_SESSION_PREOP_NOT_REACHED;
+        return status;
+    }
+    ecx_readstate(&session->context);
 
     /* 分配发现表 */
     discovered = (emaster_discovered_slave_t *)calloc((size_t)slave_count, sizeof(emaster_discovered_slave_t));
@@ -167,11 +176,6 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         status = EMASTER_CONTROL_SESSION_TOPOLOGY_MISMATCH;
         return status;
     }
-    if (!emaster_soem_wait_preop(&session->context)) {
-        status = EMASTER_CONTROL_SESSION_PREOP_NOT_REACHED;
-        return status;
-    }
-    ecx_readstate(&session->context);
 
     for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
         const emaster_session_axis_plan_t *axis = &session->plan->axes[axis_index];
@@ -224,6 +228,22 @@ emaster_control_session_status_t emaster_soem_session_configure(emaster_soem_ses
         if (!session->axes[axis_index].identity_match) {
             status = EMASTER_CONTROL_SESSION_IDENTITY_MISMATCH;
             return status;
+        }
+        /*
+         * 序列号是第二把钥匙。登记了就要求读到且相等；没登记不算失败。
+         * 映射阶段已经按序列号挑过从站，这里是对"挑中的这台"再做一次核对 ——
+         * 它防的是映射和后续配置之间从站换位这类错误。
+         */
+        if (axis->topology_slave->serial_number != 0U) {
+            session->axes[axis_index].serial_number_checked = true;
+            session->axes[axis_index].serial_number_match =
+                session->axes[axis_index].serial_number_read &&
+                session->axes[axis_index].actual_serial_number ==
+                    axis->topology_slave->serial_number;
+            if (!session->axes[axis_index].serial_number_match) {
+                status = EMASTER_CONTROL_SESSION_IDENTITY_MISMATCH;
+                return status;
+            }
         }
         if (!emaster_soem_discover_pdo_layout_recorded(&sdo, &session->images[axis_index].layout)) {
             status = EMASTER_CONTROL_SESSION_PDO_MISMATCH;

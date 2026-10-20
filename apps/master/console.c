@@ -110,6 +110,21 @@ void emaster_master_console_result(const emaster_session_plan_t *plan,
 
     for (axis_index = 0U; axis_index < report->axis_count; ++axis_index) {
         const emaster_control_session_axis_result_t *axis = &report->axes[axis_index];
+        if (axis_index < plan->axis_count && axis->serial_number_checked &&
+            !axis->serial_number_match) {
+            char observed[32];
+
+            if (axis->serial_number_read) {
+                (void)snprintf(observed, sizeof(observed), "读到的值 0x%08X",
+                               (unsigned)axis->actual_serial_number);
+            } else {
+                (void)snprintf(observed, sizeof(observed), "总线上无可用匹配");
+            }
+            fprintf(stderr, emaster_text(EMASTER_TEXT_CONTROL_SESSION_SERIAL_LINE),
+                    (unsigned int)(axis_index + 1U),
+                    (unsigned)plan->axes[axis_index].topology_slave->serial_number,
+                    observed);
+        }
         if (axis->position == 0U) {
             continue;
         }
