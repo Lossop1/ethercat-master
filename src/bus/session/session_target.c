@@ -1,5 +1,6 @@
 #include "session_internal.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -35,6 +36,7 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
     size_t axis_index;
     size_t offending_axis = 0U;
     uint64_t offending_offset = 0U;
+    emaster_axis_target_t targets[EMASTER_EXTERNAL_TARGET_MAX_AXES];
 
     if (session == NULL || session->plan == NULL || session->report == NULL ||
         session->position_target_source == NULL ||
@@ -65,9 +67,8 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
 
     /* 调用回调获取新目标 */
     source_result = session->position_target_source(
-        session->report->cycle_count, session->axes, session->plan->axis_count,
-        session->position_target_source_targets, session->plan->axis_count,
-        session->position_target_source_user_data);
+        session->report->cycle_count, session->axes, session->plan->axis_count, targets,
+        EMASTER_EXTERNAL_TARGET_MAX_AXES, session->position_target_source_user_data);
 
     if (source_result == EMASTER_POSITION_TARGET_SOURCE_HOLD)
     {
@@ -76,6 +77,11 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
     if (source_result != EMASTER_POSITION_TARGET_SOURCE_UPDATED)
     {
         return EMASTER_CONTROL_SESSION_MOTION_INVALID;
+    }
+
+    /* 回调给的是"每轴一帧"的集合：主量进原有数组，力矩单独应用。 */
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
+        session->position_target_source_targets[axis_index] = targets[axis_index].value;
     }
 
     /*
@@ -128,6 +134,21 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
             /* 硬件写入失败：不更新会话状态 */
             return EMASTER_CONTROL_SESSION_MOTION_INVALID;
         }
+    }
+
+    /*
+     * 同一帧的第二量：0x6071。
+     *
+     * 写不写由映射决定（RxPDO 里有没有这一项，见 process_image.c），这里只把客户端
+     * 送来的值放进本轴结果。越出 INT16 不写——宁可这一拍不发，也不截断成另一个值。
+     */
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+    {
+        if (!targets[axis_index].torque_present) continue;
+        if (targets[axis_index].torque < INT16_MIN || targets[axis_index].torque > INT16_MAX)
+            continue;
+        session->axes[axis_index].target_torque = (int16_t)targets[axis_index].torque;
+        session->axes[axis_index].target_torque_valid = true;
     }
 
     /* 状态提交：仅在所有硬件写入成功后更新会话状态 */

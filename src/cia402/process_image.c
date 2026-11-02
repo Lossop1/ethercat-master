@@ -628,6 +628,20 @@ bool emaster_cia_process_image_update_output(
     uint8_t *output,
     size_t output_capacity)
 {
+    return emaster_cia_process_image_update_output_with_torque(
+        axis, image, control_word, target_value, false, 0, output, output_capacity);
+}
+
+bool emaster_cia_process_image_update_output_with_torque(
+    const emaster_session_axis_plan_t *axis,
+    emaster_cia_process_image_t *image,
+    uint16_t control_word,
+    int32_t target_value,
+    bool torque_valid,
+    int32_t torque_value,
+    uint8_t *output,
+    size_t output_capacity)
+{
     if (axis == NULL || axis->operation_mode == NULL || image == NULL || output == NULL)
     {
         return false;
@@ -667,6 +681,19 @@ bool emaster_cia_process_image_update_output(
     case EMASTER_MODE_QUANTITY_NONE:
     default:
         return false;
+    }
+    /*
+     * 同一帧写 0x6071。两个条件缺一不写：PDO 映射里真有这一项，且主量不是力矩本身。
+     *
+     * 判据是映射而不是模式名：ES 里 0x1600 同时排了 0x607A 与 0x6071 的驱动器，
+     * 就按这一条映射收两量；没排这一项的，写进去只会是协议错误。主量是力矩时
+     * （CST）不重复写，避免同一格两个来源。越出 INT16 判失败，宁可不发也不截断。
+     */
+    if (torque_valid && axis->operation_mode->quantity != EMASTER_MODE_QUANTITY_TORQUE &&
+        image->rx_target_torque_ordinal != SIZE_MAX)
+    {
+        if (torque_value < INT16_MIN || torque_value > INT16_MAX) return false;
+        image->rx_values[image->rx_target_torque_ordinal].value.signed_value = torque_value;
     }
     return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
                                     image->rx_field_count, image->rx_values,

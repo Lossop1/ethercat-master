@@ -198,6 +198,9 @@ def build_parser():
                         help="持续秒数（--once 之外都要给）")
     parser.add_argument("--mode", type=int, default=DEFAULT_MODE,
                         help=f"逐轴运行模式，默认 {DEFAULT_MODE}（CSP）")
+    parser.add_argument("--tau", type=int, default=0,
+                        help="每轴力矩原始值（0x6071）。只在该轴的运行方案把 target_torque "
+                             "声明进 required_rx_fields 时才写进过程映像；未声明时主站忽略它")
     parser.add_argument("--seq-start", type=int, default=1, help="首个序号，默认 1")
     parser.add_argument("--axes", type=int, default=None,
                         help="离线模式下的轴数（--dry-run 时用）")
@@ -288,7 +291,7 @@ def main(argv=None):
             if deadline is not None and now > deadline:
                 break
             targets = next(generator)
-            axes = [(q, 0, 0, 0, 0) for q in targets]
+            axes = [(q, 0, args.tau, 0, 0) for q in targets]
             record = encode_record(sequence, time.monotonic_ns() - origin, axes, args.mode)
             try:
                 sock.sendall(record)

@@ -319,6 +319,13 @@ typedef struct
     int32_t target_velocity;
     int16_t actual_torque;
     int16_t target_torque;
+    /*
+     * 本轮是否有客户端送来的力矩（0x6071）。运行时只在两件事同时成立时置真：
+     * 该轴的模式把 target_torque 声明进 required_rx_fields，且 PDO 映射里确实
+     * 有这一项。两者缺一，力矩就只留在缓冲区里，不写进过程映像——写进去就是
+     * "主站替客户端出了一个它没被授权写的量"。
+     */
+    bool target_torque_valid;
     int16_t actual_current;
     uint32_t dc_link_voltage;
     int16_t mosfet_temperature;  /* 0.1°C, from 200Bh:01h */
@@ -1598,11 +1605,27 @@ typedef void (*emaster_control_session_feedback_updated_t)(
  * target_positions 只有在返回 UPDATED 时才会被采用，单位为所选 PDO 的原始位置计数；
  * 这个最小接口不规定上层输入频率、传输协议或命令生产者。
  */
+/*
+ * 每轴一帧的目标量。
+ *
+ * value 是"主量"：按该轴模式声明的 quantity 解释（位置/速度/力矩计数），主站把它
+ * 写进对应的那个字段。torque 是 0x6071（力矩偏移/前馈），只在模式显式声明
+ * target_torque 且 PDO 映射里有这一项时才写——用于 CSP 部署下"同帧写位置与力矩"。
+ *
+ * 两者同一帧写给同一个 RxPDO；声明里没有的量一律不写。
+ */
+typedef struct
+{
+    int32_t value;
+    int32_t torque;
+    bool torque_present;
+} emaster_axis_target_t;
+
 typedef emaster_position_target_source_result_t (*emaster_control_session_position_target_source_t)(
     uint64_t cycle,
     const emaster_control_session_axis_result_t *axes,
     size_t axis_count,
-    int32_t *target_positions,
+    emaster_axis_target_t *targets,
     size_t target_capacity,
     void *user_data);
 

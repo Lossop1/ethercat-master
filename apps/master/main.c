@@ -149,7 +149,7 @@ static emaster_position_target_source_result_t position_target_source(
     uint64_t cycle,
     const emaster_control_session_axis_result_t *axes,
     size_t axis_count,
-    int32_t *target_positions,
+    emaster_axis_target_t *targets,
     size_t target_capacity,
     void *user_data)
 {
@@ -200,17 +200,20 @@ static emaster_position_target_source_result_t position_target_source(
                      */
                     switch (axis_quantities[i]) {
                     case EMASTER_MODE_QUANTITY_VELOCITY:
-                        target_positions[i] = buf->velocities[i];
+                        targets[i].value = buf->velocities[i];
                         break;
                     case EMASTER_MODE_QUANTITY_TORQUE:
-                        target_positions[i] = buf->torques[i];
+                        targets[i].value = buf->torques[i];
                         break;
                     case EMASTER_MODE_QUANTITY_POSITION:
                     case EMASTER_MODE_QUANTITY_NONE:
                     default:
-                        target_positions[i] = buf->positions[i];
+                        targets[i].value = buf->positions[i];
                         break;
                     }
+                    /* 第二量：0x6071。写不写由运行方案的声明决定，这里只管"有"。 */
+                    targets[i].torque = buf->torques[i];
+                    targets[i].torque_present = true;
                 }
             }
         }
@@ -234,7 +237,10 @@ static emaster_position_target_source_result_t position_target_source(
             last_mode = 3;
         }
         for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
-            target_positions[i] = 0;
+            targets[i].value = 0;
+            /* 力矩与速度一样：失联后不能继续输出上一条，必须归零。 */
+            targets[i].torque = 0;
+            targets[i].torque_present = true;
         }
         return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
     } else if (last_mode == 1) {
@@ -253,7 +259,9 @@ static emaster_position_target_source_result_t position_target_source(
             last_mode = 0;
         }
         for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
-            target_positions[i] = initial_positions[i];
+            targets[i].value = initial_positions[i];
+            targets[i].torque = 0;
+            targets[i].torque_present = true;
         }
         return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
     }

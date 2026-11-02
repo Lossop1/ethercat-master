@@ -160,7 +160,7 @@ static emaster_position_target_source_result_t probe_position_target_source(
     uint64_t cycle,
     const emaster_control_session_axis_result_t *axes,
     size_t axis_count,
-    int32_t *target_positions,
+    emaster_axis_target_t *targets,
     size_t target_capacity,
     void *user_data)
 {
@@ -168,7 +168,7 @@ static emaster_position_target_source_result_t probe_position_target_source(
     size_t axis_index;
 
     (void)cycle;
-    if (ramp == NULL || axes == NULL || target_positions == NULL ||
+    if (ramp == NULL || axes == NULL || targets == NULL ||
         axis_count == 0U || target_capacity < axis_count)
     {
         return EMASTER_POSITION_TARGET_SOURCE_INVALID;
@@ -223,7 +223,10 @@ static emaster_position_target_source_result_t probe_position_target_source(
         {
             return EMASTER_POSITION_TARGET_SOURCE_INVALID;
         }
-        target_positions[axis_index] = (int32_t)target;
+        targets[axis_index].value = (int32_t)target;
+        /* 探针只做位置斜坡，不带力矩。 */
+        targets[axis_index].torque = 0;
+        targets[axis_index].torque_present = false;
         ramp->last_target[axis_index] = (int32_t)target;
     }
     ++ramp->update_count;

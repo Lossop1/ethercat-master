@@ -89,6 +89,25 @@ bool emaster_cia_process_image_update_output(
     uint8_t *output,
     size_t output_capacity);
 
+/*
+ * 同上，但同一帧里额外写 0x6071（目标力矩）。
+ *
+ * 只在两件事同时成立时写：该轴模式把 target_torque 声明进 required_rx_fields，
+ * 且 RxPDO 映射里确实有这一项。缺任何一个都不写——那表示这台驱动器/这份方案没有
+ * "CSP 下收力矩"这条约定，写进去就是主站替客户端出了一个没人授权的量。
+ *
+ * 典型用法是 CSP 部署里同帧写位置与力矩，用来验证驱动器认不认力矩偏移。
+ */
+bool emaster_cia_process_image_update_output_with_torque(
+    const emaster_session_axis_plan_t *axis,
+    emaster_cia_process_image_t *image,
+    uint16_t control_word,
+    int32_t target_value,
+    bool torque_valid,
+    int32_t torque_value,
+    uint8_t *output,
+    size_t output_capacity);
+
 /* 解码状态字、模式显示和所选模式的反馈原始值；调用者按模式解释该值。 */
 bool emaster_cia_process_image_decode_input(
     emaster_cia_process_image_t *image,

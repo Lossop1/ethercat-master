@@ -1089,11 +1089,13 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
             for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index) {
                 emaster_control_session_axis_result_t *axis_result = &session->axes[axis_index];
 
-                if (!emaster_cia_process_image_update_output(
+                if (!emaster_cia_process_image_update_output_with_torque(
                         &session->plan->axes[axis_index], &session->images[axis_index],
                         session->controller_outputs[axis_index].control_word,
                         emaster_soem_axis_target_value(&session->plan->axes[axis_index],
                                                        axis_result),
+                        axis_result->target_torque_valid,
+                        (int32_t)axis_result->target_torque,
                         session->context.slavelist[
                             emaster_soem_session_axis_slave(session, axis_index)].outputs,
                         session->context.slavelist[
