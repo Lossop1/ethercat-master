@@ -2195,7 +2195,32 @@ emaster_control_session_status_t emaster_soem_session_run(emaster_soem_session_t
                                                   (uint64_t)ts_cmd.tv_nsec;
                                 }
                                 pthread_mutex_lock(&buf->mutex);
-                                memcpy(buf->positions, positions, count * sizeof(int32_t));
+                                /*
+                                 * 文本口只给一个数，它落进哪一格由该轴声明的量决定：
+                                 * CSP 落 positions、CSV 落 velocities、CST 落 torques。
+                                 * 恒写 positions 会让 CSV/CST 部署下这个数被当成位置，
+                                 * 而周期回调读的是速度/力矩那一格——值永远对不上。
+                                 */
+                                for (size_t write_index = 0U; write_index < count;
+                                     ++write_index) {
+                                    const emaster_operation_mode_t *write_mode =
+                                        session->plan->axes[write_index].operation_mode;
+                                    switch (write_mode != NULL
+                                                ? write_mode->quantity
+                                                : EMASTER_MODE_QUANTITY_POSITION) {
+                                    case EMASTER_MODE_QUANTITY_VELOCITY:
+                                        buf->velocities[write_index] = positions[write_index];
+                                        break;
+                                    case EMASTER_MODE_QUANTITY_TORQUE:
+                                        buf->torques[write_index] = positions[write_index];
+                                        break;
+                                    case EMASTER_MODE_QUANTITY_POSITION:
+                                    case EMASTER_MODE_QUANTITY_NONE:
+                                    default:
+                                        buf->positions[write_index] = positions[write_index];
+                                        break;
+                                    }
+                                }
                                 /*
                                  * 模式一并写进汇点。文本口没有逐轴模式字段，它写进去的
                                  * 就是"本部署配的那一种"；不写的话，先走过二进制通道、

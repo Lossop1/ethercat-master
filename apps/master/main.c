@@ -104,6 +104,15 @@ static emaster_external_target_buffer_t external_target_buffer = {
 };
 
 /*
+ * 每轴声明的"本模式的目标量"。回调按它从缓冲区里挑数组：位置取 positions、
+ * 速度取 velocities、力矩取 torques。
+ *
+ * 不按模式号、也不按型号判断——量来自运行方案对设备事实的声明（quantity），
+ * 与判据、断供行为的出处是同一个。写死模式号会在换厂商的驱动器上指错量。
+ */
+static emaster_mode_quantity_t axis_quantities[EMASTER_EXTERNAL_TARGET_MAX_AXES];
+
+/*
  * 设点通道（只写套接字）的开关，默认关。取值集合与另两个开关一致。
  *
  * 默认关是交付面的要求：不开这条通道时，主站的行为与加装之前逐字一致，多出来的
@@ -184,7 +193,24 @@ static emaster_position_target_source_result_t position_target_source(
             }
             if (has_external_targets) {
                 for (i = 0; i < axis_count && i < EMASTER_EXTERNAL_TARGET_MAX_AXES; i++) {
-                    target_positions[i] = buf->positions[i];
+                    /*
+                     * 这一格装的是"本轴的目标量"，不是恒定的位置：CSV 装速度、
+                     * CST 装力矩。以前这里恒取 positions，于是 CSV 部署下客户端
+                     * 送来的 q 被当成目标速度写进 0x60FF，真正的 dq 没人读。
+                     */
+                    switch (axis_quantities[i]) {
+                    case EMASTER_MODE_QUANTITY_VELOCITY:
+                        target_positions[i] = buf->velocities[i];
+                        break;
+                    case EMASTER_MODE_QUANTITY_TORQUE:
+                        target_positions[i] = buf->torques[i];
+                        break;
+                    case EMASTER_MODE_QUANTITY_POSITION:
+                    case EMASTER_MODE_QUANTITY_NONE:
+                    default:
+                        target_positions[i] = buf->positions[i];
+                        break;
+                    }
                 }
             }
         }
@@ -528,6 +554,15 @@ int main(int argc, char **argv) {
 
     /* 设置轴数量供命令处理使用 */
     external_target_buffer.axis_count = plan.axis_count;
+    for (size_t quantity_index = 0U;
+         quantity_index < plan.axis_count && quantity_index < EMASTER_EXTERNAL_TARGET_MAX_AXES;
+         ++quantity_index)
+    {
+        axis_quantities[quantity_index] =
+            plan.axes[quantity_index].operation_mode != NULL
+                ? plan.axes[quantity_index].operation_mode->quantity
+                : EMASTER_MODE_QUANTITY_NONE;
+    }
 
     /*
      * 这个部署有没有外部目标可给。模式 6（回零）没有周期目标：参考点搜寻由驱动器

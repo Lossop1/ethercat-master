@@ -27,14 +27,20 @@
 typedef struct
 {
     pthread_mutex_t mutex;
-    /* 目标位置（原始计数）。今天进输出路径的只有这一个数组。 */
+    /*
+     * 目标量，按**本轴声明的量**落格：位置进 positions、速度进 velocities、
+     * 力矩进 torques。文本动词与二进制记录都按这个规则写，周期回调按同一个
+     * 声明读——不按模式号、也不按型号判断。
+     */
     int32_t positions[EMASTER_EXTERNAL_TARGET_MAX_AXES];
     /*
      * 以下五组由设点通道写入，文本动词不碰它们——文本 verb 的那根轴写自己配置的模式，
      * 其余保持上次的值。
      *
-     * dq / tau / kp / kd 今天不进输出路径：驱动器在 CSP 下自己闭合位置环，MIT 是不是
-     * 主站给 kp、kd 还没有 LZ 文档佐证。先原样存下，等出口口径定了再接。
+     * kp / kd 今天不进输出路径：MIT 的增益由运行方案按设备档声明成固定值，每拍写进
+     * 0x2013:1/2；客户端送来的这两个值只存不用，等出口口径定了再接（接之前要能回答
+     * "在线改增益算不算改控制律"）。dq 与 tau 已经进输出路径：它们在「本轴声明的量」
+     * 是速度/力矩时分别落 velocities、torques，由周期回调按同一个声明取。
      */
     int8_t  modes[EMASTER_EXTERNAL_TARGET_MAX_AXES];
     int32_t velocities[EMASTER_EXTERNAL_TARGET_MAX_AXES];
