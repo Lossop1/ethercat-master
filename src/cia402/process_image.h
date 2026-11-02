@@ -16,6 +16,23 @@ typedef struct
     int64_t value;
 } emaster_cia_declared_output_t;
 
+/* 同一帧要写的目标量。present_mask 决定写哪些，映射里没有的字段一律不写。 */
+#define EMASTER_CIA_TARGET_POSITION 0x01U
+#define EMASTER_CIA_TARGET_VELOCITY 0x02U
+#define EMASTER_CIA_TARGET_TORQUE   0x04U
+#define EMASTER_CIA_TARGET_KP       0x08U
+#define EMASTER_CIA_TARGET_KD       0x10U
+
+typedef struct
+{
+    int32_t position;
+    int32_t velocity;
+    int32_t torque;
+    int32_t kp;
+    int32_t kd;
+    uint32_t present_mask;
+} emaster_cia_target_set_t;
+
 /* 单轴过程映像保存已核对布局对应的字段位置和预分配编解码存储。 */
 typedef struct
 {
@@ -49,6 +66,13 @@ typedef struct
     size_t rx_target_velocity_ordinal;
     size_t tx_actual_velocity_ordinal;
     size_t rx_target_torque_ordinal;
+    /*
+     * MIT 的两个增益对象（0x2013:1/2，厂商可能叫 PVT_KP/PVT_KD）。按 RxPDO 里的
+     * **字段名**解析，不写死索引：换型号只换 ESI。没有这两个字段时保持 SIZE_MAX，
+     * 客户端送来的增益就无处可写。
+     */
+    size_t rx_mit_kp_ordinal;
+    size_t rx_mit_kd_ordinal;
     size_t tx_actual_torque_ordinal;
     size_t tx_actual_current_ordinal;
     size_t tx_dc_link_voltage_ordinal;
@@ -105,6 +129,19 @@ bool emaster_cia_process_image_update_output_with_torque(
     int32_t target_value,
     bool torque_valid,
     int32_t torque_value,
+    uint8_t *output,
+    size_t output_capacity);
+
+/*
+ * 同一帧写多个目标量：位置是主量，其余按 present_mask 写进映射里存在的字段。
+ * MIT 用它把「位置 + 速度 + 力矩 + Kp + Kd」一次性送下去；CSP/CST 用它送主量
+ * 加可选的力矩偏移。映射里没有的量静默不写（而不是写 0）。
+ */
+bool emaster_cia_process_image_update_output_set(
+    const emaster_session_axis_plan_t *axis,
+    emaster_cia_process_image_t *image,
+    uint16_t control_word,
+    const emaster_cia_target_set_t *targets,
     uint8_t *output,
     size_t output_capacity);
 

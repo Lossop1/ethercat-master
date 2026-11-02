@@ -151,6 +151,29 @@ emaster_control_session_status_t emaster_soem_session_position_target_step(
         session->axes[axis_index].target_torque_valid = true;
     }
 
+    /*
+     * MIT 的另外三个量。与力矩同一条规则：客户端给了才置有效位，写不写由映射决定。
+     * 增益用 INT32 原样透传——上下限属驱动器对象字典，主站不替它设。
+     */
+    for (axis_index = 0U; axis_index < session->plan->axis_count; ++axis_index)
+    {
+        if (targets[axis_index].velocity_present)
+        {
+            session->axes[axis_index].target_velocity = targets[axis_index].velocity;
+            session->axes[axis_index].target_velocity_valid = true;
+        }
+        if (targets[axis_index].kp_present)
+        {
+            session->axes[axis_index].target_kp = targets[axis_index].kp;
+            session->axes[axis_index].target_kp_valid = true;
+        }
+        if (targets[axis_index].kd_present)
+        {
+            session->axes[axis_index].target_kd = targets[axis_index].kd;
+            session->axes[axis_index].target_kd_valid = true;
+        }
+    }
+
     /* 状态提交：仅在所有硬件写入成功后更新会话状态 */
     memcpy(session->target_positions, session->position_target_source_targets,
            session->plan->axis_count * sizeof(*session->target_positions));

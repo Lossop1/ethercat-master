@@ -191,6 +191,41 @@ static size_t field_ordinal_for(const emaster_pdo_direction_layout_t *layout,
 }
 
 /*
+ * 在设备档的 RxPDO 映射里按**字段名**找它在生效布局里的序号。
+ *
+ * MIT 的两个增益在不同厂商的 ESI 里索引不同（良质 0x2013:1/2、MT 0x2000/0x2001），
+ * 所以不能拿索引去猜；名字在推导设备档时已经统一成 mit_kp/mit_kd。
+ */
+static size_t ordinal_by_field_name(const emaster_session_axis_plan_t *axis,
+                                    const emaster_pdo_direction_layout_t *layout,
+                                    const char *name)
+{
+    size_t profile_ordinal;
+
+    if (axis == NULL || axis->pdo_set == NULL || layout == NULL || name == NULL)
+    {
+        return SIZE_MAX;
+    }
+    for (profile_ordinal = 0U; profile_ordinal < axis->pdo_set->rx_mapping_count;
+         ++profile_ordinal)
+    {
+        const emaster_pdo_mapping_profile_t *mapping =
+            &axis->pdo_set->rx_mappings[profile_ordinal];
+        size_t entry_ordinal;
+
+        for (entry_ordinal = 0U; entry_ordinal < mapping->entry_count; ++entry_ordinal)
+        {
+            const emaster_pdo_entry_t *entry = &mapping->entries[entry_ordinal];
+
+            if (entry->name != NULL && strcmp(entry->name, name) == 0)
+            {
+                return field_ordinal_for(layout, entry->index, entry->subindex);
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+/*
  * 运行方案中的 required_*_fields 是控制器实际依赖的字段契约
  * 不能只由 Python 校验器检查，否则其他构建方式可能绕过校验后仍然发送错误 PDO
  */
@@ -483,6 +518,8 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
     image->rx_target_velocity_ordinal = SIZE_MAX;
     image->tx_actual_velocity_ordinal = SIZE_MAX;
     image->rx_target_torque_ordinal = SIZE_MAX;
+    image->rx_mit_kp_ordinal = SIZE_MAX;
+    image->rx_mit_kd_ordinal = SIZE_MAX;
     image->tx_actual_torque_ordinal = SIZE_MAX;
     image->tx_actual_current_ordinal = SIZE_MAX;
     image->tx_dc_link_voltage_ordinal = SIZE_MAX;
@@ -529,6 +566,12 @@ bool emaster_cia_process_image_init(const emaster_session_axis_plan_t *axis,
         &image->layout.tx, EMASTER_CIA402_ACTUAL_VELOCITY_INDEX, UINT8_C(0));
     image->rx_target_torque_ordinal = field_ordinal_for(
         &image->layout.rx, EMASTER_CIA402_TARGET_TORQUE_INDEX, UINT8_C(0));
+    /*
+     * MIT 的两个增益按**字段名**解析，不写死 0x2013: 良质叫 MitKp/MitKd，MT 叫
+     * PVT_KP/PVT_KD（推导时已折成 mit_kp/mit_kd）。换型号只换 ESI，代码不动。
+     */
+    image->rx_mit_kp_ordinal = ordinal_by_field_name(axis, &image->layout.rx, "mit_kp");
+    image->rx_mit_kd_ordinal = ordinal_by_field_name(axis, &image->layout.rx, "mit_kd");
     image->tx_actual_torque_ordinal = field_ordinal_for(
         &image->layout.tx, EMASTER_CIA402_ACTUAL_TORQUE_INDEX, UINT8_C(0));
     image->tx_actual_current_ordinal = field_ordinal_for(
@@ -694,6 +737,63 @@ bool emaster_cia_process_image_update_output_with_torque(
     {
         if (torque_value < INT16_MIN || torque_value > INT16_MAX) return false;
         image->rx_values[image->rx_target_torque_ordinal].value.signed_value = torque_value;
+    }
+    return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
+                                    image->rx_field_count, image->rx_values,
+                                    image->rx_field_count, output, output_capacity) ==
+           EMASTER_PDO_CODEC_OK;
+}
+
+bool emaster_cia_process_image_update_output_set(
+    const emaster_session_axis_plan_t *axis,
+    emaster_cia_process_image_t *image,
+    uint16_t control_word,
+    const emaster_cia_target_set_t *targets,
+    uint8_t *output,
+    size_t output_capacity)
+{
+    bool extra_written = false;
+
+    if (targets == NULL)
+    {
+        return false;
+    }
+    /* 主量 + 力矩走既有路径；主量与力矩的写法在那边已经判过映射与类型。 */
+    if (!emaster_cia_process_image_update_output_with_torque(
+            axis, image, control_word, targets->position,
+            (targets->present_mask & EMASTER_CIA_TARGET_TORQUE) != 0U, targets->torque, output,
+            output_capacity))
+    {
+        return false;
+    }
+    /*
+     * 额外量：速度前馈与 MIT 的两个增益。映射里没有对应字段就不写——静默丢弃
+     * 比写 0 安全：写 0 会把"这台驱动器不支持"伪装成"这一拍送的是零"。
+     * 主量本身是速度时（CSV）不重复写同一格。
+     */
+    if ((targets->present_mask & EMASTER_CIA_TARGET_VELOCITY) != 0U &&
+        image->configured_quantity != EMASTER_MODE_QUANTITY_VELOCITY &&
+        image->rx_target_velocity_ordinal != SIZE_MAX)
+    {
+        image->rx_values[image->rx_target_velocity_ordinal].value.signed_value =
+            targets->velocity;
+        extra_written = true;
+    }
+    if ((targets->present_mask & EMASTER_CIA_TARGET_KP) != 0U &&
+        image->rx_mit_kp_ordinal != SIZE_MAX)
+    {
+        image->rx_values[image->rx_mit_kp_ordinal].value.signed_value = targets->kp;
+        extra_written = true;
+    }
+    if ((targets->present_mask & EMASTER_CIA_TARGET_KD) != 0U &&
+        image->rx_mit_kd_ordinal != SIZE_MAX)
+    {
+        image->rx_values[image->rx_mit_kd_ordinal].value.signed_value = targets->kd;
+        extra_written = true;
+    }
+    if (!extra_written)
+    {
+        return true;
     }
     return emaster_pdo_codec_encode(&image->layout.rx, image->rx_fields,
                                     image->rx_field_count, image->rx_values,

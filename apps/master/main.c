@@ -214,6 +214,20 @@ static emaster_position_target_source_result_t position_target_source(
                     /* 第二量：0x6071。写不写由运行方案的声明决定，这里只管"有"。 */
                     targets[i].torque = buf->torques[i];
                     targets[i].torque_present = true;
+                    /*
+                     * MIT 的另外三个量。
+                     *
+                     * Kp/Kd 用 0 表示"这一拍没给"：MIT 下写 0 等于把刚度撤掉，
+                     * 而验收第一步要求"四量全零时行为与现在一模一样"，所以 0 不能
+                     * 当成指令写下去，只能沿用运行方案里的固定值。速度前馈没有这个
+                     * 歧义（0 就是不加前馈），照常下发。
+                     */
+                    targets[i].velocity = buf->velocities[i];
+                    targets[i].velocity_present = true;
+                    targets[i].kp = buf->kp[i];
+                    targets[i].kd = buf->kd[i];
+                    targets[i].kp_present = buf->kp[i] != 0;
+                    targets[i].kd_present = buf->kd[i] != 0;
                 }
             }
         }
@@ -241,6 +255,10 @@ static emaster_position_target_source_result_t position_target_source(
             /* 力矩与速度一样：失联后不能继续输出上一条，必须归零。 */
             targets[i].torque = 0;
             targets[i].torque_present = true;
+            /* 失联时不改增益：沿用运行方案里的固定值。 */
+            targets[i].velocity_present = false;
+            targets[i].kp_present = false;
+            targets[i].kd_present = false;
         }
         return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
     } else if (last_mode == 1) {
@@ -262,6 +280,9 @@ static emaster_position_target_source_result_t position_target_source(
             targets[i].value = initial_positions[i];
             targets[i].torque = 0;
             targets[i].torque_present = true;
+            targets[i].velocity_present = false;
+            targets[i].kp_present = false;
+            targets[i].kd_present = false;
         }
         return EMASTER_POSITION_TARGET_SOURCE_UPDATED;
     }

@@ -326,6 +326,13 @@ typedef struct
      * "主站替客户端出了一个它没被授权写的量"。
      */
     bool target_torque_valid;
+    /* MIT 的两个增益：客户端给了非零值才有效，写进 RxPDO 的 0x2013:1/2。 */
+    int32_t target_kp;
+    int32_t target_kd;
+    bool target_kp_valid;
+    bool target_kd_valid;
+    /* 速度前馈（0x60FF）。MIT 与 CSP 下都可能有这一格。 */
+    bool target_velocity_valid;
     int16_t actual_current;
     uint32_t dc_link_voltage;
     int16_t mosfet_temperature;  /* 0.1°C, from 200Bh:01h */
@@ -1619,6 +1626,13 @@ typedef struct
     int32_t value;
     int32_t torque;
     bool torque_present;
+    /* MIT 的三个附加量：速度前馈、Kp、Kd。present 为假表示"这一拍没给"。 */
+    int32_t velocity;
+    int32_t kp;
+    int32_t kd;
+    bool velocity_present;
+    bool kp_present;
+    bool kd_present;
 } emaster_axis_target_t;
 
 typedef emaster_position_target_source_result_t (*emaster_control_session_position_target_source_t)(
