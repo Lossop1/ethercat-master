@@ -66,7 +66,8 @@ const char *emaster_setpoint_reject_text(emaster_setpoint_reject_t reason);
 /* 一条记录里的一个轴。 */
 typedef struct
 {
-    /* 该轴的运行模式（8=CSP、9=CSV、10=CST），主站按配置逐轴核对。 */
+    /* 该轴的运行模式号。主站按**设备档声明的模式集合**逐轴核对，不写死 8/9/10：
+     * 同一个号在不同厂商的说明书里指的不是同一件事（MIT 就是厂商自定义的 5）。 */
     int8_t  mode;
     /* 保留位，主站原样存下、不解释。留给客户端自己标状态用。 */
     uint8_t flags;
